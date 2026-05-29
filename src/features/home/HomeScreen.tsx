@@ -1,12 +1,31 @@
-import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import BottomSheet, {
+  BottomSheetScrollView,
+} from '@gorhom/bottom-sheet';
+
 import { useMemo } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+import {
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
 import MapView, { Marker } from 'react-native-maps';
 
 import { mockPlaces } from '../../data/mockPlaces';
 
-export default function HomeScreen() {
-  const snapPoints = useMemo(() => ['18%', '42%', '82%'], []);
+type HomeScreenProps = {
+  onOpenImport: () => void;
+};
+
+export default function HomeScreen({
+  onOpenImport,
+}: HomeScreenProps) {
+  const snapPoints = useMemo(
+    () => ['18%', '42%', '82%'],
+    []
+  );
 
   return (
     <View style={styles.container}>
@@ -47,12 +66,22 @@ export default function HomeScreen() {
           contentContainerStyle={styles.sheetContent}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.sectionTitle}>Recent</Text>
+          <Text style={styles.sectionTitle}>
+            Recent
+          </Text>
 
           {mockPlaces.map((place) => (
-            <View key={place.id} style={styles.placeRow}>
-              <Text style={styles.placeName}>{place.name}</Text>
-              <Text style={styles.placeSubtitle}>{place.subtitle}</Text>
+            <View
+              key={place.id}
+              style={styles.placeRow}
+            >
+              <Text style={styles.placeName}>
+                {place.name}
+              </Text>
+
+              <Text style={styles.placeSubtitle}>
+                {place.subtitle}
+              </Text>
             </View>
           ))}
 
@@ -61,15 +90,24 @@ export default function HomeScreen() {
       </BottomSheet>
 
       <View style={styles.bottomBar}>
-        <TouchableOpacity style={styles.circleButton}>
-          <Text style={styles.searchIcon}>⌕</Text>
+        <TouchableOpacity
+          style={styles.circleButton}
+        >
+          <Text style={styles.searchIcon}>
+            ⌕
+          </Text>
         </TouchableOpacity>
 
         <View style={styles.searchPill}>
-          <Text style={styles.searchText}>Ask, search, or make...</Text>
+          <Text style={styles.searchText}>
+            Ask, search, or make...
+          </Text>
         </View>
 
-        <TouchableOpacity style={styles.circleButton}>
+        <TouchableOpacity
+          style={styles.circleButton}
+          onPress={onOpenImport}
+        >
           <Text style={styles.plus}>＋</Text>
         </TouchableOpacity>
       </View>
@@ -97,13 +135,17 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    backgroundColor:
+      'rgba(255,255,255,0.95)',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
     zIndex: 10,
   },
 
@@ -112,7 +154,8 @@ const styles = StyleSheet.create({
   },
 
   sheetBackground: {
-    backgroundColor: 'rgba(245,245,247,0.95)',
+    backgroundColor:
+      'rgba(245,245,247,0.95)',
     borderTopLeftRadius: 34,
     borderTopRightRadius: 34,
   },
@@ -139,7 +182,8 @@ const styles = StyleSheet.create({
 
   placeRow: {
     paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth:
+      StyleSheet.hairlineWidth,
     borderBottomColor: '#DADAE0',
   },
 
@@ -170,7 +214,8 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: 'rgba(255,255,255,0.96)',
+    backgroundColor:
+      'rgba(255,255,255,0.96)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -190,7 +235,8 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 52,
     borderRadius: 26,
-    backgroundColor: 'rgba(255,255,255,0.96)',
+    backgroundColor:
+      'rgba(255,255,255,0.96)',
     justifyContent: 'center',
     paddingHorizontal: 18,
   },
