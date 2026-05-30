@@ -1,0 +1,111 @@
+/* ── Tailwind token aliases ─────────────────────────────────────────────────
+   Maps Tailwind's color/font utilities to the CSS variables defined below.   */
+@theme inline {
+  /* surface */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  /* muted */
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  /* form */
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  /* interactive */
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  /* popover */
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  /* card */
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* text */
+  --color-prose: var(--prose);
+  --color-prose-muted: var(--prose-muted);
+  --color-label: var(--label);
+  --color-decorative: var(--decorative);
+  /* misc */
+  --color-shader: var(--shader);
+  /* brand accent palette */
+  --color-primary-blue:   var(--primary-blue);
+  --color-primary-purple: var(--primary-purple);
+  --color-primary-amber:  var(--primary-amber);
+  --color-primary-lime:   var(--primary-lime);
+  --color-primary-pink:   var(--primary-pink);
+}
+
+/* ── Light mode ─────────────────────────────────────────────────────────────*/
+:root {
+  --background: var(--color-neutral-50);
+  --foreground: var(--color-neutral-950);
+  --card: var(--color-neutral-100);
+  --card-foreground: var(--color-neutral-950);
+  --popover: var(--color-neutral-50);
+  --popover-foreground: var(--color-neutral-950);
+  --primary: var(--color-neutral-950);
+  --primary-foreground: var(--color-neutral-50);
+  --secondary: var(--color-neutral-100);
+  --secondary-foreground: var(--color-neutral-950);
+  --muted: var(--color-neutral-200);
+  --muted-foreground: var(--color-neutral-500);
+  --accent: var(--color-neutral-200);
+  --accent-foreground: var(--color-neutral-950);
+  --destructive: var(--color-red-600);
+  --border: var(--color-neutral-200);
+  --input: var(--color-neutral-200);
+  --ring: var(--color-neutral-400);
+  --prose: var(--color-neutral-700);
+  --prose-muted: var(--color-neutral-600);
+  --label: var(--color-neutral-500);
+  --decorative: var(--color-neutral-700);
+  --shader: var(--color-neutral-300);
+  --primary-blue:   var(--color-blue-700);
+  --primary-purple: var(--color-purple-600);
+  --primary-amber:  var(--color-amber-500);
+  --primary-lime:   var(--color-lime-700);
+  --primary-pink:   var(--color-pink-600);
+  /* base = light-mode-pinned values, never overridden in .dark */
+  --color-primary-blue-base:   var(--color-blue-500);
+  --color-primary-purple-base: var(--color-purple-600);
+  --color-primary-amber-base:  var(--color-amber-500);
+  --color-primary-lime-base:   var(--color-lime-600);
+  --color-primary-pink-base:   var(--color-pink-600);
+}
+
+/* ── Dark mode ──────────────────────────────────────────────────────────────*/
+.dark {
+  --background: var(--color-neutral-950);
+  --foreground: var(--color-neutral-50);
+  --card: hsl(0, 0%, 11%);
+  --card-foreground: var(--color-neutral-50);
+  --popover: var(--color-neutral-900);
+  --popover-foreground: var(--color-neutral-50);
+  --primary: var(--color-neutral-200);
+  --primary-foreground: var(--color-neutral-950);
+  --secondary: var(--color-neutral-800);
+  --secondary-foreground: var(--color-neutral-50);
+  --muted: var(--color-neutral-800);
+  --muted-foreground: var(--color-neutral-400);
+  --accent: var(--color-neutral-800);
+  --accent-foreground: var(--color-neutral-50);
+  --destructive: var(--color-red-400);
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.15);
+  --ring: var(--color-neutral-500);
+  --prose: var(--color-neutral-400);
+  --prose-muted: var(--color-neutral-500);
+  --label: var(--color-neutral-500);
+  --decorative: var(--color-neutral-400);
+  --shader: var(--color-neutral-800);
+  --primary-blue:   var(--color-blue-300);
+  --primary-purple: var(--color-purple-400);
+  --primary-amber:  var(--color-amber-300);
+  --primary-lime:   var(--color-lime-300);
+  --primary-pink:   var(--color-pink-400);
+}

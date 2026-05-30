@@ -78,7 +78,7 @@ export default function HomeScreen({
           }}
           showsVerticalScrollIndicator={false}
         >
-          <Text className="text-lg font-bold text-zinc-400 mb-3.5">
+          <Text className="text-lg font-bold text-label mb-3.5">
             Recent
           </Text>
 
@@ -87,11 +87,11 @@ export default function HomeScreen({
               key={place.id}
               className="py-4 border-b border-zinc-200"
             >
-              <Text className="text-xl font-bold text-black">
+              <Text className="text-xl font-bold text-prose">
                 {place.name}
               </Text>
 
-              <Text className="mt-1.25 text-base text-zinc-400">
+              <Text className="mt-1.25 text-base text-prose-muted">
                 {place.subtitle}
               </Text>
             </View>
@@ -107,7 +107,7 @@ export default function HomeScreen({
         </TouchableOpacity>
 
         <View className="flex-1 h-13 rounded-[26px] bg-white/96 justify-center px-4.5">
-          <Text className="text-base text-zinc-400">
+          <Text className="text-base text-prose-muted">
             Ask, search, or make...
           </Text>
         </View>
