@@ -1,0 +1,1 @@
+All the theme token should be created here and import to global.css.
