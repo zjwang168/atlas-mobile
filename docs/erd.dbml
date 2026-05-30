@@ -1,0 +1,179 @@
+Project ouratlas {
+  database_type: "PostgreSQL"
+  note: "AI-native map, collection, project, and itinerary planning app"
+}
+
+Table users {
+  id uuid [pk]
+  email varchar [unique]
+  display_name varchar
+  avatar_url text
+  auth_provider varchar
+  location varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table places {
+  id uuid [pk]
+  created_by uuid [ref: > users.id]
+  name varchar
+  subtitle varchar
+  description text
+  ai_summary text
+  category varchar
+  tags text[]
+  address text
+  city varchar
+  region varchar
+  country varchar
+  latitude decimal
+  longitude decimal
+  location geography
+  external_place_id varchar
+  external_source varchar
+  visibility varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table place_sources {
+  id uuid [pk]
+  place_id uuid [ref: > places.id]
+  user_id uuid [ref: > users.id]
+  source_type varchar
+  source_url text
+  raw_text text
+  screenshot_url text
+  ai_extracted_summary text
+  created_at timestamptz
+}
+
+Table collections {
+  id uuid [pk]
+  owner_id uuid [ref: > users.id]
+  title varchar
+  description text
+  visibility varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table collection_places {
+  id uuid [pk]
+  collection_id uuid [ref: > collections.id]
+  place_id uuid [ref: > places.id]
+  added_by uuid [ref: > users.id]
+  note text
+  sort_order int
+  created_at timestamptz
+}
+
+Table projects {
+  id uuid [pk]
+  owner_id uuid [ref: > users.id]
+  title varchar
+  destination varchar
+  start_date date
+  end_date date
+  description text
+  visibility varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table project_members {
+  id uuid [pk]
+  project_id uuid [ref: > projects.id]
+  user_id uuid [ref: > users.id]
+  role varchar
+  created_at timestamptz
+}
+
+Table project_places {
+  id uuid [pk]
+  project_id uuid [ref: > projects.id]
+  place_id uuid [ref: > places.id]
+  added_by uuid [ref: > users.id]
+  status varchar
+  note text
+  created_at timestamptz
+}
+
+Table itinerary_days {
+  id uuid [pk]
+  project_id uuid [ref: > projects.id]
+  date date
+  title varchar
+  sort_order int
+  created_at timestamptz
+}
+
+Table itinerary_items {
+  id uuid [pk]
+  itinerary_day_id uuid [ref: > itinerary_days.id]
+  place_id uuid [ref: > places.id]
+  start_time time
+  end_time time
+  note text
+  sort_order int
+  created_at timestamptz
+}
+
+Table imports {
+  id uuid [pk]
+  user_id uuid [ref: > users.id]
+  project_id uuid [ref: > projects.id]
+  collection_id uuid [ref: > collections.id]
+  input_type varchar
+  input_url text
+  input_text text
+  file_url text
+  status varchar
+  metadata jsonb
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table extracted_places {
+  id uuid [pk]
+  import_id uuid [ref: > imports.id]
+  name varchar
+  address text
+  city varchar
+  country varchar
+  latitude decimal
+  longitude decimal
+  location geography
+  ai_summary text
+  confidence decimal
+  status varchar
+  created_at timestamptz
+}
+
+Table chat_sessions {
+  id uuid [pk]
+  user_id uuid [ref: > users.id]
+  project_id uuid [ref: > projects.id]
+  title varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table chat_messages {
+  id uuid [pk]
+  chat_session_id uuid [ref: > chat_sessions.id]
+  sender_type varchar
+  content text
+  extracted_places jsonb
+  metadata jsonb
+  created_at timestamptz
+}
+
+Table user_place_interactions {
+  id uuid [pk]
+  user_id uuid [ref: > users.id]
+  place_id uuid [ref: > places.id]
+  interaction_type varchar
+  created_at timestamptz
+}
