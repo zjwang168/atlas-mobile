@@ -43,6 +43,11 @@ interface MapboxMapProps {
   style?: ViewStyle;
   /** Callback when a marker is pressed */
   onMarkerPress?: (marker: MapMarker) => void;
+
+  /** Optional GeoJSON LineString to render a route polyline on the map */
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
+  /** Optional re-ordered markers to display along the route (overrides `markers` when set) */
+  routeMarkers?: MapMarker[];
 }
 
 // ---- Component ----
@@ -57,7 +62,11 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
   zoomLevel = 12,
   style,
   onMarkerPress,
+  routeGeoJSON,
+  routeMarkers,
 }) => {
+  // Use routeMarkers if provided, otherwise fall back to the regular markers
+  const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
@@ -136,8 +145,24 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
           }}
         />
 
-        {/* Render markers */}
-        {markers.map((marker) => (
+        {/* Render route polyline (if provided) */}
+        {routeGeoJSON && (
+          <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
+            <MapboxGL.LineLayer
+              id="routeLine"
+              style={{
+                lineColor: '#007AFF',
+                lineWidth: 4,
+                lineOpacity: 0.8,
+                lineCap: 'round',
+                lineJoin: 'round',
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* Render markers (routeMarkers if provided, otherwise markers) */}
+        {displayMarkers.map((marker) => (
           <MapboxGL.MarkerView
             key={marker.id}
             coordinate={[marker.longitude, marker.latitude]}
