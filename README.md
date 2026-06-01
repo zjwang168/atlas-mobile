@@ -315,7 +315,7 @@ graph TD
     subgraph MapboxMap
         MV[MapboxGL.MapView]
         CAM[MapboxGL.Camera]
-        MK[MarkerView[] - Place Markers]
+        MK[MarkerView&#91;&#93; - Place Markers]
         RL[ShapeSource + LineLayer - Route Polyline]
     end
     
