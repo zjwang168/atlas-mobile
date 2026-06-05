@@ -2,6 +2,7 @@ import './global.css';
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import HomeScreen from './src/features/home/HomeScreen';
 import ImportScreen from './src/features/import/ImportScreen';
@@ -13,6 +14,7 @@ export default function App() {
   const [overlay, setOverlay] = useState<Overlay>('none');
 
   return (
+    <SafeAreaProvider>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="dark" />
 
@@ -37,5 +39,6 @@ export default function App() {
         </>
       )}
     </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }

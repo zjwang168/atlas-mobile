@@ -4,7 +4,7 @@
 
 ## Overview
 
-`PlaceDetailPanel` is a floating panel that renders rich information about a single place. It is triggered by tapping any place entry (map marker or list row) and sits above the map as an independent overlay. The panel has three discrete snap states controlled by a drag handle at the top.
+`PlaceDetail` is a floating panel that renders rich information about a single place. It is triggered by tapping any place entry (map marker or list row) and sits above the map as an independent overlay. The panel has three discrete snap states controlled by a drag handle at the top.
 
 ---
 
@@ -80,7 +80,7 @@ export type PlaceDetail = Place & {
 `isOpenNow` and today's hours string are **never stored in the data** — they are always derived at runtime so they cannot go stale.
 
 ```ts
-// src/utils/placeHours.ts
+// src/features/place/utils/placeHours.ts
 
 export type OpenStatus = {
   isOpen: boolean;
@@ -107,20 +107,18 @@ src/
 ├── types/
 │   └── place.ts                        ← Place, PlaceDetail, DaySchedule, PlaceTag, PlaceLink, etc.
 ├── utils/
-│   └── placeHours.ts                   ← getOpenStatus() (public); formatTimeSlot() (internal)
 ├── data/
 │   ├── mockPlaces.ts                   ← Place[] (existing; extend to 5 entries to match detail records)
 │   └── mockPlaceDetails.ts             ← PlaceDetail[] + findPlaceDetail(name) lookup
 └── features/place/
     ├── PLACE.md                        ← this document
+    ├── utils/
+    │   └── placeHours.ts               ← getOpenStatus() (public); formatTimeSlot() (internal)
     └── place-detail/
-        ├── PlaceDetailPanel.tsx        ← animated container, snap logic, gesture coordination
-        ├── PlaceHeader.tsx             ← [‹ back | (no title) | ✎ edit] — default/full snap only
-        ├── PlaceBriefView.tsx          ← brief-snap layout: dismiss button, thumbnail, name, address, map button
-        ├── PlaceFullBrief.tsx          ← default/full-snap brief: thumbnail, name, address, hours, price
-        ├── PlaceInfoSection.tsx        ← single labeled section (reusable)
-        ├── PlaceTagList.tsx            ← horizontal scrollable chips
-        └── PlaceHoursRow.tsx           ← collapsible hours row with expand/collapse animation
+        ├── PlaceDetail.tsx             ← animated container, snap logic, header, compact brief view
+        └── sections/
+            ├── PlaceBriefSection.tsx   ← default/full-snap brief plus hours row
+            └── PlaceInfoSection.tsx    ← tags, summary, visit strategy, links
 ```
 
 ---
@@ -144,7 +142,7 @@ Transitions between `brief ↔ default`: crossing `screenHeight * 0.15` downward
 ## Component Hierarchy
 
 ```
-PlaceDetailPanel              ← Animated.View (absolute, bottom-anchored)
+PlaceDetail                   ← Animated.View (absolute, bottom-anchored)
 │
 ├── Handle                    ← View (36×4 rounded bar) + PanResponder target
 │
@@ -214,7 +212,7 @@ When snapping to `full`, animate `borderRadius` on both layers simultaneously to
 The panel's external API is a place name string and an active flag. The parent does not manage a `PlaceDetail` object — it only knows the name of the place to show.
 
 ```ts
-type PlaceDetailPanelProps = {
+type PlaceDetailProps = {
   placeName: string | null;   // null = panel hidden; non-null = slide up and display this place
   onDismiss: () => void;
   onEdit: (place: PlaceDetail) => void;
@@ -257,7 +255,7 @@ This is the hardest implementation problem. Two gesture consumers compete: the p
 
 ## Hours Row Behavior
 
-Implemented in `PlaceHoursRow.tsx`.
+Implemented inside `sections/PlaceBriefSection.tsx`.
 
 - **Collapsed** (default): one row showing `statusLine` from `getOpenStatus()` (e.g. `"Open · Closes at 10:00 PM"`), chevron `›` on the right.
 - **Expanded**: the full `schedule` array rendered beneath, one row per `DaySchedule`. Each row: day name left (bold-weighted if today), formatted slot(s) right. Closed days show `"Closed"` in muted color.

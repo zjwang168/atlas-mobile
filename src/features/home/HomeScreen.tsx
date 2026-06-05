@@ -2,7 +2,7 @@ import BottomSheet, {
   BottomSheetScrollView,
 } from '@gorhom/bottom-sheet';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import {
   Text,
@@ -13,6 +13,7 @@ import {
 import MapView, { Marker } from 'react-native-maps';
 
 import { mockPlaces } from '../../data/mockPlaces';
+import PlaceDetail from '../place/place-detail/PlaceDetail';
 
 type HomeScreenProps = {
   onOpenImport: () => void;
@@ -21,6 +22,7 @@ type HomeScreenProps = {
 export default function HomeScreen({
   onOpenImport,
 }: HomeScreenProps) {
+  const [selectedPlaceName, setSelectedPlaceName] = useState<string | null>(null);
   const snapPoints = useMemo(
     () => ['18%', '42%', '82%'],
     []
@@ -46,6 +48,7 @@ export default function HomeScreen({
             }}
             title={place.name}
             description={place.subtitle}
+            onPress={() => setSelectedPlaceName(place.name)}
           />
         ))}
       </MapView>
@@ -54,52 +57,56 @@ export default function HomeScreen({
         <Text className="text-[26px]">🐶</Text>
       </TouchableOpacity>
 
-      <BottomSheet
-        index={1}
-        snapPoints={snapPoints}
-        enablePanDownToClose={false}
-        backgroundStyle={{
-          backgroundColor: 'rgba(244,244,245,0.95)',
-          borderTopLeftRadius: 34,
-          borderTopRightRadius: 34,
-        }}
-        handleIndicatorStyle={{
-          width: 44,
-          height: 5,
-          borderRadius: 999,
-          backgroundColor: '#d4d4d8',
-        }}
-      >
-        <BottomSheetScrollView
-          contentContainerStyle={{
-            paddingHorizontal: 22,
-            paddingTop: 12,
-            paddingBottom: 130,
+      {!selectedPlaceName && (
+        <BottomSheet
+          index={1}
+          snapPoints={snapPoints}
+          enablePanDownToClose={false}
+          backgroundStyle={{
+            backgroundColor: 'rgba(244,244,245,0.95)',
+            borderTopLeftRadius: 34,
+            borderTopRightRadius: 34,
           }}
-          showsVerticalScrollIndicator={false}
+          handleIndicatorStyle={{
+            width: 44,
+            height: 5,
+            borderRadius: 999,
+            backgroundColor: '#d4d4d8',
+          }}
         >
-          <Text className="text-lg font-bold text-label mb-3.5">
-            Recent
-          </Text>
+          <BottomSheetScrollView
+            contentContainerStyle={{
+              paddingHorizontal: 22,
+              paddingTop: 12,
+              paddingBottom: 130,
+            }}
+            showsVerticalScrollIndicator={false}
+          >
+            <Text className="text-lg font-bold text-label mb-3.5">
+              Recent
+            </Text>
 
-          {mockPlaces.map((place) => (
-            <View
-              key={place.id}
-              className="py-4 border-b border-zinc-200"
-            >
-              <Text className="text-xl font-bold text-prose">
-                {place.name}
-              </Text>
+            {mockPlaces.map((place) => (
+              <TouchableOpacity
+                key={place.id}
+                className="py-4 border-b border-zinc-200"
+                activeOpacity={0.65}
+                onPress={() => setSelectedPlaceName(place.name)}
+              >
+                <Text className="text-xl font-bold text-prose">
+                  {place.name}
+                </Text>
 
-              <Text className="mt-1.25 text-base text-prose-muted">
-                {place.subtitle}
-              </Text>
-            </View>
-          ))}
+                <Text className="mt-1.25 text-base text-prose-muted">
+                  {place.subtitle}
+                </Text>
+              </TouchableOpacity>
+            ))}
 
-          <View className="h-25" />
-        </BottomSheetScrollView>
-      </BottomSheet>
+            <View className="h-25" />
+          </BottomSheetScrollView>
+        </BottomSheet>
+      )}
 
       <View className="absolute left-5.5 right-5.5 bottom-7 flex-row items-center gap-3 z-20">
         <TouchableOpacity className="w-14.5 h-14.5 rounded-full bg-white/96 items-center justify-center">
@@ -119,6 +126,15 @@ export default function HomeScreen({
           <Text className="text-[34px] leading-[36px] text-black">＋</Text>
         </TouchableOpacity>
       </View>
+
+      <PlaceDetail
+        placeName={selectedPlaceName}
+        onDismiss={() => setSelectedPlaceName(null)}
+        onEdit={(place) => {
+          console.log('Edit place:', place.name);
+        }}
+        onOpenImport={onOpenImport}
+      />
     </View>
   );
 }
