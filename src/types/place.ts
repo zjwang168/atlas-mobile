@@ -40,8 +40,10 @@ export type PlaceDetail = Place & {
   thumbnailUrl: string;
   schedule: DaySchedule[];
   tags: PlaceTag[];
+  collections?: PlaceTag[];
   summary: string;
   visitStrategy: string;
+  note?: string;
   phoneNumber?: string;
   links?: PlaceLink[];
 };

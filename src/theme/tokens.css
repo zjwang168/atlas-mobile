@@ -26,6 +26,7 @@
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   /* text */
+  --color-title: var(--title);
   --color-prose: var(--prose);
   --color-prose-muted: var(--prose-muted);
   --color-label: var(--label);
@@ -60,6 +61,7 @@
   --border: var(--color-neutral-200);
   --input: var(--color-neutral-200);
   --ring: var(--color-neutral-400);
+  --title: var(--color-neutral-900);
   --prose: var(--color-neutral-700);
   --prose-muted: var(--color-neutral-600);
   --label: var(--color-neutral-500);
@@ -98,6 +100,7 @@
   --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.15);
   --ring: var(--color-neutral-500);
+  --title: var(--color-neutral-200);
   --prose: var(--color-neutral-400);
   --prose-muted: var(--color-neutral-500);
   --label: var(--color-neutral-500);

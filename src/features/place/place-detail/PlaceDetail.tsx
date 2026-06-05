@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { BlurView } from 'expo-blur';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -6,7 +7,9 @@ import {
   PanResponder,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
+  useColorScheme,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +17,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { findPlaceDetail } from '../../../data/mockPlaceDetails';
 import { PlaceDetail as PlaceDetailType } from '../../../types/place';
 import BottomBar from '../../bottom-bar/BottomBar';
-import PlaceBriefSection from './sections/PlaceBriefSection';
+import PlaceCompactView from './PlaceCompactView';
+import PlaceOverviewSection from './sections/PlaceOverviewSection';
 import PlaceInfoSection from './sections/PlaceInfoSection';
 
 type SnapState = 'brief' | 'default' | 'full';
@@ -28,8 +32,7 @@ type PlaceDetailProps = {
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const HANDLE_HEIGHT = 24;
-// bottom-7 (28px) + h-14.5 (58px) − panel bottomMargin (8px)
-const BOTTOM_BAR_CLEARANCE = 78;
+const BOTTOM_BAR_CLEARANCE = 24;
 
 export default function PlaceDetail({
   placeName,
@@ -53,6 +56,7 @@ export default function PlaceDetail({
   const bottomMargin = useRef(new Animated.Value(8)).current;
   const scrollY = useRef(0);
   const gestureStartHeight = useRef(snapHeights.current.default);
+  const isDragging = useRef(false);
 
   useEffect(() => {
     if (placeName) {
@@ -126,13 +130,11 @@ export default function PlaceDetail({
   };
 
   const resolveSnap = (dy: number) => {
-    if (dy < -SCREEN_HEIGHT * 0.25) {
-      snapTo('full');
-      return;
-    }
-
     if (snapStateRef.current === 'brief') {
-      snapTo(dy < -SCREEN_HEIGHT * 0.05 ? 'default' : 'brief');
+      // Require a larger drag to jump directly to full from the compact view.
+      if (dy < -SCREEN_HEIGHT * 0.45) snapTo('full');
+      else if (dy < -SCREEN_HEIGHT * 0.05) snapTo('default');
+      else snapTo('brief');
       return;
     }
 
@@ -141,7 +143,10 @@ export default function PlaceDetail({
       return;
     }
 
-    snapTo(dy > SCREEN_HEIGHT * 0.15 ? 'brief' : 'default');
+    // From default, a short upward drag reaches full since the panel is already 60% tall.
+    if (dy < -SCREEN_HEIGHT * 0.15) snapTo('full');
+    else if (dy > SCREEN_HEIGHT * 0.15) snapTo('brief');
+    else snapTo('default');
   };
 
   const dragToHeight = (dy: number) => {
@@ -152,37 +157,55 @@ export default function PlaceDetail({
     panelHeight.setValue(nextHeight);
   };
 
+  // Refs so PanResponder callbacks always call the latest closure without recreating the responder.
   const resolveSnapRef = useRef(resolveSnap);
   resolveSnapRef.current = resolveSnap;
   const dragToHeightRef = useRef(dragToHeight);
   dragToHeightRef.current = dragToHeight;
 
+  // Only captures downward drag at scroll top to collapse the panel.
+  // All other gestures (upward swipes, scrolled content) pass through to the ScrollView.
   const panelPanResponder = useMemo(
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gestureState) =>
           scrollY.current <= 0 && gestureState.dy > 4,
         onPanResponderGrant: () => {
+          isDragging.current = true;
           gestureStartHeight.current = snapHeights.current[snapStateRef.current];
         },
         onPanResponderMove: (_, gestureState) => dragToHeightRef.current(gestureState.dy),
-        onPanResponderRelease: (_, gestureState) => resolveSnapRef.current(gestureState.dy),
-        onPanResponderTerminate: (_, gestureState) => resolveSnapRef.current(gestureState.dy),
+        onPanResponderRelease: (_, gestureState) => {
+          isDragging.current = false;
+          resolveSnapRef.current(gestureState.dy);
+        },
+        onPanResponderTerminate: (_, gestureState) => {
+          isDragging.current = false;
+          resolveSnapRef.current(gestureState.dy);
+        },
       }),
     []
   );
 
+  // Always captures — used for the drag handle bar so any swipe direction changes snap state.
   const handlePanResponder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: () => {
+          isDragging.current = true;
           gestureStartHeight.current = snapHeights.current[snapStateRef.current];
         },
         onPanResponderMove: (_, gestureState) => dragToHeightRef.current(gestureState.dy),
-        onPanResponderRelease: (_, gestureState) => resolveSnapRef.current(gestureState.dy),
-        onPanResponderTerminate: (_, gestureState) => resolveSnapRef.current(gestureState.dy),
+        onPanResponderRelease: (_, gestureState) => {
+          isDragging.current = false;
+          resolveSnapRef.current(gestureState.dy);
+        },
+        onPanResponderTerminate: (_, gestureState) => {
+          isDragging.current = false;
+          resolveSnapRef.current(gestureState.dy);
+        },
       }),
     []
   );
@@ -213,7 +236,6 @@ export default function PlaceDetail({
       ]}
     >
       <Animated.View
-        className="bg-gray-50/98"
         style={[
           {
             borderRadius,
@@ -224,22 +246,29 @@ export default function PlaceDetail({
         ]}
         {...panelPanResponder.panHandlers}
       >
+        <BlurView
+          intensity={90}
+          tint="systemThickMaterialLight"
+          style={StyleSheet.absoluteFill}
+        />
         <View
           className="h-6 items-center justify-start pt-2.5"
           {...handlePanResponder.panHandlers}
         >
-          <View className="h-1 w-9 rounded-sm bg-gray-300" />
+          <View className="h-1 w-12 rounded-sm bg-shader" />
         </View>
 
         {snapState === 'brief' ? (
-          <CompactPlaceView
+          <PlaceCompactView
             place={place}
             onDismiss={dismissWithAnimation}
             onExpand={() => snapTo('default')}
             onLayout={(contentHeight) => {
               const total = HANDLE_HEIGHT + contentHeight + insets.bottom + BOTTOM_BAR_CLEARANCE;
               snapHeights.current.brief = total;
-              panelHeight.setValue(total);
+              if (!isDragging.current) {
+                panelHeight.setValue(total);
+              }
             }}
           />
         ) : (
@@ -258,72 +287,14 @@ export default function PlaceDetail({
               }}
               contentContainerStyle={{ paddingBottom: insets.bottom + 56 }}
             >
-              <PlaceBriefSection place={place} />
-              <PlaceInfoSection place={place} onEdit={onEdit} />
+              <PlaceOverviewSection place={place} />
+              <PlaceInfoSection place={place} />
             </ScrollView>
           </>
         )}
       </Animated.View>
     </Animated.View>
     </>
-  );
-}
-
-function CompactPlaceView({
-  place,
-  onDismiss,
-  onExpand,
-  onLayout,
-}: {
-  place: PlaceDetailType;
-  onDismiss: () => void;
-  onExpand: () => void;
-  onLayout: (height: number) => void;
-}) {
-  return (
-    <Pressable
-      className="flex-row items-center gap-3 px-4 py-3"
-      onPress={onExpand}
-      onLayout={(e) => onLayout(e.nativeEvent.layout.height)}
-    >
-      <View className="flex-1">
-        <Text numberOfLines={1} className="text-lg font-semibold text-gray-900">
-          {place.name}
-        </Text>
-        <Text numberOfLines={1} className="mt-0.5 text-xs text-gray-500">
-          {place.address}
-        </Text>
-      </View>
-
-      <View className="flex-row items-center gap-1">
-        <Pressable
-          accessibilityLabel="Share place"
-          onPress={(e) => e.stopPropagation()}
-          className="h-10 w-10 items-center justify-center rounded-full bg-gray-100"
-          style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
-        >
-          <Ionicons name="share-outline" size={19} color="#18181B" />
-        </Pressable>
-
-        <Pressable
-          accessibilityLabel="Open in maps"
-          onPress={(e) => e.stopPropagation()}
-          className="h-10 w-10 items-center justify-center rounded-full bg-gray-100"
-          style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
-        >
-          <Ionicons name="map-outline" size={19} color="#18181B" />
-        </Pressable>
-
-        <Pressable
-          accessibilityLabel="Dismiss place details"
-          onPress={(e) => { e.stopPropagation(); onDismiss(); }}
-          className="h-10 w-10 items-center justify-center rounded-full bg-gray-100"
-          style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
-        >
-          <Ionicons name="close" size={20} color="#18181B" />
-        </Pressable>
-      </View>
-    </Pressable>
   );
 }
 
@@ -334,19 +305,22 @@ function PlaceHeader({
   place: PlaceDetailType;
   onDismiss: () => void;
 }) {
+  const colorScheme = useColorScheme();
+  const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
+
   return (
-    <View className="flex-row items-center gap-2 px-4.5 pb-1 pt-1">
-      <Text className="flex-1 text-2xl font-medium text-gray-900" numberOfLines={1}>
+    <View className="flex-row items-center px-4 pb-2 pt-1">
+      <Text className="flex-1 text-2xl font-medium text-foreground" numberOfLines={1}>
         {place.name}
       </Text>
 
       <Pressable
         accessibilityLabel="Dismiss place details"
         onPress={onDismiss}
-        className="h-9 w-9 items-center justify-center rounded-full bg-gray-100"
+        className="h-12 w-12 items-center justify-center rounded-full bg-background"
         style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
       >
-        <Ionicons name="close" size={18} color="#374151" />
+        <Ionicons name="close" size={24} color={foreground} />
       </Pressable>
     </View>
   );
