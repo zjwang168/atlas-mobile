@@ -7,7 +7,6 @@ import {
   PanResponder,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
   useColorScheme,
   View,
@@ -247,9 +246,9 @@ export default function PlaceDetail({
         {...panelPanResponder.panHandlers}
       >
         <BlurView
+          className="absolute inset-0"
           intensity={90}
           tint="systemThickMaterialLight"
-          style={StyleSheet.absoluteFill}
         />
         <View
           className="h-6 items-center justify-start pt-2.5"
