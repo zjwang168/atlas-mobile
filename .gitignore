@@ -42,3 +42,6 @@ yarn-error.*
 
 # Obsidian
 docs/.obsidian
+
+# VSCode
+.vscode/
