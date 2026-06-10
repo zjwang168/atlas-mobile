@@ -7,20 +7,24 @@
     "@gorhom/bottom-sheet": "^5.2.14",
     "@react-navigation/native": "^7.2.4",
     "@react-navigation/native-stack": "^7.15.1",
+    "@rnmapbox/maps": "^10.3.1",
     "expo": "~56.0.8",
     "expo-blur": "~56.0.3",
-    "expo-maps": "~56.0.6",
+    "expo-clipboard": "~56.0.3",
+    "expo-constants": "~56.0.16",
+    "expo-dev-client": "~56.0.18",
     "expo-status-bar": "~56.0.4",
     "nativewind": "^5.0.0-preview.4",
     "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.85.3",
     "react-native-css": "^3.0.7",
     "react-native-gesture-handler": "~2.31.1",
-    "react-native-maps": "1.27.2",
     "react-native-reanimated": "4.3.1",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "4.25.1",
-    "react-native-svg": "15.15.4"
+    "react-native-screens": "4.25.2",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.0",
@@ -38,5 +42,6 @@
   "private": true,
   "overrides": {
     "lightningcss": "1.30.1"
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

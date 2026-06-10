@@ -40,6 +40,9 @@ yarn-error.*
 /ios
 /android
 
+# Environment variables
+.env
+
 # Obsidian
 docs/.obsidian
 
