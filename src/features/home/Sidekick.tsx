@@ -11,6 +11,8 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import { Button } from '@/components/ui/button';
+import { Text as UIText } from '@/components/ui/text';
 import { mockPlaces } from '../../data/mockPlaces';
 import { Place } from '../../types/place';
 import { ChatMessage, ParseResult } from '../../types/route';
@@ -144,6 +146,16 @@ const Sidekick: React.FC<SidekickProps> = ({
       showsVerticalScrollIndicator={false}
     >
       <Text style={styles.sectionTitle}>Recent</Text>
+
+      {/* Temporary: testing the new RNR Button component */}
+      <Button
+        variant="default"
+        onPress={() => console.log('[Sidekick] RNR Button pressed')}
+        style={{ marginBottom: 16 }}
+      >
+        <UIText>Test RNR Button</UIText>
+      </Button>
+
       {mockPlaces.map((place) => (
         <TouchableOpacity
           key={place.id}
