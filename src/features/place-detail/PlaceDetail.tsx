@@ -8,7 +8,7 @@ import {
   View,
 } from 'react-native';
 
-import { findPlaceDetail } from '../../data/mockPlaceDetails';
+import { findPlaceDetail } from '../../../dummy-data/mockPlaceDetails';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import PlaceCompactView from './PlaceCompactView';

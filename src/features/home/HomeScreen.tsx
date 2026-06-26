@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { SafeAreaView, StatusBar, StyleSheet } from 'react-native';
 
-import { mockPlaces } from '../../data/mockPlaces';
+import { mockPlaces } from '../../../dummy-data/mockPlaces';
 import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
 import BottomBar from '../../components/bottom-nav/BottomBar';
 import PlaceDetail from '../place-detail/PlaceDetail';

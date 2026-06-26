@@ -35,7 +35,7 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
 
         <Image
           className="h-28 w-28 rounded-xl bg-muted"
-          source={require('../../../assets/image-placeholder/image-placeholder.jpg')}
+          source={require('../../../../dummy-data/image-placeholder/image-placeholder.jpg')}
         />
       </View>
     </View>
