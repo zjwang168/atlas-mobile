@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Linking, Pressable, ScrollView, Text, useColorScheme, View } from 'react-native';
 
-import { PlaceDetail, PlaceLink, PlaceTag } from '../../../../types/place';
+import { PlaceDetail, PlaceLink, PlaceTag } from '../../../types/place';
 
 type PlaceInfoSectionProps = {
   place: PlaceDetail;

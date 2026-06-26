@@ -1,4 +1,4 @@
-// src/features/home/SearchBar.tsx
+// src/features/search-bar/SearchBar.tsx
 import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,

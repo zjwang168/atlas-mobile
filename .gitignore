@@ -48,3 +48,6 @@ docs/.obsidian
 
 # VSCode
 .vscode/
+
+# MCP
+.mcp.json

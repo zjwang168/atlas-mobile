@@ -1,22 +1,15 @@
-// src/features/home/HomeScreen.tsx
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  SafeAreaView,
-  StatusBar,
-  StyleSheet
-} from 'react-native';
+import { SafeAreaView, StatusBar, StyleSheet } from 'react-native';
 
 import { mockPlaces } from '../../data/mockPlaces';
-import { parseLink } from '../../services/apiService';
 import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
-import PlaceDetail from '../place/place-detail/PlaceDetail';
+import BottomBar from '../../components/bottom-nav/BottomBar';
+import PlaceDetail from '../place-detail/PlaceDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
-import SearchBar from './SearchBar';
-import Sidekick from './Sidekick';
+import HomePanel from './HomePanel';
 
 // ---- Types ----
 
-/** Represents a place data item from mock data */
 interface PlaceData {
   id: string;
   name: string;
@@ -27,30 +20,24 @@ interface PlaceData {
 
 // ---- Helpers ----
 
-/**
- * Converts PlaceData items into MapMarker format
- * expected by the MapboxMap component.
- */
 const toMapMarkers = (places: PlaceData[]): MapMarker[] =>
-  places.map((place) => ({
-    id: place.id,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    title: place.name,
-    description: place.subtitle,
+  places.map((p) => ({
+    id: p.id,
+    latitude: p.latitude,
+    longitude: p.longitude,
+    title: p.name,
+    description: p.subtitle,
   }));
 
-/** Convert ordered geocoded locations into MapMarker format */
 const toRouteMarkers = (locations: GeocodedLocation[]): MapMarker[] =>
-  locations.map((loc, index) => ({
-    id: `route-${index}`,
+  locations.map((loc, i) => ({
+    id: `route-${i}`,
     latitude: loc.latitude,
     longitude: loc.longitude,
     title: loc.name,
     description: loc.full_address,
   }));
 
-/** Convert ordered locations into a GeoJSON LineString for route rendering */
 const toRouteGeoJSON = (
   locations: GeocodedLocation[],
 ): GeoJSON.Feature<GeoJSON.LineString> => ({
@@ -62,10 +49,8 @@ const toRouteGeoJSON = (
   },
 });
 
-/** Generate a unique chat message ID */
 const uid = (): string => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
-/** Format distance in km for readable display */
 function formatDistanceSummary(km: number): string {
   if (km < 1) return `${Math.round(km * 1000)} m total`;
   if (km < 10) return `${km.toFixed(1)} km total`;
@@ -75,27 +60,25 @@ function formatDistanceSummary(km: number): string {
 // ---- Component ----
 
 interface HomeScreenProps {
-  /** Optional callback to open the ImportScreen overlay (used by App.tsx) */
+  /** Opens the ImportScreen overlay — passed down from App.tsx */
   onOpenImport?: () => void;
 }
 
 const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
-  // Transform mock data into map markers
-  const defaultMarkers: MapMarker[] = useMemo(() => toMapMarkers(mockPlaces), []);
+  const defaultMarkers = useMemo(() => toMapMarkers(mockPlaces), []);
 
   const [selectedPlaceName, setSelectedPlaceName] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'myPlaces' | 'travelPlan'>('myPlaces');
 
-  // State for parse/fetch flow
+  // Parse-route flow state — populated by PlanMode when a link is submitted
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('Fetching Reddit post...');
+  const [loadingMessage, setLoadingMessage] = useState('Fetching post...');
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-  // Track whether we have active route data to display
   const hasRouteData = parseResult !== null && parseResult.locations.length > 0;
 
-  // Compute route display props
   const routeGeoJSON = useMemo(() => {
     if (!parseResult?.route.ordered_locations.length) return undefined;
     return toRouteGeoJSON(parseResult.route.ordered_locations);
@@ -106,105 +89,26 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     return toRouteMarkers(parseResult.route.ordered_locations);
   }, [parseResult]);
 
-  // Compute camera target from route locations (center of first and last point)
+  // Center camera on the mean of all route points
   const routeCenter = useMemo((): [number, number] | undefined => {
     if (!parseResult?.route.ordered_locations.length) return undefined;
     const locs = parseResult.route.ordered_locations;
-    const latSum = locs.reduce((s, l) => s + l.latitude, 0);
-    const lngSum = locs.reduce((s, l) => s + l.longitude, 0);
-    const avgLat = latSum / locs.length;
-    const avgLng = lngSum / locs.length;
+    const avgLat = locs.reduce((s, l) => s + l.latitude, 0) / locs.length;
+    const avgLng = locs.reduce((s, l) => s + l.longitude, 0) / locs.length;
     return [avgLng, avgLat];
   }, [parseResult]);
 
-  /** Handle URL submission from the SearchBar */
-  const handleSend = useCallback(async (url: string) => {
-    setIsLoading(true);
-    setError(null);
-    setMessages([]);
-
-    // Animate through loading messages
-    const loadingSteps = [
-      'Fetching Reddit post...',
-      'AI analyzing locations...',
-      'Geocoding places...',
-      'Planning best route...',
-    ];
-    let stepIndex = 0;
-    const interval = setInterval(() => {
-      stepIndex = (stepIndex + 1) % loadingSteps.length;
-      setLoadingMessage(loadingSteps[stepIndex]);
-    }, 2000);
-
-    try {
-      const result = await parseLink(url);
-      setParseResult(result);
-
-      // Add system message with the result
-      const sysMsg: ChatMessage = {
-        id: uid(),
-        role: 'system',
-        text: `Found ${result.locations.length} places from "${result.title}". Route distance: ${result.route.total_distance_km} km.`,
-        timestamp: Date.now(),
-      };
-
-      // Add an assistant message with summary
-      let summary = `I extracted **${result.locations.length} places** from this post.\n\n`;
-      summary += `**Route**: ${formatDistanceSummary(result.route.total_distance_km)}\n\n`;
-      summary += '**Places in order**:\n';
-      result.route.ordered_locations.forEach((loc, i) => {
-        summary += `${i + 1}. ${loc.name}\n`;
-      });
-
-      if (result.removed_noise && result.removed_noise.length > 0) {
-        summary += '\n**Filtered out**:\n';
-        result.removed_noise.forEach((n) => {
-          summary += `• ${n}\n`;
-        });
-      }
-
-      const assistantMsg: ChatMessage = {
-        id: uid(),
-        role: 'assistant',
-        text: summary,
-        timestamp: Date.now(),
-      };
-
-      setMessages([sysMsg, assistantMsg]);
-    } catch (err: any) {
-      const errMsg = err?.message || 'An unexpected error occurred.';
-      setError(errMsg);
-
-      const errorMsg: ChatMessage = {
-        id: uid(),
-        role: 'system',
-        text: `⚠️ Error: ${errMsg}`,
-        timestamp: Date.now(),
-      };
-      setMessages([errorMsg]);
-    } finally {
-      clearInterval(interval);
-      setIsLoading(false);
-    }
-  }, []);
-
-  /** Handle follow-up messages in the Sidekick chat */
+  /** Follow-up message handler passed to PlanMode */
   const handleSendMessage = useCallback(
     async (text: string) => {
-      // Add user message
-      const userMsg: ChatMessage = {
-        id: uid(),
-        role: 'user',
-        text,
-        timestamp: Date.now(),
-      };
+      const userMsg: ChatMessage = { id: uid(), role: 'user', text, timestamp: Date.now() };
       setMessages((prev) => [...prev, userMsg]);
 
-      // Basic auto-reply for MVP (no separate DeepSeek call from frontend)
+      // MVP auto-reply — real AI follow-up handled in PlanMode
       const autoReply: ChatMessage = {
         id: uid(),
         role: 'assistant',
-        text: `I found ${parseResult?.locations.length || 0} places. You can view them on the map! Try pasting another Reddit link to explore more.`,
+        text: `I found ${parseResult?.locations.length ?? 0} places. View them on the map, or paste another link to start over.`,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, autoReply]);
@@ -212,25 +116,11 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     [parseResult],
   );
 
-  /** Handle history button press */
-  const handleHistoryPress = useCallback(() => {
-    // MVP: toggle the bottom sheet to show past results
-    // For now, just log. In future: show a history list overlay.
-    console.log('[HomeScreen] History pressed');
-  }, []);
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Search bar floating at top */}
-      <SearchBar
-        onSend={handleSend}
-        isLoading={isLoading}
-        onHistoryPress={handleHistoryPress}
-      />
-
-      {/* Mapbox map filling the entire screen */}
+      {/* Full-screen map — sits behind all panels */}
       <MapboxMap
         markers={defaultMarkers}
         centerCoordinate={routeCenter ?? [-122.3321, 47.6062]}
@@ -240,8 +130,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
       />
 
-      {/* Sidekick bottom sheet */}
-      <Sidekick
+      {/* Bottom content panel — switches between My Places and Plan Mode */}
+      <HomePanel
+        activeTab={activeTab}
         parseResult={parseResult}
         isLoading={isLoading}
         loadingMessage={loadingMessage}
@@ -251,12 +142,18 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         onPlacePress={(place) => setSelectedPlaceName(place.name)}
       />
 
-      {/* Place detail overlay */}
+      {/* Place detail overlay — slides up when a place is selected */}
       <PlaceDetail
         placeName={selectedPlaceName}
         onDismiss={() => setSelectedPlaceName(null)}
-        onEdit={(place) => console.log('Edit place:', place.name)}
-        onOpenImport={onOpenImport ?? (() => {})}
+        onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+      />
+
+      {/* Tab bar + add-place button — always on top */}
+      <BottomBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onAddPlace={onOpenImport}
       />
     </SafeAreaView>
   );

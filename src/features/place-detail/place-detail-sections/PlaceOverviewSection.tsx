@@ -2,8 +2,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useMemo } from 'react';
 import { Image, Pressable, Text, useColorScheme, View } from 'react-native';
 
-import { PlaceDetail } from '../../../../types/place';
-import { getOpenStatus } from '../../utils/placeHours';
+import { PlaceDetail } from '../../../types/place';
+import { getOpenStatus } from '../utils/placeHours';
 
 type PlaceOverviewSectionProps = {
   place: PlaceDetail;
@@ -35,7 +35,7 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
 
         <Image
           className="h-28 w-28 rounded-xl bg-muted"
-          source={require('../../../../data/image-placeholder/image-placeholder.jpg')}
+          source={require('../../../assets/image-placeholder/image-placeholder.jpg')}
         />
       </View>
     </View>

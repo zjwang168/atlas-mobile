@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Pressable, Text, useColorScheme, View } from 'react-native';
 
-import { PlaceDetail } from '../../../types/place';
+import { PlaceDetail } from '../../types/place';
 
 type PlaceCompactViewProps = {
   place: PlaceDetail;
