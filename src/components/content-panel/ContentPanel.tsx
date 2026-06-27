@@ -29,6 +29,14 @@ type ContentPanelProps = {
   compactContent?: (props: CompactContentRenderProps) => React.ReactNode;
   initialSnap?: SnapState;
   /**
+   * Controlled snap state. When provided the panel animates to this snap position
+   * whenever the value changes. Internal gestures still work, but call
+   * `onSnapStateChange` so the parent can keep its state in sync.
+   */
+  snapState?: SnapState;
+  /** Called when an internal gesture changes the snap state (controlled mode). */
+  onSnapStateChange?: (state: SnapState) => void;
+  /**
    * When provided, the panel slides in/out based on this value.
    * Omit for panels that are always visible.
    */
@@ -36,6 +44,8 @@ type ContentPanelProps = {
   /** Called after the slide-out animation finishes */
   onHidden?: () => void;
   zIndex?: number;
+  /** When provided, overrides snap-based height and pins the panel to this exact pixel height. */
+  height?: number;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -56,15 +66,18 @@ export default function ContentPanel({
   children,
   compactContent,
   initialSnap = 'default',
+  snapState: controlledSnapState,
+  onSnapStateChange,
   visible,
   onHidden,
   zIndex = 30,
+  height,
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
   const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
 
-  const [snapState, setSnapState] = useState<SnapState>(initialSnap);
-  const snapStateRef = useRef<SnapState>(initialSnap);
+  const [snapState, setSnapState] = useState<SnapState>(controlledSnapState ?? initialSnap);
+  const snapStateRef = useRef<SnapState>(controlledSnapState ?? initialSnap);
 
   const panelHeight = useRef(new Animated.Value(snapHeights.current[initialSnap])).current;
 
@@ -122,6 +135,16 @@ export default function ContentPanel({
     [insets.top],
   );
 
+  // Override snap-based height when a fixed `height` prop is supplied
+  useEffect(() => {
+    if (height === undefined) return;
+    Animated.timing(panelHeight, {
+      toValue: height,
+      duration: 240,
+      useNativeDriver: false,
+    }).start();
+  }, [height]);
+
   // Only used when `visible` prop is provided
   const translateY = useRef(new Animated.Value(visible === false ? 40 : 0)).current;
   const opacity = useRef(new Animated.Value(visible === false ? 0 : 1)).current;
@@ -133,12 +156,21 @@ export default function ContentPanel({
   const snapTo = (next: SnapState, animated = true) => {
     snapStateRef.current = next;
     setSnapState(next);
+    onSnapStateChange?.(next);
     Animated.timing(panelHeight, {
       toValue: snapHeights.current[next],
       duration: animated ? 240 : 0,
       useNativeDriver: false,
     }).start();
   };
+
+  // Respond to controlled snapState changes from the parent
+  useEffect(() => {
+    if (controlledSnapState === undefined) return;
+    if (controlledSnapState !== snapStateRef.current) {
+      snapTo(controlledSnapState);
+    }
+  }, [controlledSnapState]);
 
   const setCompactHeight = (height: number) => {
     snapHeights.current.compact = height;
