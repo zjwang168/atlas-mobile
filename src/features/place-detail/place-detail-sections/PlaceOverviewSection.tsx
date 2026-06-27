@@ -17,9 +17,9 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
       <View className="flex-row items-start gap-3">
         <View className="h-28 flex-1 justify-between pt-1">
           <View className="gap-0.5">
-            <Text className="text-sm leading-5 text-label">{place.address}</Text>
+            <Text className="text-sm leading-5 text-text-tertiary">{place.address}</Text>
             <Text
-              className={`text-sm ${status.isOpen ? 'font-medium text-green-700' : 'font-normal text-label'}`}
+              className={`text-sm ${status.isOpen ? 'font-medium text-green-700' : 'font-normal text-text-tertiary'}`}
             >
               {status.statusLine}
             </Text>

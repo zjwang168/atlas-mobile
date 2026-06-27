@@ -7,28 +7,21 @@ type RightNavProps = {
   onNavigatePress?: () => void;
 };
 
+const glassShadow = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.12,
+  shadowRadius: 20,
+  elevation: 6,
+} as const;
+
 export default function RightNav({ onGlobePress, onNavigatePress }: RightNavProps) {
   return (
-    <View
-      style={{
-        borderRadius: 33,
-        overflow: 'hidden',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.12,
-        shadowRadius: 20,
-        elevation: 6,
-      }}
-    >
+    <View style={{ borderRadius: 33, overflow: 'hidden', ...glassShadow }}>
       <BlurView
         intensity={40}
         tint="light"
-        style={{
-          paddingHorizontal: 10,
-          paddingVertical: 12,
-          gap: 20,
-          alignItems: 'center',
-        }}
+        style={{ paddingHorizontal: 10, paddingVertical: 12, gap: 20, alignItems: 'center' }}
       >
         <TouchableOpacity onPress={onGlobePress} activeOpacity={0.7}>
           <Ionicons name="earth-outline" size={24} color="#000" />

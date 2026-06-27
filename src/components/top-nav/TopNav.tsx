@@ -1,4 +1,5 @@
 import { View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LeftNav from './left-nav/LeftNav';
 import RightNav from './right-nav/RightNav';
 
@@ -9,9 +10,12 @@ type TopNavProps = {
 };
 
 export default function TopNav({ onSearchPress, onGlobePress, onNavigatePress }: TopNavProps) {
+  const { top } = useSafeAreaInsets();
+
   return (
     <View
-      className="absolute top-0 left-0 right-0 flex-row items-start justify-between pt-14 px-3 z-30"
+      className="absolute left-0 right-0 flex-row items-start justify-between px-4 z-30"
+      style={{ top: 0, paddingTop: top + 8 }}
       pointerEvents="box-none"
     >
       <LeftNav onPress={onSearchPress} />

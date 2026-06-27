@@ -1,3 +1,4 @@
+import { mockUser } from '../../../dummy-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place } from '../../types/place';
 import { ChatMessage, ParseResult } from '../../types/route';
@@ -15,6 +16,7 @@ type HomePanelProps = {
   onSendMessage: (text: string) => void;
   error: string | null;
   onPlacePress?: (place: Place) => void;
+  visible?: boolean;
 };
 
 export default function HomePanel({
@@ -26,9 +28,10 @@ export default function HomePanel({
   onSendMessage,
   error,
   onPlacePress,
+  visible,
 }: HomePanelProps) {
   return (
-    <ContentPanel initialSnap="default" zIndex={30}>
+    <ContentPanel initialSnap="default" zIndex={30} visible={visible}>
       {({ snapState, reportScrollY, bottomInset }) => {
         if (snapState === 'compact') return null;
         return activeTab === 'myPlaces' ? (
@@ -36,6 +39,8 @@ export default function HomePanel({
             onPlacePress={onPlacePress}
             onScroll={reportScrollY}
             bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
+            avatarUri={mockUser.avatarUri}
+            avatarFallback={mockUser.avatarFallback}
           />
         ) : (
           <PlanMode

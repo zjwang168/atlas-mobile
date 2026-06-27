@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { ParseResult } from '../types/route';
+import { ParseResult } from '@/types/route';
 
 /**
  * Base URL for the FastAPI backend.

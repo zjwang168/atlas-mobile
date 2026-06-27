@@ -52,12 +52,14 @@ export default function ContentPanel({
   const snapStateRef = useRef<SnapState>(initialSnap);
 
   const panelHeight = useRef(new Animated.Value(snapHeights.current[initialSnap])).current;
+
   const borderRadiusTop = useRef(new Animated.Value(initialSnap === 'full' ? 0 : 36)).current;
   const borderRadiusBottom = useRef(new Animated.Value(initialSnap === 'full' ? 0 : 48)).current;
   const horizontalMargin = useRef(new Animated.Value(initialSnap === 'full' ? 0 : 8)).current;
   const bottomMargin = useRef(new Animated.Value(initialSnap === 'full' ? 0 : 8)).current;
   // Only used when `visible` prop is provided
-  const translateY = useRef(new Animated.Value(visible === false ? SCREEN_HEIGHT : 0)).current;
+  const translateY = useRef(new Animated.Value(visible === false ? 40 : 0)).current;
+  const opacity = useRef(new Animated.Value(visible === false ? 0 : 1)).current;
 
   const scrollY = useRef(0);
   const gestureStartHeight = useRef(snapHeights.current[initialSnap]);
@@ -102,23 +104,22 @@ export default function ContentPanel({
     }
   };
 
-  // Slide in/out when `visible` prop changes
+  // Slide + fade in/out when `visible` prop changes
   useEffect(() => {
     if (visible === undefined) return;
     if (visible) {
       snapTo(initialSnap, false);
-      translateY.setValue(SCREEN_HEIGHT);
-      Animated.timing(translateY, {
-        toValue: 0,
-        duration: 260,
-        useNativeDriver: false,
-      }).start();
+      translateY.setValue(40);
+      opacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(translateY, { toValue: 0, duration: 280, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 1, duration: 280, useNativeDriver: false }),
+      ]).start();
     } else {
-      Animated.timing(translateY, {
-        toValue: SCREEN_HEIGHT,
-        duration: 220,
-        useNativeDriver: false,
-      }).start(({ finished }) => {
+      Animated.parallel([
+        Animated.timing(translateY, { toValue: 40, duration: 220, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 0, duration: 220, useNativeDriver: false }),
+      ]).start(({ finished }) => {
         if (finished) onHidden?.();
       });
     }
@@ -218,6 +219,7 @@ export default function ContentPanel({
         shadowOffset: { width: 0, height: -2 },
         shadowOpacity: 0.08,
         shadowRadius: 16,
+        opacity,
         transform: [{ translateY }],
       }}
     >
@@ -244,7 +246,7 @@ export default function ContentPanel({
           className="h-6 items-center justify-start pt-2.5"
           {...handlePanResponder.panHandlers}
         >
-          <View className="h-1 w-12 rounded-sm bg-shader" />
+          <View className="h-1 w-12 rounded-sm bg-handle" />
         </View>
 
         {children({

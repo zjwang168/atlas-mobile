@@ -29,7 +29,7 @@ export default function PlaceCompactView({
         <Text numberOfLines={1} className="text-lg font-semibold text-foreground">
           {place.name}
         </Text>
-        <Text numberOfLines={1} className="mt-0.5 text-xs text-label">
+        <Text numberOfLines={1} className="mt-0.5 text-xs text-text-tertiary">
           {place.address}
         </Text>
       </View>

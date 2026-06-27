@@ -1,4 +1,4 @@
-import { DaySchedule, PlaceDetail } from '../types/place';
+import { DaySchedule, PlaceDetail } from '@/types/place';
 
 const weekdayLunchDinner: DaySchedule[] = [
   'monday',

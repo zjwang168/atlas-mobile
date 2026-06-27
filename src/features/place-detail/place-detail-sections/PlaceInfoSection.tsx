@@ -38,7 +38,7 @@ function TagList({ tags }: { tags: PlaceTag[] }) {
     >
       {tags.map((tag) => (
         <View key={tag.id} className="rounded-full bg-card px-3 py-1.5">
-          <Text className="text-sm font-medium text-label">{tag.label}</Text>
+          <Text className="text-sm font-medium text-text-tertiary">{tag.label}</Text>
         </View>
       ))}
     </ScrollView>
@@ -50,7 +50,7 @@ function Paragraphs({ text }: { text: string }) {
   return (
     <View className="gap-3">
       {parts.map((part, i) => (
-        <Text key={i} className="text-base leading-relax text-prose">
+        <Text key={i} className="text-base leading-relax text-text-secondary">
           {part}
         </Text>
       ))}
@@ -68,7 +68,7 @@ function LinkRow({ link }: { link: PlaceLink }) {
       className="min-h-8 flex-row items-center justify-between pr-2"
       style={({ pressed }) => ({ opacity: pressed ? 0.55 : 1 })}
     >
-      <Text className="text-sm text-prose">{link.label}</Text>
+      <Text className="text-sm text-text-secondary">{link.label}</Text>
       <Ionicons name="chevron-forward" size={12} color={foreground} />
     </Pressable>
   );

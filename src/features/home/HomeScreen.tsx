@@ -1,9 +1,10 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { SafeAreaView, StatusBar, StyleSheet } from 'react-native';
+import { StatusBar, StyleSheet, View } from 'react-native';
 
 import { mockPlaces } from '../../../dummy-data/mockPlaces';
 import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
 import BottomBar from '../../components/bottom-nav/BottomBar';
+import TopNav from '../../components/top-nav/TopNav';
 import PlaceDetail from '../place-detail/PlaceDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import HomePanel from './HomePanel';
@@ -117,8 +118,8 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
       {/* Full-screen map — sits behind all panels */}
       <MapboxMap
@@ -130,7 +131,10 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
       />
 
-      {/* Bottom content panel — switches between My Places and Plan Mode */}
+      {/* Top nav — avatar left, search/globe/navigate right */}
+      <TopNav />
+
+      {/* Bottom content panel — hidden while place detail is open */}
       <HomePanel
         activeTab={activeTab}
         parseResult={parseResult}
@@ -140,6 +144,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         onSendMessage={handleSendMessage}
         error={error}
         onPlacePress={(place) => setSelectedPlaceName(place.name)}
+        visible={selectedPlaceName === null}
       />
 
       {/* Place detail overlay — slides up when a place is selected */}
@@ -155,7 +160,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         onTabChange={setActiveTab}
         onAddPlace={onOpenImport}
       />
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -164,7 +169,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
 });
 

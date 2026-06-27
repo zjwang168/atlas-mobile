@@ -2,112 +2,66 @@ import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-/**
- * Mapbox access token retrieval strategy:
- * 1. Primary: Constants.expoConfig.extra.mapboxAccessToken (from app.config.js)
- * 2. Fallback: process.env.MAPBOX_ACCESS_TOKEN (from .env loaded at build time)
- *
- * The token is stored in .env (gitignored) and injected via app.config.js.
- */
 const MAPBOX_ACCESS_TOKEN: string =
   (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
   (process.env.MAPBOX_ACCESS_TOKEN as string) ||
   '';
 
-// ---- Types ----
-
-/** Represents a single marker on the map */
 export interface MapMarker {
-  /** Unique identifier for the marker */
   id: string;
-  /** Latitude coordinate */
   latitude: number;
-  /** Longitude coordinate */
   longitude: number;
-  /** Display title shown when marker is tapped */
   title?: string;
-  /** Optional subtitle/description */
   description?: string;
 }
 
-/** Props for the MapboxMap component */
 interface MapboxMapProps {
-  /** Array of markers to display on the map */
   markers: MapMarker[];
-  /** Initial camera center coordinates [longitude, latitude] (Mapbox uses [lng, lat]) */
   centerCoordinate?: [number, number];
-  /** Initial zoom level (default: 12) */
   zoomLevel?: number;
-  /** Additional styles for the map container */
   style?: ViewStyle;
-  /** Callback when a marker is pressed */
   onMarkerPress?: (marker: MapMarker) => void;
-
-  /** Optional GeoJSON LineString to render a route polyline on the map */
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
-  /** Optional re-ordered markers to display along the route (overrides `markers` when set) */
   routeMarkers?: MapMarker[];
 }
 
-// ---- Component ----
-
-/**
- * A reusable Mapbox-powered map component.
- * Renders a full-screen map with customizable markers.
- */
 const MapboxMap: React.FC<MapboxMapProps> = ({
   markers,
-  centerCoordinate = [-122.3321, 47.6062], // Default: Seattle [lng, lat]
+  centerCoordinate = [-122.3321, 47.6062],
   zoomLevel = 12,
   style,
   onMarkerPress,
   routeGeoJSON,
   routeMarkers,
 }) => {
-  // Use routeMarkers if provided, otherwise fall back to the regular markers
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
+  const { top: safeTop } = useSafeAreaInsets();
+  // Position compass just below the RightNav pill (safeTop + 8 offset + 92px pill height + 12px gap)
+  const compassTop = safeTop + 48;
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Set Mapbox access token once when the component mounts.
-    // Using try/catch to prevent native module initialization failures
-    // from crashing the entire JS thread.
     try {
       if (!MAPBOX_ACCESS_TOKEN) {
-        const errMsg =
-          'Mapbox access token is missing. Please ensure MAPBOX_ACCESS_TOKEN is set in .env and rebuild.';
-        console.error('[MapboxMap] ' + errMsg);
-        setError(errMsg);
+        setError('Mapbox access token is missing. Check MAPBOX_ACCESS_TOKEN in .env and rebuild.');
         return;
       }
       MapboxGL.setAccessToken(MAPBOX_ACCESS_TOKEN);
-      console.log('[MapboxMap] Access token configured successfully');
       setIsReady(true);
     } catch (err) {
-      const errMsg =
-        'Failed to set Mapbox access token: ' +
-        (err instanceof Error ? err.message : String(err));
-      console.error('[MapboxMap]', errMsg);
-      setError(errMsg);
+      setError('Failed to initialise Mapbox: ' + (err instanceof Error ? err.message : String(err)));
     }
   }, []);
 
   useEffect(() => {
-    // Recenter the camera when centerCoordinate changes
-    if (cameraRef.current) {
-      cameraRef.current.setCamera({
-        centerCoordinate,
-        zoomLevel,
-        animationDuration: 500,
-      });
-    }
+    cameraRef.current?.setCamera({ centerCoordinate, zoomLevel, animationDuration: 500 });
   }, [centerCoordinate, zoomLevel]);
 
-  // Show loading state while Mapbox is initializing
   if (error) {
     return (
       <View style={[styles.container, styles.centerContent]}>
@@ -133,19 +87,16 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
         style={{ width, height }}
         styleURL={MapboxGL.StyleURL.Street}
         compassEnabled={true}
+        compassPosition={{ top: compassTop, right: 16 }}
         logoEnabled={false}
-        attributionEnabled={true}
+        attributionEnabled={false}
+        scaleBarEnabled={false}
       >
-        {/* Camera controller for programmatic navigation */}
         <MapboxGL.Camera
           ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate,
-            zoomLevel,
-          }}
+          defaultSettings={{ centerCoordinate, zoomLevel }}
         />
 
-        {/* Render route polyline (if provided) */}
         {routeGeoJSON && (
           <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
             <MapboxGL.LineLayer
@@ -161,16 +112,12 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
           </MapboxGL.ShapeSource>
         )}
 
-        {/* Render markers (routeMarkers if provided, otherwise markers) */}
         {displayMarkers.map((marker) => (
           <MapboxGL.MarkerView
             key={marker.id}
             coordinate={[marker.longitude, marker.latitude]}
           >
-            <View
-              style={styles.markerContainer}
-              onTouchEnd={() => onMarkerPress?.(marker)}
-            >
+            <View style={styles.markerContainer} onTouchEnd={() => onMarkerPress?.(marker)}>
               <View style={styles.marker} />
             </View>
           </MapboxGL.MarkerView>
@@ -180,8 +127,6 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
   );
 };
 
-// ---- Styles ----
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -190,11 +135,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-  },
-  map: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
   },
   markerContainer: {
     alignItems: 'center',
