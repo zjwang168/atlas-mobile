@@ -11,6 +11,8 @@ type PlanModeProps = {
   error: string | null;
   onScroll?: (y: number) => void;
   bottomInset?: number;
+  /** Renders a condensed header only — used when the panel is in compact snap state */
+  compact?: boolean;
 };
 
 export default function PlanMode({
@@ -22,7 +24,25 @@ export default function PlanMode({
   error,
   onScroll,
   bottomInset = 0,
+  compact = false,
 }: PlanModeProps) {
+  if (compact) {
+    return (
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 20,
+          paddingVertical: 8,
+        }}
+      >
+        <Text style={{ fontSize: 18, fontWeight: '600', color: '#09090b' }}>
+          Playbook
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
       <Text>Plan Mode</Text>

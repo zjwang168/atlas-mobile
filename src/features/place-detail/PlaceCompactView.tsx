@@ -7,23 +7,20 @@ type PlaceCompactViewProps = {
   place: PlaceDetail;
   onDismiss: () => void;
   onExpand: () => void;
-  onLayout: (height: number) => void;
 };
 
 export default function PlaceCompactView({
   place,
   onDismiss,
   onExpand,
-  onLayout,
 }: PlaceCompactViewProps) {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#18181B';
 
   return (
     <Pressable
-      className="flex-row items-center gap-3 px-4 pb-6"
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 8 }}
       onPress={onExpand}
-      onLayout={(e) => onLayout(e.nativeEvent.layout.height)}
     >
       <View className="flex-1">
         <Text numberOfLines={1} className="text-lg font-semibold text-foreground">

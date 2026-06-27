@@ -55,7 +55,7 @@ export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPl
             style={[styles.tab, activeTab === 'myPlaces' && styles.tabActive]}
             onPress={() => onTabChange?.('myPlaces')}
           >
-            <Ionicons name="location-sharp" size={24} color={activeTab === 'myPlaces' ? '#1d4ed8' : '#000'} />
+            <Ionicons name="location-sharp" size={24} color={activeTab === 'myPlaces' ? '#12c170' : '#000'} />
             <Text style={[styles.tabLabel, activeTab === 'myPlaces' && styles.tabLabelActive]}>My Places</Text>
           </TouchableOpacity>
 
@@ -63,7 +63,7 @@ export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPl
             style={[styles.tab, activeTab === 'travelPlan' && styles.tabActive]}
             onPress={() => onTabChange?.('travelPlan')}
           >
-            <Ionicons name="map-outline" size={24} color={activeTab === 'travelPlan' ? '#1d4ed8' : '#000'} />
+            <Ionicons name="map-outline" size={24} color={activeTab === 'travelPlan' ? '#12c170' : '#000'} />
             <Text style={[styles.tabLabel, activeTab === 'travelPlan' && styles.tabLabelActive]}>Plan Mode</Text>
           </TouchableOpacity>
         </BlurView>
@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   tabActive: {
-    backgroundColor: 'rgba(29,78,216,0.1)',
+    backgroundColor: '#e9fbf1',
   },
   tabLabel: {
     fontSize: 11,
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
     color: '#000',
   },
   tabLabelActive: {
-    color: '#1d4ed8',
+    color: '#12c170',
   },
   morphContainer: {
     position: 'absolute',

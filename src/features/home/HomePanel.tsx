@@ -31,10 +31,31 @@ export default function HomePanel({
   visible,
 }: HomePanelProps) {
   return (
-    <ContentPanel initialSnap="default" zIndex={30} visible={visible}>
-      {({ snapState, reportScrollY, bottomInset }) => {
-        if (snapState === 'compact') return null;
-        return activeTab === 'myPlaces' ? (
+    <ContentPanel
+      initialSnap="default"
+      zIndex={30}
+      visible={visible}
+      compactContent={() =>
+        activeTab === 'myPlaces' ? (
+          <MyPlaces
+            compact
+            avatarUri={mockUser.avatarUri}
+            avatarFallback={mockUser.avatarFallback}
+          />
+        ) : (
+          <PlanMode
+            compact
+            parseResult={parseResult}
+            isLoading={isLoading}
+            messages={messages}
+            onSendMessage={onSendMessage}
+            error={error}
+          />
+        )
+      }
+    >
+      {({ snapState, reportScrollY, bottomInset }) =>
+        activeTab === 'myPlaces' ? (
           <MyPlaces
             onPlacePress={onPlacePress}
             onScroll={reportScrollY}
@@ -53,8 +74,8 @@ export default function HomePanel({
             onScroll={reportScrollY}
             bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
           />
-        );
-      }}
+        )
+      }
     </ContentPanel>
   );
 }

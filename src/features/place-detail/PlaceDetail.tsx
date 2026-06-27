@@ -44,23 +44,18 @@ export default function PlaceDetail({ placeName, onDismiss, onEdit: _onEdit }: P
         onDismiss();
       }}
       zIndex={40}
+      compactContent={({ snapTo }) =>
+        place ? (
+          <PlaceCompactView
+            place={place}
+            onDismiss={() => setIsVisible(false)}
+            onExpand={() => snapTo('default')}
+          />
+        ) : null
+      }
     >
-      {({ snapState, snapTo, setCompactHeight, reportScrollY, bottomInset }) => {
+      {({ reportScrollY, bottomInset }) => {
         if (!place) return null;
-
-        if (snapState === 'compact') {
-          return (
-            <PlaceCompactView
-              place={place}
-              onDismiss={() => setIsVisible(false)}
-              onExpand={() => snapTo('default')}
-              onLayout={(contentHeight) => {
-                setCompactHeight(24 + contentHeight + bottomInset + 24);
-              }}
-            />
-          );
-        }
-
         return (
           <>
             <PlaceHeader

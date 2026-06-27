@@ -17,6 +17,8 @@ type MyPlacesProps = {
   avatarFallback?: string;
   onAvatarPress?: () => void;
   onSharePress?: () => void;
+  /** Renders a condensed header only — used when the panel is in compact snap state */
+  compact?: boolean;
 };
 
 export default function MyPlaces({
@@ -26,8 +28,56 @@ export default function MyPlaces({
   avatarFallback = 'U',
   onAvatarPress,
   onSharePress,
+  compact = false,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
+
+  if (compact) {
+    return (
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingHorizontal: 20,
+          paddingVertical: 8,
+        }}
+      >
+        <Text style={{ fontSize: 18, fontWeight: '600', color: '#09090b' }}>
+          My places
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={onSharePress}
+            activeOpacity={0.7}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 999,
+              backgroundColor: 'rgba(255,255,255,0.65)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.12,
+              shadowRadius: 20,
+              elevation: 4,
+            }}
+          >
+            <Ionicons name="share-outline" size={16} color="#000" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onAvatarPress} activeOpacity={0.85}>
+            <Avatar alt={avatarFallback} style={{ width: 32, height: 32 }}>
+              {avatarUri ? <AvatarImage source={{ uri: avatarUri }} /> : null}
+              <AvatarFallback>
+                <Text style={{ fontSize: 11, fontWeight: '500' }}>{avatarFallback}</Text>
+              </AvatarFallback>
+            </Avatar>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1 }}>
