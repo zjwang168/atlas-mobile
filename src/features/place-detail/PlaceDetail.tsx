@@ -8,7 +8,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 
-import { findPlaceDetail } from '../../../dummy-data/mockPlaceDetails';
+import { findPlaceDetail } from '../../../mock-data/mockPlaceDetails';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import PlaceCompactView from './PlaceCompactView';

@@ -64,7 +64,7 @@ export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPl
             onPress={() => onTabChange?.('travelPlan')}
           >
             <Ionicons name="map-outline" size={24} color={activeTab === 'travelPlan' ? '#12c170' : '#000'} />
-            <Text style={[styles.tabLabel, activeTab === 'travelPlan' && styles.tabLabelActive]}>Plan Mode</Text>
+            <Text style={[styles.tabLabel, activeTab === 'travelPlan' && styles.tabLabelActive]}>My Plan</Text>
           </TouchableOpacity>
         </BlurView>
       </View>

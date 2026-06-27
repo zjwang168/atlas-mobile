@@ -1,9 +1,9 @@
-import { mockUser } from '../../../dummy-data/mockUser';
+import { mockUser } from '../../../mock-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place } from '../../types/place';
 import { ChatMessage, ParseResult } from '../../types/route';
 import MyPlaces from '../my-places/MyPlaces';
-import PlanMode from '../plan-mode/PlanMode';
+import MyPlan from '../my-plan/MyPlan';
 
 const BOTTOM_BAR_CLEARANCE = 88;
 
@@ -43,14 +43,7 @@ export default function HomePanel({
             avatarFallback={mockUser.avatarFallback}
           />
         ) : (
-          <PlanMode
-            compact
-            parseResult={parseResult}
-            isLoading={isLoading}
-            messages={messages}
-            onSendMessage={onSendMessage}
-            error={error}
-          />
+          <MyPlan compact />
         )
       }
     >
@@ -64,13 +57,7 @@ export default function HomePanel({
             avatarFallback={mockUser.avatarFallback}
           />
         ) : (
-          <PlanMode
-            parseResult={parseResult}
-            isLoading={isLoading}
-            loadingMessage={loadingMessage}
-            messages={messages}
-            onSendMessage={onSendMessage}
-            error={error}
+          <MyPlan
             onScroll={reportScrollY}
             bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
           />

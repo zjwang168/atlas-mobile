@@ -2,7 +2,7 @@ import PlaceCard from '@/components/place-card/PlaceCard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { FlatList, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/ui/text';
-import { mockPlaceDetails } from '../../../../dummy-data/mockPlaceDetails';
+import { mockPlaceDetails } from '../../../../mock-data/mockPlaceDetails';
 import { PlaceDetail } from '@/types/place';
 
 const MOCK_DATES = [
