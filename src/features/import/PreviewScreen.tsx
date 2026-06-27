@@ -4,6 +4,7 @@ import {
     TouchableOpacity,
     View,
   } from 'react-native';
+import { Badge } from '@/components/ui/badge';
   
   const extractedPlaces = [
     {
@@ -45,9 +46,9 @@ import {
                   <Text style={styles.placeName}>{place.name}</Text>
                   <Text style={styles.placeSubtitle}>{place.subtitle}</Text>
   
-                  <View style={styles.tag}>
+                  <Badge variant="secondary" style={{ marginTop: 10, alignSelf: 'flex-start' }}>
                     <Text style={styles.tagText}>{place.type}</Text>
-                  </View>
+                  </Badge>
                 </View>
   
                 <TouchableOpacity style={styles.trashButton}>
@@ -150,15 +151,6 @@ import {
       marginTop: 5,
       fontSize: 15,
       color: '#8A8A8E',
-    },
-  
-    tag: {
-      marginTop: 10,
-      alignSelf: 'flex-start',
-      paddingHorizontal: 12,
-      paddingVertical: 7,
-      borderRadius: 999,
-      backgroundColor: '#F0F0F4',
     },
   
     tagText: {

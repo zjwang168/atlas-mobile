@@ -1,6 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Linking, Pressable, ScrollView, Text, useColorScheme, View } from 'react-native';
+import { Linking, Pressable, ScrollView, useColorScheme, View } from 'react-native';
 
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Text } from '@/components/ui/text';
 import { PlaceDetail, PlaceLink, PlaceTag } from '../../../types/place';
 
 type PlaceInfoSectionProps = {
@@ -17,13 +20,9 @@ function SectionHeader({ label, action }: { label: string; action?: SectionActio
     <View className="flex-row items-center justify-between">
       <Text className="text-lg font-semibold text-foreground">{label}</Text>
       {action && (
-        <Pressable
-          onPress={action.onPress}
-          className="h-9 w-9 items-center justify-center"
-          style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}
-        >
+        <Button onPress={action.onPress} size="icon" variant="ghost">
           <Ionicons name={action.icon} size={action.iconSize ?? 20} color={foreground} />
-        </Pressable>
+        </Button>
       )}
     </View>
   );
@@ -37,9 +36,9 @@ function TagList({ tags }: { tags: PlaceTag[] }) {
       contentContainerStyle={{ gap: 8, paddingRight: 18 }}
     >
       {tags.map((tag) => (
-        <View key={tag.id} className="rounded-full bg-card px-3 py-1.5">
+        <Badge key={tag.id} variant="secondary" className="px-3 py-1.5">
           <Text className="text-sm font-medium text-text-tertiary">{tag.label}</Text>
-        </View>
+        </Badge>
       ))}
     </ScrollView>
   );

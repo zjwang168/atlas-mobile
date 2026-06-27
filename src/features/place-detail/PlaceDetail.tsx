@@ -1,12 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
 import {
-  Pressable,
   ScrollView,
-  Text,
   useColorScheme,
   View,
 } from 'react-native';
+import { Button } from '@/components/ui/button';
+import { Text } from '@/components/ui/text';
 
 import { findPlaceDetail } from '../../../dummy-data/mockPlaceDetails';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
@@ -94,14 +94,15 @@ function PlaceHeader({
       <Text className="flex-1 text-2xl font-medium text-foreground" numberOfLines={1}>
         {place.name}
       </Text>
-      <Pressable
+      <Button
         accessibilityLabel="Dismiss place details"
         onPress={onDismiss}
-        className="h-12 w-12 items-center justify-center rounded-full bg-background"
-        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        size="icon"
+        variant="ghost"
+        className="h-12 w-12 rounded-full bg-background"
       >
         <Ionicons name="close" size={24} color={foreground} />
-      </Pressable>
+      </Button>
     </View>
   );
 }

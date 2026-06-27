@@ -1,5 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, Text, useColorScheme, View } from 'react-native';
+import { Pressable, useColorScheme, View } from 'react-native';
+import { Button } from '@/components/ui/button';
+import { Text } from '@/components/ui/text';
 
 import { PlaceDetail } from '../../types/place';
 
@@ -32,35 +34,38 @@ export default function PlaceCompactView({
       </View>
 
       <View className="flex-row items-center gap-1">
-        <Pressable
+        <Button
           accessibilityLabel="Share place"
           onPress={(e) => e.stopPropagation()}
-          className="h-10 w-10 items-center justify-center rounded-full bg-background"
-          style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
+          size="icon"
+          variant="ghost"
+          className="rounded-full bg-background"
         >
           <Ionicons name="share-outline" size={19} color={foreground} />
-        </Pressable>
+        </Button>
 
-        <Pressable
+        <Button
           accessibilityLabel="Open in maps"
           onPress={(e) => e.stopPropagation()}
-          className="h-10 w-10 items-center justify-center rounded-full bg-background"
-          style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
+          size="icon"
+          variant="ghost"
+          className="rounded-full bg-background"
         >
           <Ionicons name="map-outline" size={19} color={foreground} />
-        </Pressable>
+        </Button>
 
-        <Pressable
+        <Button
           accessibilityLabel="Dismiss place details"
           onPress={(e) => {
             e.stopPropagation();
             onDismiss();
           }}
-          className="h-10 w-10 items-center justify-center rounded-full bg-background"
-          style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
+          size="icon"
+          variant="ghost"
+          className="rounded-full bg-background"
         >
           <Ionicons name="close" size={20} color={foreground} />
-        </Pressable>
+        </Button>
       </View>
     </Pressable>
   );

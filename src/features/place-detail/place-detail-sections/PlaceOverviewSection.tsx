@@ -1,7 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useMemo } from 'react';
-import { Image, Pressable, Text, useColorScheme, View } from 'react-native';
+import { Image, useColorScheme, View } from 'react-native';
+import { Text } from '@/components/ui/text';
 
+import { Button } from '@/components/ui/button';
 import { PlaceDetail } from '../../../types/place';
 import { getOpenStatus } from '../utils/placeHours';
 
@@ -51,11 +53,8 @@ function ActionButton({
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
 
   return (
-    <Pressable
-      className="h-10 w-10 items-center justify-center rounded-full bg-background"
-      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-    >
+    <Button size="icon" variant="ghost" className="rounded-full bg-background">
       <Ionicons name={icon} size={20} color={foreground} />
-    </Pressable>
+    </Button>
   );
 }
