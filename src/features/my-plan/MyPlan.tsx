@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react';
 import { FlatList, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import PlanCard from '@/components/plan-card/PlanCard';
 import { mockUser } from '../../../mock-data/mockUser';
 import { mockPlans } from '../../../mock-data/mockPlans';
+import CreatePlan from '../create-plan/CreatePlan';
 
 const CREATE_ITEM = { id: '__create__', title: 'Create a plan', placeCount: 0, imageUrl: undefined };
 
@@ -19,9 +21,23 @@ type MyPlanProps = {
   bottomInset?: number;
   /** Renders a condensed header only — used when the panel is in compact snap state */
   compact?: boolean;
+  /** Called when create-plan mode is entered or exited, so the parent can adjust panel height */
+  onCreateModeChange?: (active: boolean) => void;
 };
 
-export default function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false }: MyPlanProps) {
+export default function MyPlan({
+  onAvatarPress,
+  onScroll,
+  bottomInset = 0,
+  compact = false,
+  onCreateModeChange,
+}: MyPlanProps) {
+  const [showCreatePlan, setShowCreatePlan] = useState(false);
+
+  useEffect(() => {
+    onCreateModeChange?.(showCreatePlan);
+  }, [showCreatePlan]);
+
   if (compact) {
     return (
       <View
@@ -44,6 +60,10 @@ export default function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compa
         </TouchableOpacity>
       </View>
     );
+  }
+
+  if (showCreatePlan) {
+    return <CreatePlan onClose={() => setShowCreatePlan(false)} bottomInset={bottomInset} />;
   }
 
   return (
@@ -102,6 +122,7 @@ export default function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compa
               placeCount={item.placeCount}
               imageUrl={item.imageUrl}
               create={item.id === '__create__'}
+              onPress={item.id === '__create__' ? () => setShowCreatePlan(true) : undefined}
             />
           )
         }

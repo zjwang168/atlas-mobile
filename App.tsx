@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { PortalHost } from '@rn-primitives/portal';
 
 import HomeScreen from './src/features/home/HomeScreen';
 import ImportScreen from './src/features/import/ImportScreen';
@@ -94,6 +95,7 @@ export default function App() {
           )}
         </>
       )}
+      <PortalHost />
     </GestureHandlerRootView>
     </SafeAreaProvider>
   );

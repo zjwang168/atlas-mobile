@@ -1,9 +1,12 @@
+import { useState } from 'react';
+import { View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place } from '../../types/place';
 import { ChatMessage, ParseResult } from '../../types/route';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
+import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
 
 const BOTTOM_BAR_CLEARANCE = 88;
 
@@ -30,11 +33,14 @@ export default function HomePanel({
   onPlacePress,
   visible,
 }: HomePanelProps) {
+  const [isCreatingPlan, setIsCreatingPlan] = useState(false);
+
   return (
     <ContentPanel
       initialSnap="default"
       zIndex={30}
       visible={visible}
+      defaultSnapHeight={activeTab === 'travelPlan' && isCreatingPlan ? CREATE_PLAN_HEIGHT : undefined}
       compactContent={() =>
         activeTab === 'myPlaces' ? (
           <MyPlaces
@@ -47,22 +53,26 @@ export default function HomePanel({
         )
       }
     >
-      {({ snapState, reportScrollY, bottomInset }) =>
-        activeTab === 'myPlaces' ? (
-          <MyPlaces
-            onPlacePress={onPlacePress}
-            onScroll={reportScrollY}
-            bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
-            avatarUri={mockUser.avatarUri}
-            avatarFallback={mockUser.avatarFallback}
-          />
-        ) : (
-          <MyPlan
-            onScroll={reportScrollY}
-            bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
-          />
-        )
-      }
+      {({ reportScrollY, bottomInset }) => (
+        <>
+          <View style={{ display: activeTab === 'myPlaces' ? 'flex' : 'none', flex: 1 }}>
+            <MyPlaces
+              onPlacePress={onPlacePress}
+              onScroll={reportScrollY}
+              bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
+              avatarUri={mockUser.avatarUri}
+              avatarFallback={mockUser.avatarFallback}
+            />
+          </View>
+          <View style={{ display: activeTab === 'travelPlan' ? 'flex' : 'none', flex: 1 }}>
+            <MyPlan
+              onScroll={reportScrollY}
+              bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
+              onCreateModeChange={setIsCreatingPlan}
+            />
+          </View>
+        </>
+      )}
     </ContentPanel>
   );
 }

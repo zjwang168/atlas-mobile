@@ -46,6 +46,8 @@ type ContentPanelProps = {
   zIndex?: number;
   /** When provided, overrides snap-based height and pins the panel to this exact pixel height. */
   height?: number;
+  /** When provided, overrides the 'default' snap height and snaps to it immediately. User can still drag freely. */
+  defaultSnapHeight?: number;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -72,6 +74,7 @@ export default function ContentPanel({
   onHidden,
   zIndex = 30,
   height,
+  defaultSnapHeight,
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
   const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
@@ -144,6 +147,24 @@ export default function ContentPanel({
       useNativeDriver: false,
     }).start();
   }, [height]);
+
+  // Update the 'default' snap point and animate to it when defaultSnapHeight changes
+  useEffect(() => {
+    if (defaultSnapHeight === undefined) {
+      // Restore the original default snap height when prop is removed
+      snapHeights.current.default = defaultSnapHeights.default;
+      return;
+    }
+    snapHeights.current.default = defaultSnapHeight;
+    // Snap to the new default height immediately
+    snapStateRef.current = 'default';
+    setSnapState('default');
+    Animated.timing(panelHeight, {
+      toValue: defaultSnapHeight,
+      duration: 240,
+      useNativeDriver: false,
+    }).start();
+  }, [defaultSnapHeight]);
 
   // Only used when `visible` prop is provided
   const translateY = useRef(new Animated.Value(visible === false ? 40 : 0)).current;
