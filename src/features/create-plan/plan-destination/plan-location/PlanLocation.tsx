@@ -2,7 +2,12 @@ import { View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Input } from '@/components/ui/input';
 
-export default function PlanLocation() {
+type PlanLocationProps = {
+  value: string;
+  onChangeText: (value: string) => void;
+};
+
+export default function PlanLocation({ value, onChangeText }: PlanLocationProps) {
   return (
     <View
       style={{
@@ -23,6 +28,8 @@ export default function PlanLocation() {
         placeholder="Where are you going?"
         className="flex-1 border-0 bg-transparent p-0 text-base"
         style={{ height: 22 }}
+        value={value}
+        onChangeText={onChangeText}
       />
     </View>
   );

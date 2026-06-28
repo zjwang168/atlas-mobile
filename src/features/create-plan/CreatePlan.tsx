@@ -18,6 +18,7 @@ import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
 
 type CreatePlanStep = 'destination' | 'places';
+type DateRange = { start: string | null; end: string | null };
 
 const STEPS: CreatePlanStep[] = ['destination', 'places'];
 
@@ -31,6 +32,8 @@ export const CREATE_PLAN_HEIGHT = SCREEN_HEIGHT * 0.7;
 
 export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
+  const [location, setLocation] = useState('');
+  const [range, setRange] = useState<DateRange>({ start: null, end: null });
 
   const stepIndex = STEPS.indexOf(step);
 
@@ -81,23 +84,17 @@ export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps
         </AlertDialog>
       </View>
 
-      {/* Step indicator */}
-      <View style={{ flexDirection: 'row', paddingHorizontal: 20, gap: 6, marginBottom: 24 }}>
-        {STEPS.map((s, i) => (
-          <View
-            key={s}
-            style={{
-              height: 3,
-              flex: 1,
-              borderRadius: 2,
-              backgroundColor: i <= stepIndex ? '#09090b' : '#e5e5ea',
-            }}
-          />
-        ))}
-      </View>
-
       {/* Step content */}
-      {step === 'destination' && <PlanDestination onNext={goNext} bottomInset={bottomInset} />}
+      {step === 'destination' && (
+        <PlanDestination
+          onNext={goNext}
+          bottomInset={bottomInset}
+          location={location}
+          onLocationChange={setLocation}
+          range={range}
+          onRangeChange={setRange}
+        />
+      )}
       {step === 'places' && <PlanPlace onBack={goBack} />}
     </View>
   );
