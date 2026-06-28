@@ -344,20 +344,28 @@ export default function ContentPanel({
           <View className="h-1 w-12 rounded-sm bg-handle" />
         </View>
 
-        {snapState === 'compact' && compactContent ? (
+        {/* Always mount children so internal state is preserved across compact/default transitions */}
+        <View style={{ display: snapState === 'compact' && compactContent ? 'none' : 'flex', flex: 1 }}>
+          {children({
+            snapState,
+            snapTo,
+            setCompactHeight,
+            reportScrollY: (y) => { scrollY.current = y; },
+            bottomInset: insets.bottom,
+          })}
+        </View>
+        {compactContent && (
           <View
-            onLayout={e => setCompactHeight(e.nativeEvent.layout.height + HANDLE_HEIGHT)}
-            style={{ paddingBottom: insets.bottom + 36 }}
+            style={{ display: snapState === 'compact' ? 'flex' : 'none' }}
+            onLayout={e => {
+              if (snapState === 'compact') setCompactHeight(e.nativeEvent.layout.height + HANDLE_HEIGHT);
+            }}
           >
-            {compactContent({ snapTo })}
+            <View style={{ paddingBottom: insets.bottom + 36 }}>
+              {compactContent({ snapTo })}
+            </View>
           </View>
-        ) : children({
-          snapState,
-          snapTo,
-          setCompactHeight,
-          reportScrollY: (y) => { scrollY.current = y; },
-          bottomInset: insets.bottom,
-        })}
+        )}
       </Animated.View>
     </Animated.View>
   );

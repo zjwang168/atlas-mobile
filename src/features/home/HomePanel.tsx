@@ -8,7 +8,7 @@ import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
 
-const BOTTOM_BAR_CLEARANCE = 88;
+const BOTTOM_BAR_CLEARANCE = 84;
 
 type HomePanelProps = {
   activeTab: 'myPlaces' | 'travelPlan';
@@ -59,7 +59,7 @@ export default function HomePanel({
             <MyPlaces
               onPlacePress={onPlacePress}
               onScroll={reportScrollY}
-              bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
+              bottomInset={BOTTOM_BAR_CLEARANCE}
               avatarUri={mockUser.avatarUri}
               avatarFallback={mockUser.avatarFallback}
             />
@@ -67,7 +67,7 @@ export default function HomePanel({
           <View style={{ display: activeTab === 'travelPlan' ? 'flex' : 'none', flex: 1 }}>
             <MyPlan
               onScroll={reportScrollY}
-              bottomInset={bottomInset + BOTTOM_BAR_CLEARANCE}
+              bottomInset={BOTTOM_BAR_CLEARANCE}
               onCreateModeChange={setIsCreatingPlan}
             />
           </View>

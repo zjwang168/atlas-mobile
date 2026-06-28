@@ -3,7 +3,6 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState } from 'react';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,8 +14,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import PlanDestination from './plan-destination/PlanDestination';
+import PlanPlace from './plan-place/PlanPlace';
 
-type CreatePlanStep = 'date-location' | 'places';
+type CreatePlanStep = 'destination' | 'places';
+
+const STEPS: CreatePlanStep[] = ['destination', 'places'];
 
 type CreatePlanProps = {
   onClose: () => void;
@@ -27,7 +30,17 @@ const SCREEN_HEIGHT = Dimensions.get('window').height;
 export const CREATE_PLAN_HEIGHT = SCREEN_HEIGHT * 0.7;
 
 export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps) {
-  const [step, setStep] = useState<CreatePlanStep>('date-location');
+  const [step, setStep] = useState<CreatePlanStep>('destination');
+
+  const stepIndex = STEPS.indexOf(step);
+
+  function goNext() {
+    if (stepIndex < STEPS.length - 1) setStep(STEPS[stepIndex + 1]);
+  }
+
+  function goBack() {
+    if (stepIndex > 0) setStep(STEPS[stepIndex - 1]);
+  }
 
   return (
     <View style={{ flex: 1 }}>
@@ -70,62 +83,22 @@ export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps
 
       {/* Step indicator */}
       <View style={{ flexDirection: 'row', paddingHorizontal: 20, gap: 6, marginBottom: 24 }}>
-        <View style={{ height: 3, flex: 1, borderRadius: 2, backgroundColor: '#09090b' }} />
-        <View
-          style={{
-            height: 3,
-            flex: 1,
-            borderRadius: 2,
-            backgroundColor: step === 'places' ? '#09090b' : '#e5e5ea',
-          }}
-        />
+        {STEPS.map((s, i) => (
+          <View
+            key={s}
+            style={{
+              height: 3,
+              flex: 1,
+              borderRadius: 2,
+              backgroundColor: i <= stepIndex ? '#09090b' : '#e5e5ea',
+            }}
+          />
+        ))}
       </View>
 
       {/* Step content */}
-      {step === 'date-location' ? (
-        <DateLocationStep onNext={() => setStep('places')} />
-      ) : (
-        <PlacesStep onBack={() => setStep('date-location')} />
-      )}
-    </View>
-  );
-}
-
-function DateLocationStep({ onNext }: { onNext: () => void }) {
-  return (
-    <View style={{ flex: 1, paddingHorizontal: 20 }}>
-      <Text className="text-muted-foreground text-sm mb-6">Step 1 — When and where?</Text>
-
-      <Input
-        placeholder="Select dates"
-        editable={false}
-        className="mb-3 h-13"
-      />
-      <Input
-        placeholder="Search destination"
-        className="mb-8"
-      />
-
-      <Button onPress={onNext} size="lg" className="rounded-xl">
-        <Text>Next</Text>
-      </Button>
-    </View>
-  );
-}
-
-function PlacesStep({ onBack }: { onBack: () => void }) {
-  return (
-    <View style={{ flex: 1, paddingHorizontal: 20 }}>
-      <Text className="text-muted-foreground text-sm mb-6">Step 2 — Add places</Text>
-
-      <Input
-        placeholder="Search for a place"
-        className="mb-6"
-      />
-
-      <Button variant="secondary" onPress={onBack} size="lg" className="rounded-xl">
-        <Text>Back</Text>
-      </Button>
+      {step === 'destination' && <PlanDestination onNext={goNext} bottomInset={bottomInset} />}
+      {step === 'places' && <PlanPlace onBack={goBack} />}
     </View>
   );
 }
