@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { TouchableOpacity, View } from 'react-native';
+import { View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { SegmentedControl } from '@expo/ui/community/segmented-control';
+import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Place } from '@/types/place';
@@ -47,9 +49,8 @@ export default function MyPlaces({
           My places
         </Text>
         <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-          <TouchableOpacity
+          <PressableScale
             onPress={onSharePress}
-            activeOpacity={0.7}
             style={{
               width: 32,
               height: 32,
@@ -65,15 +66,15 @@ export default function MyPlaces({
             }}
           >
             <Ionicons name="share-outline" size={16} color="#000" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onAvatarPress} activeOpacity={0.85}>
+          </PressableScale>
+          <PressableScale onPress={onAvatarPress}>
             <Avatar alt={avatarFallback} style={{ width: 32, height: 32 }}>
               {avatarUri ? <AvatarImage source={{ uri: avatarUri }} /> : null}
               <AvatarFallback>
                 <Text style={{ fontSize: 11, fontWeight: '500' }}>{avatarFallback}</Text>
               </AvatarFallback>
             </Avatar>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
       </View>
     );
@@ -103,9 +104,8 @@ export default function MyPlaces({
           My places
         </Text>
         <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-          <TouchableOpacity
+          <PressableScale
             onPress={onSharePress}
-            activeOpacity={0.7}
             style={{
               width: 40,
               height: 40,
@@ -121,10 +121,9 @@ export default function MyPlaces({
             }}
           >
             <Ionicons name="share-outline" size={20} color="#000" />
-          </TouchableOpacity>
-          <TouchableOpacity
+          </PressableScale>
+          <PressableScale
             onPress={onAvatarPress}
-            activeOpacity={0.85}
             style={{
               borderRadius: 999,
               shadowColor: '#000',
@@ -140,81 +139,19 @@ export default function MyPlaces({
                 <Text className="text-sm font-medium">{avatarFallback}</Text>
               </AvatarFallback>
             </Avatar>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
       </View>
 
-      {/* Segmented control */}
+      {/* Segmented control — native iOS UISegmentedControl via @expo/ui */}
       <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-        <View
-          style={{
-            flexDirection: 'row',
-            backgroundColor: 'rgba(118,118,128,0.12)',
-            borderRadius: 100,
-            padding: 2,
-            height: 36,
-          }}
-        >
-          <TouchableOpacity
-            style={{
-              flex: 1,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 4,
-              borderRadius: 20,
-              backgroundColor: activeTab === 'allPlaces' ? '#fff' : 'transparent',
-            }}
-            onPress={() => setActiveTab('allPlaces')}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name="location-sharp"
-              size={18}
-              color={activeTab === 'allPlaces' ? '#1a1a1a' : '#717171'}
-            />
-            <Text
-              style={{
-                fontSize: 15,
-                fontWeight: '600',
-                lineHeight: 20,
-                color: activeTab === 'allPlaces' ? '#1a1a1a' : '#717171',
-              }}
-            >
-              All places
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={{
-              flex: 1,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 4,
-              borderRadius: 20,
-              backgroundColor: activeTab === 'atlas' ? '#fff' : 'transparent',
-            }}
-            onPress={() => setActiveTab('atlas')}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name="map-outline"
-              size={18}
-              color={activeTab === 'atlas' ? '#1a1a1a' : '#717171'}
-            />
-            <Text
-              style={{
-                fontSize: 15,
-                fontWeight: '600',
-                lineHeight: 20,
-                color: activeTab === 'atlas' ? '#1a1a1a' : '#717171',
-              }}
-            >
-              Atlas
-            </Text>
-          </TouchableOpacity>
-        </View>
+        <SegmentedControl
+          values={['All places', 'Atlas']}
+          selectedIndex={activeTab === 'allPlaces' ? 0 : 1}
+          onChange={(e) =>
+            setActiveTab(e.nativeEvent.selectedSegmentIndex === 0 ? 'allPlaces' : 'atlas')
+          }
+        />
       </View>
 
       {/* Content */}

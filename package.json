@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/ui": "~56.0.18",
     "@expo/vector-icons": "^15.0.2",
     "@gorhom/bottom-sheet": "^5.2.14",
     "@react-navigation/native": "^7.2.4",
@@ -18,6 +19,7 @@
     "expo-clipboard": "~56.0.3",
     "expo-constants": "~56.0.16",
     "expo-dev-client": "~56.0.18",
+    "expo-glass-effect": "~56.0.4",
     "expo-status-bar": "~56.0.4",
     "nativewind": "^5.0.0-preview.4",
     "react": "19.2.3",

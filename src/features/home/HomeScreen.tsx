@@ -1,13 +1,27 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { StatusBar, StyleSheet, View } from 'react-native';
+import { Tabs } from 'react-native-screens';
 
+import AddMenu from '../../components/add-menu/AddMenu';
 import { mockPlaces } from '../../../mock-data/mockPlaces';
+
+// Phosphor tab icons — template PNGs so they tint with tabBarTintColor.
+// Outline (regular) when unselected, fill when selected.
+const ICON_PLACES = require('../../../assets/tabs/tab-places.png');
+const ICON_PLACES_FILL = require('../../../assets/tabs/tab-places-fill.png');
+const ICON_PLAN = require('../../../assets/tabs/tab-plan.png');
+const ICON_PLAN_FILL = require('../../../assets/tabs/tab-plan-fill.png');
+// "+" — single state, rendered as-is (always dark) via imageSource.
+const ICON_ADD = require('../../../assets/tabs/tab-add.png');
+import { mockUser } from '../../../mock-data/mockUser';
 import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
-import BottomBar from '../../components/bottom-nav/BottomBar';
 import TopNav from '../../components/top-nav/TopNav';
 import PlaceDetail from '../place-detail/PlaceDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
-import HomePanel from './HomePanel';
+import ContentPanel from '../../components/content-panel/ContentPanel';
+import MyPlaces from '../my-places/MyPlaces';
+import MyPlan from '../my-plan/MyPlan';
+import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
 
 // ---- Types ----
 
@@ -18,6 +32,15 @@ interface PlaceData {
   latitude: number;
   longitude: number;
 }
+
+interface HomeScreenProps {
+  onOpenImport?: () => void;
+}
+
+// Tab identifiers — must match the `screenKey` on each Tabs.Screen.
+const TAB_PLACES = 'myPlaces';
+const TAB_PLAN = 'travelPlan';
+const TAB_ADD = 'add';
 
 // ---- Helpers ----
 
@@ -50,33 +73,20 @@ const toRouteGeoJSON = (
   },
 });
 
-const uid = (): string => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-
-function formatDistanceSummary(km: number): string {
-  if (km < 1) return `${Math.round(km * 1000)} m total`;
-  if (km < 10) return `${km.toFixed(1)} km total`;
-  return `${Math.round(km)} km total`;
-}
-
 // ---- Component ----
-
-interface HomeScreenProps {
-  /** Opens the ImportScreen overlay — passed down from App.tsx */
-  onOpenImport?: () => void;
-}
 
 const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
   const defaultMarkers = useMemo(() => toMapMarkers(mockPlaces), []);
 
   const [selectedPlaceName, setSelectedPlaceName] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'myPlaces' | 'travelPlan'>('myPlaces');
+  const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
+  // Provenance of the last navigation state acknowledged by the native side.
+  const [provenance, setProvenance] = useState(0);
+  const [isCreatingPlan, setIsCreatingPlan] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
 
-  // Parse-route flow state — populated by PlanMode when a link is submitted
-  const [parseResult, setParseResult] = useState<ParseResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('Fetching post...');
-  const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Parse-route flow state
+  const [parseResult] = useState<ParseResult | null>(null);
 
   const hasRouteData = parseResult !== null && parseResult.locations.length > 0;
 
@@ -90,7 +100,6 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     return toRouteMarkers(parseResult.route.ordered_locations);
   }, [parseResult]);
 
-  // Center camera on the mean of all route points
   const routeCenter = useMemo((): [number, number] | undefined => {
     if (!parseResult?.route.ordered_locations.length) return undefined;
     const locs = parseResult.route.ordered_locations;
@@ -99,66 +108,142 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     return [avgLng, avgLat];
   }, [parseResult]);
 
-  /** Follow-up message handler passed to PlanMode */
-  const handleSendMessage = useCallback(
-    async (text: string) => {
-      const userMsg: ChatMessage = { id: uid(), role: 'user', text, timestamp: Date.now() };
-      setMessages((prev) => [...prev, userMsg]);
+  // Native tab selection — accept the new state and remember its provenance.
+  // Guard TAB_ADD: it should never become the active screen — it only opens the menu.
+  const handleTabSelected = useCallback((e: any) => {
+    const { selectedScreenKey, provenance: p } = e.nativeEvent;
+    setProvenance(p);
+    if (selectedScreenKey === TAB_ADD) {
+      setAddMenuOpen(true);
+    } else {
+      setActiveTab(selectedScreenKey);
+    }
+  }, []);
 
-      // MVP auto-reply — real AI follow-up handled in PlanMode
-      const autoReply: ChatMessage = {
-        id: uid(),
-        role: 'assistant',
-        text: `I found ${parseResult?.locations.length ?? 0} places. View them on the map, or paste another link to start over.`,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, autoReply]);
-    },
-    [parseResult],
-  );
+  // "+" tab has preventNativeSelection — its tap fires this instead of navigating.
+  const handleTabSelectionPrevented = useCallback(() => {
+    setAddMenuOpen(true);
+  }, []);
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
-      {/* Full-screen map — sits behind all panels */}
-      <MapboxMap
-        markers={defaultMarkers}
-        centerCoordinate={routeCenter ?? [-122.3321, 47.6062]}
-        zoomLevel={hasRouteData ? 10 : 12}
-        routeGeoJSON={routeGeoJSON}
-        routeMarkers={routeMarkers}
-        onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
+      <Tabs.Host
+        navStateRequest={{ selectedScreenKey: activeTab, baseProvenance: provenance }}
+        onTabSelected={handleTabSelected}
+        onTabSelectionPrevented={handleTabSelectionPrevented}
+        ios={{ tabBarMinimizeBehavior: 'onScrollDown', tabBarTintColor: '#12C170' }}
+      >
+        {/* My Places */}
+        <Tabs.Screen
+          screenKey={TAB_PLACES}
+          title="My Places"
+          ios={{
+            icon: { type: 'templateSource', templateSource: ICON_PLACES },
+            selectedIcon: { type: 'templateSource', templateSource: ICON_PLACES_FILL },
+          }}
+        >
+          <View style={styles.screen}>
+            <MapboxMap
+              markers={defaultMarkers}
+              centerCoordinate={[-122.3321, 47.6062]}
+              zoomLevel={12}
+              onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
+            />
+            <ContentPanel
+              initialSnap="default"
+              zIndex={30}
+              visible={selectedPlaceName === null}
+              compactContent={() => (
+                <MyPlaces
+                  compact
+                  avatarUri={mockUser.avatarUri}
+                  avatarFallback={mockUser.avatarFallback}
+                />
+              )}
+            >
+              {({ reportScrollY }) => (
+                <MyPlaces
+                  onPlacePress={(place) => setSelectedPlaceName(place.name)}
+                  onScroll={reportScrollY}
+                  avatarUri={mockUser.avatarUri}
+                  avatarFallback={mockUser.avatarFallback}
+                />
+              )}
+            </ContentPanel>
+          </View>
+        </Tabs.Screen>
+
+        {/* My Plan */}
+        <Tabs.Screen
+          screenKey={TAB_PLAN}
+          title="My Plan"
+          ios={{
+            icon: { type: 'templateSource', templateSource: ICON_PLAN },
+            selectedIcon: { type: 'templateSource', templateSource: ICON_PLAN_FILL },
+          }}
+        >
+          <View style={styles.screen}>
+            <MapboxMap
+              markers={routeMarkers ?? defaultMarkers}
+              centerCoordinate={routeCenter ?? [-122.3321, 47.6062]}
+              zoomLevel={hasRouteData ? 10 : 12}
+              routeGeoJSON={routeGeoJSON}
+              routeMarkers={routeMarkers}
+              onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
+            />
+            <ContentPanel
+              initialSnap="default"
+              zIndex={30}
+              visible={selectedPlaceName === null}
+              defaultSnapHeight={isCreatingPlan ? CREATE_PLAN_HEIGHT : undefined}
+              compactContent={() => <MyPlan compact />}
+            >
+              {({ reportScrollY }) => (
+                <MyPlan
+                  onScroll={reportScrollY}
+                  onCreateModeChange={setIsCreatingPlan}
+                />
+              )}
+            </ContentPanel>
+          </View>
+        </Tabs.Screen>
+
+        {/* "+" — search role positions it as a separate trailing circle and
+            pushes the main pill to the left. The plus icon overrides the system
+            search glyph. preventNativeSelection keeps it from navigating; the
+            tap opens the RN pop-up menu instead. */}
+        <Tabs.Screen
+          screenKey={TAB_ADD}
+          title="Add"
+          preventNativeSelection
+          ios={{ systemItem: 'search', icon: { type: 'imageSource', imageSource: ICON_ADD } }}
+        >
+          <View style={styles.screen} />
+        </Tabs.Screen>
+      </Tabs.Host>
+
+      {/* "+" pop-up menu — RN overlay above the native tab controller */}
+      <AddMenu
+        visible={addMenuOpen}
+        onClose={() => setAddMenuOpen(false)}
+        onImportPlaces={() => {
+          setAddMenuOpen(false);
+          onOpenImport?.();
+        }}
+        onChatWithAI={() => {
+          setAddMenuOpen(false);
+          setActiveTab(TAB_PLAN);
+        }}
       />
 
-      {/* Top nav — avatar left, search/globe/navigate right */}
+      {/* Overlays — RN siblings rendered above the native tab controller */}
       <TopNav />
-
-      {/* Bottom content panel — hidden while place detail is open */}
-      <HomePanel
-        activeTab={activeTab}
-        parseResult={parseResult}
-        isLoading={isLoading}
-        loadingMessage={loadingMessage}
-        messages={messages}
-        onSendMessage={handleSendMessage}
-        error={error}
-        onPlacePress={(place) => setSelectedPlaceName(place.name)}
-        visible={selectedPlaceName === null}
-      />
-
-      {/* Place detail overlay — slides up when a place is selected */}
       <PlaceDetail
         placeName={selectedPlaceName}
         onDismiss={() => setSelectedPlaceName(null)}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
-      />
-
-      {/* Tab bar + add-place button — always on top */}
-      <BottomBar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        onAddPlace={onOpenImport}
       />
     </View>
   );
@@ -170,6 +255,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: 'transparent',
+  },
+  screen: {
+    flex: 1,
   },
 });
 

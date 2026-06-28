@@ -24,12 +24,6 @@ type HomePanelProps = {
 
 export default function HomePanel({
   activeTab,
-  parseResult,
-  isLoading,
-  loadingMessage,
-  messages,
-  onSendMessage,
-  error,
   onPlacePress,
   visible,
 }: HomePanelProps) {
@@ -41,7 +35,7 @@ export default function HomePanel({
       zIndex={30}
       visible={visible}
       defaultSnapHeight={activeTab === 'travelPlan' && isCreatingPlan ? CREATE_PLAN_HEIGHT : undefined}
-      compactContent={() =>
+      compactContent={({ snapTo }) =>
         activeTab === 'myPlaces' ? (
           <MyPlaces
             compact

@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { BlurView } from 'expo-blur';
+import { GlassView } from 'expo-glass-effect';
 import { useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
@@ -10,7 +10,6 @@ const MENU_HEIGHT = 100;
 type Tab = 'myPlaces' | 'travelPlan';
 
 type BottomBarProps = {
-  activeTab?: Tab;
   onTabChange?: (tab: Tab) => void;
   onAddPlace?: () => void;
 };
@@ -23,7 +22,7 @@ const glassShadow = {
   elevation: 8,
 } as const;
 
-export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPlace }: BottomBarProps) {
+export default function BottomBar({ onTabChange, onAddPlace }: BottomBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const anim = useRef(new Animated.Value(0)).current;
 
@@ -48,27 +47,6 @@ export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPl
     // Full-screen container, always box-none so closed-state touches fall through to the map
     <View style={[StyleSheet.absoluteFill, { zIndex: 40 }]} pointerEvents="box-none">
 
-      {/* Tab pill */}
-      <View style={[styles.pill, glassShadow]}>
-        <BlurView intensity={30} tint="light" style={styles.pillBlur}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'myPlaces' && styles.tabActive]}
-            onPress={() => onTabChange?.('myPlaces')}
-          >
-            <Ionicons name="location-sharp" size={24} color={activeTab === 'myPlaces' ? '#12c170' : '#000'} />
-            <Text style={[styles.tabLabel, activeTab === 'myPlaces' && styles.tabLabelActive]}>My Places</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'travelPlan' && styles.tabActive]}
-            onPress={() => onTabChange?.('travelPlan')}
-          >
-            <Ionicons name="map-outline" size={24} color={activeTab === 'travelPlan' ? '#12c170' : '#000'} />
-            <Text style={[styles.tabLabel, activeTab === 'travelPlan' && styles.tabLabelActive]}>My Plan</Text>
-          </TouchableOpacity>
-        </BlurView>
-      </View>
-
       {/* Backdrop — fades with the morph animation; non-interactive when menu is closed */}
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: anim }]} pointerEvents={menuOpen ? 'auto' : 'none'}>
         <TouchableOpacity style={StyleSheet.absoluteFill} className="bg-background/40" activeOpacity={1} onPress={() => closeMenu()} />
@@ -76,7 +54,7 @@ export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPl
 
       {/* Morphing button → menu */}
       <Animated.View style={[styles.morphContainer, glassShadow, { width, height, borderRadius: radius }]}>
-        <BlurView intensity={30} tint="light" style={StyleSheet.absoluteFill} />
+        <GlassView style={StyleSheet.absoluteFill} />
 
         {/* Add icon — fades out as menu opens */}
         <Animated.View style={[StyleSheet.absoluteFill, styles.centered, { opacity: addOpacity }]} pointerEvents="none">
@@ -106,36 +84,6 @@ export default function BottomBar({ activeTab = 'myPlaces', onTabChange, onAddPl
 }
 
 const styles = StyleSheet.create({
-  pill: {
-    position: 'absolute',
-    bottom: 24,
-    left: 24,
-    borderRadius: 32,
-    overflow: 'hidden',
-  },
-  pillBlur: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 4,
-  },
-  tab: {
-    width: 96,
-    borderRadius: 30,
-    alignItems: 'center',
-    paddingVertical: 6,
-    gap: 2,
-  },
-  tabActive: {
-    backgroundColor: '#e9fbf1',
-  },
-  tabLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#000',
-  },
-  tabLabelActive: {
-    color: '#12c170',
-  },
   morphContainer: {
     position: 'absolute',
     bottom: 24,

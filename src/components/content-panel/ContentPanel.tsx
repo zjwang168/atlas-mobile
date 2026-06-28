@@ -1,4 +1,3 @@
-import { BlurView } from 'expo-blur';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -178,10 +177,16 @@ export default function ContentPanel({
     snapStateRef.current = next;
     setSnapState(next);
     onSnapStateChange?.(next);
-    Animated.timing(panelHeight, {
+    if (!animated) {
+      panelHeight.setValue(snapHeights.current[next]);
+      return;
+    }
+    Animated.spring(panelHeight, {
       toValue: snapHeights.current[next],
-      duration: animated ? 240 : 0,
       useNativeDriver: false,
+      damping: 22,
+      stiffness: 200,
+      mass: 0.9,
     }).start();
   };
 
@@ -221,20 +226,22 @@ export default function ContentPanel({
     }
   }, [visible]);
 
-  const resolveSnap = (dy: number) => {
+  const resolveSnap = (dy: number, vy: number = 0) => {
     const finalHeight = Math.max(
       snapHeights.current.compact,
       Math.min(snapHeights.current.full, gestureStartHeight.current - dy),
     );
-    if (finalHeight >= TOP_SNAP_THRESHOLD) {
-      snapTo('full');
-    } else if (finalHeight <= BOTTOM_SNAP_THRESHOLD) {
-      snapTo('compact');
-    } else {
-      // Between thresholds — leave panel at the dragged height, no snap
-      snapStateRef.current = 'default';
-      setSnapState('default');
-    }
+    // Bias the height using release velocity so a fast flick snaps farther
+    // vy is px/ms (negative = upward). Multiply by 150 to convert to a height offset.
+    const biasedHeight = finalHeight - vy * 150;
+    const states: SnapState[] = ['compact', 'default', 'full'];
+    const nearest = states.reduce((best, s) =>
+      Math.abs(biasedHeight - snapHeights.current[s]) <
+      Math.abs(biasedHeight - snapHeights.current[best])
+        ? s
+        : best,
+    );
+    snapTo(nearest);
   };
 
   const dragToHeight = (dy: number) => {
@@ -251,6 +258,7 @@ export default function ContentPanel({
   const dragToHeightRef = useRef(dragToHeight);
   dragToHeightRef.current = dragToHeight;
 
+
   // Captures downward drag only when scroll is at the top
   const panelPanResponder = useMemo(
     () =>
@@ -263,11 +271,11 @@ export default function ContentPanel({
         onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
         onPanResponderRelease: (_, gs) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
+          resolveSnapRef.current(gs.dy, gs.vy);
         },
         onPanResponderTerminate: (_, gs) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
+          resolveSnapRef.current(gs.dy, gs.vy);
         },
       }),
     [],
@@ -286,11 +294,11 @@ export default function ContentPanel({
         onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
         onPanResponderRelease: (_, gs) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
+          resolveSnapRef.current(gs.dy, gs.vy);
         },
         onPanResponderTerminate: (_, gs) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
+          resolveSnapRef.current(gs.dy, gs.vy);
         },
       }),
     [],
@@ -328,15 +336,10 @@ export default function ContentPanel({
           overflow: 'hidden',
           paddingTop: animatedPaddingTop,
         }}
-        {...panelPanResponder.panHandlers}
       >
-        <BlurView
-          className="absolute inset-0"
-          intensity={90}
-          tint="systemThickMaterialLight"
-        />
+        <View className="absolute inset-0" style={{ backgroundColor: '#FFFFFF' }} />
 
-        {/* Drag handle */}
+        {/* Drag handle — only this area controls snap/resize */}
         <View
           className="h-6 items-center justify-start pt-2.5"
           {...handlePanResponder.panHandlers}
