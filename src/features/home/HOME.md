@@ -47,6 +47,7 @@ PANEL_HEIGHT.createPlan   // SCREEN_HEIGHT * 0.70
 type Overlay =
   | { kind: 'none' }
   | { kind: 'placeDetail'; placeName: string }
+  | { kind: 'planDetail'; planId: string }
   | { kind: 'addPlace'; onSelect: (places: PlannedPlace[]) => void };
 ```
 
@@ -59,6 +60,11 @@ type Overlay =
 const { setOverlay } = useHome();
 
 setOverlay({ kind: 'placeDetail', placeName: 'Noma Restaurant' });
+```
+
+### Open plan detail
+```ts
+setOverlay({ kind: 'planDetail', planId: 'plan-abc123' });
 ```
 
 ### Open add-place and receive the result
@@ -89,6 +95,18 @@ import { PANEL_HEIGHT } from '@/features/home/HomeContext';
 ```
 
 ---
+
+## Parse-link data flow
+
+`HomeScreen` imports `parseLink` from `src/services/api/apiService.ts` and `ParseResult` / `ChatMessage` from `src/types/route.ts`. When a link is submitted:
+
+1. `HomeScreen.handleSendMessage` calls `parseLink(url)`.
+2. On success, `parseResult` state is set, which drives the route polyline and markers on `MapboxMap`.
+3. `HomePanel` receives `parseResult`, `isLoading`, `messages`, `onSendMessage`, and `error` as props — these are forwarded to whichever tab is active. They are **not consumed by `HomePanel` itself**; they exist as a pass-through conduit for future tab implementations.
+
+## `HomePanel` visibility rule
+
+`HomePanel` is only visible when `overlay.kind === 'none'`. When any overlay (`placeDetail`, `planDetail`, `addPlace`) is active, `HomePanel` slides out. When the overlay closes, it slides back in automatically. This is wired in `HomePanel` via `visible={overlay.kind === 'none'}`.
 
 ## `HomeProvider`
 

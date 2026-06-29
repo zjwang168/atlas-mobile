@@ -12,6 +12,22 @@ src/features/map/
   MAP.md           ← this document
 ```
 
+## Shared Constants
+
+`src/utils/constants.ts` defines the defaults used throughout the map feature. Import from there instead of inlining values:
+
+```ts
+import {
+  DEFAULT_MAP_CENTER,  // [-122.3321, 47.6062] — Seattle [lng, lat]
+  DEFAULT_ZOOM_LEVEL,  // 12
+  ROUTE_LINE_COLOR,    // '#007AFF'
+  ROUTE_LINE_WIDTH,    // 4
+  API_BASE_URL,        // 'http://localhost:8000'
+} from '@/utils/constants';
+```
+
+> Note: `MapboxMap.tsx` currently inlines these values directly. When touching this file, migrate to the constants import.
+
 ## Props
 
 ```ts
@@ -42,6 +58,17 @@ Setup:
 1. Create `.env` in the project root
 2. Add `MAPBOX_ACCESS_TOKEN=pk.eyJ...`
 3. Run `npx expo prebuild --clean` (first time only), then `npx expo run:ios`
+
+## Route Data Source
+
+Route data (`ParseResult`, `GeocodedLocation`) comes from `src/services/api/apiService.ts`:
+
+```ts
+import { parseLink } from '@/services/api/apiService';
+// ParseResult type: src/types/route.ts
+```
+
+`HomeScreen` calls `parseLink(url)`, converts the result to `MapMarker[]` and `GeoJSON.LineString`, and passes them as props to `MapboxMap`. See `HOME.md` for the full data flow.
 
 ## Route Rendering
 
