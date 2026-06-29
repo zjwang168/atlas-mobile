@@ -8,8 +8,7 @@
 
 ```
 src/features/place-detail/
-  PlaceDetail.tsx                        ← panel container, snap logic, PlaceHeader
-  PlaceCompactView.tsx                   ← compact snap: name, address, action buttons
+  PlaceDetail.tsx                        ← panel container, snap logic, PlaceHeader, PlaceCompactView
   place-detail-sections/
     PlaceOverviewSection.tsx             ← thumbnail, address, open status, action row
     PlaceInfoSection.tsx                 ← tags, summary, visit strategy, links, note
@@ -56,7 +55,7 @@ type PlaceDetail = Place & {
 
 | State | Height | Content |
 |---|---|---|
-| `compact` | Dynamic (from `PlaceCompactView` layout) | `PlaceCompactView` — name, address, share/map/close |
+| `compact` | Dynamic (measured from layout) | `PlaceCompactView` — name, address, share/map/close |
 | `default` | 60% of screen | `PlaceHeader` + `PlaceOverviewSection` + `PlaceInfoSection` |
 | `full` | 100% of screen | Same as default, with `paddingTop: insets.top` |
 
