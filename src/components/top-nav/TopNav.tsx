@@ -14,7 +14,7 @@ export default function TopNav({ onSearchPress, onGlobePress, onNavigatePress }:
 
   return (
     <View
-      className="absolute left-0 right-0 flex-row items-start justify-between px-4 z-30"
+      className="absolute left-0 right-0 flex-row items-start justify-between px-4"
       style={{ top: 0, paddingTop: top + 8 }}
       pointerEvents="box-none"
     >

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export type SnapState = 'compact' | 'default' | 'full';
+export type SnapState = 'compact' | 'short' | 'default' | 'tall' | 'full';
 
 export type ContentPanelRenderProps = {
   snapState: SnapState;
@@ -52,16 +52,18 @@ type ContentPanelProps = {
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const HANDLE_HEIGHT = 24;
 
-// Height above which releasing snaps to full screen
-const TOP_SNAP_THRESHOLD = SCREEN_HEIGHT * 0.75;
-// Height below which releasing snaps to compact
-const BOTTOM_SNAP_THRESHOLD = SCREEN_HEIGHT * 0.25;
-
 const defaultSnapHeights: Record<SnapState, number> = {
   compact: HANDLE_HEIGHT + 40,
+  short: SCREEN_HEIGHT * 0.40,
   default: SCREEN_HEIGHT * 0.55,
+  tall: SCREEN_HEIGHT * 0.70,
   full: SCREEN_HEIGHT,
 };
+
+const SNAP_ORDER: SnapState[] = ['compact', 'short', 'default', 'tall', 'full'];
+
+// Height at which the panel starts losing its card border-radius / margins as it approaches full screen
+const FULL_TRANSITION_START = SCREEN_HEIGHT * 0.75;
 
 export default function ContentPanel({
   children,
@@ -97,28 +99,28 @@ export default function ContentPanel({
   // needing separate parallel animations.
   const borderRadiusTop = useRef(
     panelHeight.interpolate({
-      inputRange: [TOP_SNAP_THRESHOLD, SCREEN_HEIGHT],
+      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
       outputRange: [36, 0],
       extrapolate: 'clamp',
     }),
   ).current;
   const borderRadiusBottom = useRef(
     panelHeight.interpolate({
-      inputRange: [TOP_SNAP_THRESHOLD, SCREEN_HEIGHT],
+      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
       outputRange: [48, 0],
       extrapolate: 'clamp',
     }),
   ).current;
   const horizontalMargin = useRef(
     panelHeight.interpolate({
-      inputRange: [TOP_SNAP_THRESHOLD, SCREEN_HEIGHT],
+      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
       outputRange: [8, 0],
       extrapolate: 'clamp',
     }),
   ).current;
   const bottomMargin = useRef(
     panelHeight.interpolate({
-      inputRange: [TOP_SNAP_THRESHOLD, SCREEN_HEIGHT],
+      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
       outputRange: [8, 0],
       extrapolate: 'clamp',
     }),
@@ -130,7 +132,7 @@ export default function ContentPanel({
   const animatedPaddingTop = useMemo(
     () =>
       panelHeight.interpolate({
-        inputRange: [TOP_SNAP_THRESHOLD, SCREEN_HEIGHT],
+        inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
         outputRange: [0, insets.top],
         extrapolate: 'clamp',
       }),
@@ -231,16 +233,14 @@ export default function ContentPanel({
       snapHeights.current.compact,
       Math.min(snapHeights.current.full, gestureStartHeight.current - dy),
     );
-    if (finalHeight >= TOP_SNAP_THRESHOLD) {
-      snapTo('full');
-    } else if (finalHeight <= BOTTOM_SNAP_THRESHOLD) {
-      snapTo('compact');
-    } else {
-      // Between thresholds — leave panel at the dragged height, no snap
-      snapStateRef.current = 'default';
-      setSnapState('default');
-      onSnapStateChange?.('default');
+    // Always snap to the nearest defined snap point — no free-height zone.
+    let nearest: SnapState = SNAP_ORDER[0];
+    let minDist = Infinity;
+    for (const state of SNAP_ORDER) {
+      const dist = Math.abs(finalHeight - snapHeights.current[state]);
+      if (dist < minDist) { minDist = dist; nearest = state; }
     }
+    snapTo(nearest);
   };
 
   const dragToHeight = (dy: number) => {

@@ -68,13 +68,12 @@ type CompactContentRenderProps = {
 | State | Default height | Notes |
 |---|---|---|
 | `compact` | `HANDLE_HEIGHT + 40` (dynamic) | Height auto-updated via `setCompactHeight` |
-| `default` | `SCREEN_HEIGHT * 0.55` | Overridable via `defaultSnapHeight` |
+| `short` | `SCREEN_HEIGHT * 0.40` | Low resting position |
+| `default` | `SCREEN_HEIGHT * 0.55` | Normal list view; overridable via `defaultSnapHeight` |
+| `tall` | `SCREEN_HEIGHT * 0.70` | CreatePlan wizard height |
 | `full` | `SCREEN_HEIGHT` | Adds `paddingTop: insets.top` |
 
-Snap thresholds:
-- Release above `SCREEN_HEIGHT * 0.75` → snaps to `full`
-- Release below `SCREEN_HEIGHT * 0.25` → snaps to `compact`
-- In between → stays at dragged height, state becomes `default`
+On release, the panel always snaps to the nearest snap point by absolute pixel distance — there is no free-height zone.
 
 ## Mount behaviour
 
