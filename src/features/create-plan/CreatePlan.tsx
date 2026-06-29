@@ -1,19 +1,8 @@
-import { Dimensions, View } from 'react-native';
+import { Alert, Dimensions, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
 import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
 import type { PlacesState } from './plan-place/types';
@@ -86,29 +75,19 @@ export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY }: 
         }}
       >
         <Text style={{ fontSize: 22, fontWeight: '600', color: '#09090b' }}>New Plan</Text>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="secondary" size="icon" className="rounded-full w-8 h-8">
-              <Ionicons name="close" size={18} color="#3a3a3c" />
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Discard plan?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Your progress will be lost if you leave now.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>
-                <Text>Continue editing</Text>
-              </AlertDialogCancel>
-              <AlertDialogAction onPress={onClose}>
-                <Text>Discard</Text>
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <Button
+          variant="secondary"
+          size="icon"
+          className="rounded-full w-8 h-8"
+          onPress={() =>
+            Alert.alert('Discard plan?', 'Your progress will be lost if you leave now.', [
+              { text: 'Continue editing', style: 'cancel' },
+              { text: 'Discard', style: 'destructive', onPress: onClose },
+            ])
+          }
+        >
+          <Ionicons name="close" size={18} color="#3a3a3c" />
+        </Button>
       </View>
 
       {/* Step content */}

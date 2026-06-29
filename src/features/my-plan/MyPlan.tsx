@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import { FlatList, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/ui/text';
+import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import PlanCard from '@/components/plan-card/PlanCard';
+import { usePlanDelete } from '@/components/plan-card/usePlanDelete';
 import { mockUser } from '../../../mock-data/mockUser';
-import { mockPlans } from '../../../mock-data/mockPlans';
 import CreatePlan from '../create-plan/CreatePlan';
 
 const CREATE_ITEM = { id: '__create__', title: 'Create a plan', placeCount: 0, imageUrl: undefined };
 
-function buildGridData() {
-  const items = [CREATE_ITEM, ...mockPlans];
+function buildGridData(plans: typeof import('../../../mock-data/mockPlans').mockPlans) {
+  const items = [CREATE_ITEM, ...plans];
   if (items.length % 2 !== 0) items.push({ id: '__spacer__', title: '', placeCount: 0, imageUrl: undefined });
   return items;
 }
@@ -33,6 +34,7 @@ export default function MyPlan({
   onCreateModeChange,
 }: MyPlanProps) {
   const [showCreatePlan, setShowCreatePlan] = useState(false);
+  const { plans, editMode, toggleEditMode, requestDelete } = usePlanDelete();
 
   useEffect(() => {
     onCreateModeChange?.(showCreatePlan);
@@ -88,30 +90,16 @@ export default function MyPlan({
         <Text style={{ fontSize: 28, fontWeight: '600', lineHeight: 34, color: '#09090b' }}>
           My plan
         </Text>
-        <TouchableOpacity
-          onPress={onAvatarPress}
-          activeOpacity={0.85}
-          style={{
-            borderRadius: 999,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.12,
-            shadowRadius: 20,
-            elevation: 4,
-          }}
-        >
-          <Avatar alt={mockUser.avatarFallback} style={{ width: 40, height: 40 }}>
-            {mockUser.avatarUri ? <AvatarImage source={{ uri: mockUser.avatarUri }} /> : null}
-            <AvatarFallback>
-              <Text className="text-sm font-medium">{mockUser.avatarFallback}</Text>
-            </AvatarFallback>
-          </Avatar>
-        </TouchableOpacity>
+        <Button variant="ghost" size="sm" onPress={toggleEditMode}>
+          <Text style={{ fontSize: 15, fontWeight: '500', color: '#007aff' }}>
+            {editMode ? 'Done' : 'Edit'}
+          </Text>
+        </Button>
       </View>
 
       {/* 2-column plan grid */}
       <FlatList
-        data={buildGridData()}
+        data={buildGridData(plans)}
         keyExtractor={(item) => item.id}
         numColumns={2}
         showsVerticalScrollIndicator={false}
@@ -128,11 +116,14 @@ export default function MyPlan({
               placeCount={item.placeCount}
               imageUrl={item.imageUrl}
               create={item.id === '__create__'}
+              deletionMode={editMode}
               onPress={item.id === '__create__' ? () => setShowCreatePlan(true) : undefined}
+              onDeletePress={item.id !== '__create__' ? () => requestDelete(item.id) : undefined}
             />
           )
         }
       />
+
     </View>
   );
 }
