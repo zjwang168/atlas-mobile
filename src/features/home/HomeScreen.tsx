@@ -3,6 +3,7 @@ import { StatusBar, StyleSheet, View } from 'react-native';
 import { Tabs } from 'react-native-screens';
 
 import AddMenu from '../../components/add-menu/AddMenu';
+import TopBlurFade from '../../components/ui/top-blur-fade';
 import { mockPlaces } from '../../../mock-data/mockPlaces';
 
 // Phosphor tab icons — template PNGs so they tint with tabBarTintColor.
@@ -151,6 +152,12 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
               zoomLevel={12}
               onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
             />
+            {/* Top scrim — progressive blur so the status bar + controls stay
+                legible over the map. Above the map, below the controls. */}
+            <TopBlurFade />
+            {/* Map controls — above the map, below the panel (so a full-screen
+                panel covers them instead of them floating on top). */}
+            <TopNav />
             <ContentPanel
               initialSnap="default"
               zIndex={30}
@@ -193,6 +200,8 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
               routeMarkers={routeMarkers}
               onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
             />
+            <TopBlurFade />
+            <TopNav />
             <ContentPanel
               initialSnap="default"
               zIndex={30}
@@ -238,8 +247,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         }}
       />
 
-      {/* Overlays — RN siblings rendered above the native tab controller */}
-      <TopNav />
+      {/* PlaceDetail overlay stays above the tab controller (full-screen detail). */}
       <PlaceDetail
         placeName={selectedPlaceName}
         onDismiss={() => setSelectedPlaceName(null)}

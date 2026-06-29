@@ -258,29 +258,6 @@ export default function ContentPanel({
   const dragToHeightRef = useRef(dragToHeight);
   dragToHeightRef.current = dragToHeight;
 
-
-  // Captures downward drag only when scroll is at the top
-  const panelPanResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gs) => scrollY.current <= 0 && gs.dy > 4,
-        onPanResponderGrant: () => {
-          isDragging.current = true;
-          gestureStartHeight.current = currentPanelHeight.current;
-        },
-        onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
-        onPanResponderRelease: (_, gs) => {
-          isDragging.current = false;
-          resolveSnapRef.current(gs.dy, gs.vy);
-        },
-        onPanResponderTerminate: (_, gs) => {
-          isDragging.current = false;
-          resolveSnapRef.current(gs.dy, gs.vy);
-        },
-      }),
-    [],
-  );
-
   // Captures all directions — used on the drag handle bar
   const handlePanResponder = useMemo(
     () =>
@@ -339,12 +316,16 @@ export default function ContentPanel({
       >
         <View className="absolute inset-0" style={{ backgroundColor: '#FFFFFF' }} />
 
-        {/* Drag handle — only this area controls snap/resize */}
+        {/* Drag handle — the 24px area is always the drag hotspot, but the
+            visible bar only shows at full screen. */}
         <View
-          className="h-6 items-center justify-start pt-2.5"
+          className="h-5 items-center justify-start pt-2"
           {...handlePanResponder.panHandlers}
         >
-          <View className="h-1 w-12 rounded-sm bg-handle" />
+          <View
+            className="h-1 w-12 rounded-sm bg-handle"
+            style={{ opacity: snapState === 'full' ? 1 : 0 }}
+          />
         </View>
 
         {/* Always mount children so internal state is preserved across compact/default transitions */}

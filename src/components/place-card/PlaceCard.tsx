@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image, ScrollView, TouchableOpacity, View } from 'react-native';
 import { Badge } from '@/components/ui/badge';
 import { Text } from '@/components/ui/text';
+import { typography } from '@/theme/typography';
 import { PlaceTag } from '@/types/place';
 
 type PlaceCardProps = {
@@ -28,7 +29,7 @@ export default function PlaceCard({
         <View style={{ flex: 1 }}>
           <Text
             className="text-text-primary"
-            style={{ fontSize: 17, fontWeight: '500', lineHeight: 24, marginBottom: 4 }}
+            style={[typography.h3, { marginBottom: 4 }]}
             numberOfLines={1}
           >
             {name}
@@ -36,16 +37,16 @@ export default function PlaceCard({
           <Text
             numberOfLines={3}
             className="text-text-secondary"
-            style={{ fontSize: 15, lineHeight: 20, height: 60 }}
+            style={[typography.bodySmall, { height: 60 }]}
           >
             {description}
           </Text>
         </View>
         <View
           style={{
-            width: 96,
-            height: 96,
-            borderRadius: 10,
+            width: 86,
+            height: 86,
+            borderRadius: 16,
             overflow: 'hidden',
             backgroundColor: '#e5e5ea',
             flexShrink: 0,
@@ -65,19 +66,22 @@ export default function PlaceCard({
           style={{ flexShrink: 1 }}
           contentContainerStyle={{ flexDirection: 'row', gap: 6 }}
         >
-          {tags.slice(0, 3).map((tag) => (
+          {tags.slice(0, 2).map((tag) => (
             <Badge
               key={tag.id}
               variant="outline"
               style={{ paddingLeft: 12, paddingRight: 6, paddingVertical: 4 }}
             >
-              <Text style={{ fontSize: 13 }}>{tag.label}</Text>
+              <Text style={typography.caption}>{tag.label}</Text>
               <Ionicons name="chevron-forward" size={16} color="#999" />
             </Badge>
           ))}
         </ScrollView>
         {date ? (
-          <Text style={{ fontSize: 13, color: '#ababab', marginLeft: 8, flexShrink: 0 }}>
+          <Text
+            className="text-text-tertiary"
+            style={[typography.caption, { marginLeft: 8, flexShrink: 0 }]}
+          >
             {date}
           </Text>
         ) : null}

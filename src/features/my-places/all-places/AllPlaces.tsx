@@ -1,7 +1,9 @@
+import { ReactNode } from 'react';
 import PlaceCard from '@/components/place-card/PlaceCard';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { FlatList, TouchableOpacity, View } from 'react-native';
+import { FlatList, View } from 'react-native';
 import { Text } from '@/components/ui/text';
+import { typography } from '@/theme/typography';
 import { mockPlaceDetails } from '../../../../mock-data/mockPlaceDetails';
 import { PlaceDetail } from '@/types/place';
 
@@ -16,20 +18,31 @@ const MOCK_DATES = [
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
   bottomInset?: number;
+  /** Rendered at the very top of the scroll content (e.g. the segmented control)
+      so it scrolls away with the list instead of staying pinned. */
+  listHeader?: ReactNode;
+  /** Reports vertical scroll offset so the panel can gate its drag gesture. */
+  onScroll?: (y: number) => void;
 };
 
-export default function AllPlaces({ onPlacePress, bottomInset = 0 }: AllPlacesProps) {
+export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll }: AllPlacesProps) {
   return (
     <FlatList
       data={mockPlaceDetails}
       keyExtractor={(item) => item.id}
+      style={{ flex: 1 }}
       contentContainerStyle={{ paddingBottom: bottomInset + 100 }}
+      onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
+      scrollEventThrottle={16}
       ListHeaderComponent={
-        <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ fontSize: 17, fontWeight: '600', color: '#808080', lineHeight: 22, letterSpacing: -0.43 }}>
-            Recent pins
-          </Text>
-          <Ionicons name="chevron-forward" size={16} color="#808080" />
+        <View>
+          {listHeader}
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
+            <Text className="text-text-secondary" style={typography.subheader}>
+              Recent pins
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color="#717171" />
+          </View>
         </View>
       }
       ItemSeparatorComponent={() => (

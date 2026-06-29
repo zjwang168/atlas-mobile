@@ -1,5 +1,45 @@
+/* ── Primitives ─────────────────────────────────────────────────────────────
+   Raw palette — the single source of truth, mirroring the SPARC Figma
+   foundation (Primitives collection). Exposed as Tailwind utilities too
+   (e.g. bg-emerald-500, text-gray-700).                                       */
+@theme {
+  /* gray */
+  --color-gray-50: #f7f7f7;
+  --color-gray-100: #ebebeb;
+  --color-gray-200: #e0e0e0;
+  --color-gray-300: #d1d1d1;
+  --color-gray-400: #b0b0b0;
+  --color-gray-500: #717171;
+  --color-gray-600: #5c5c5c;
+  --color-gray-700: #444444;
+  --color-gray-800: #2e2e2e;
+  --color-gray-900: #1a1a1a;
+
+  /* emerald (brand) */
+  --color-emerald-50: #e9fbf1;
+  --color-emerald-100: #c6f4db;
+  --color-emerald-200: #93e6b7;
+  --color-emerald-300: #5fd896;
+  --color-emerald-400: #2bcb7c;
+  --color-emerald-500: #12c170;
+  --color-emerald-600: #0fa75f;
+  --color-emerald-700: #0c8149;
+  --color-emerald-800: #086036;
+  --color-emerald-900: #053e23;
+
+  /* accents (atlas categories) */
+  --color-amber-500: #e8a317;
+  --color-red-500: #e5484d;
+  --color-coral-500: #f2685c;
+  --color-indigo-500: #4a6fa5;
+  --color-purple-500: #8b6db0;
+  --color-teal-500: #2ba0a8;
+  --color-rose-500: #d45d8a;
+  --color-olive-500: #7a8b3c;
+}
+
 /* ── Tailwind token aliases ─────────────────────────────────────────────────
-   Maps Tailwind utilities to the CSS variables defined below.                */
+   Maps Tailwind utilities to the semantic CSS variables defined below.       */
 @theme inline {
   /* shadcn / NativeWind default token surface */
   --color-background: var(--background);
@@ -21,67 +61,115 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  /* Atlas custom tokens */
+  /* Atlas semantic tokens (mirror Figma "Color" collection) */
+  --color-primary-pressed: var(--primary-pressed);
+  --color-primary-light: var(--primary-light);
+  --color-primary-strong: var(--primary-strong);
+  --color-bg: var(--bg);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-secondary-transparent: var(--bg-secondary-transparent);
+  --color-surface: var(--surface);
+  --color-surface-inverse: var(--surface-inverse);
+  --color-border-strong: var(--border-strong);
   --color-text-primary: var(--text-primary);
   --color-text-secondary: var(--text-secondary);
   --color-text-tertiary: var(--text-tertiary);
+  --color-text-inverse: var(--text-inverse);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
   --color-handle: var(--handle);
+  --color-atlas-1: var(--atlas-1);
+  --color-atlas-2: var(--atlas-2);
+  --color-atlas-3: var(--atlas-3);
+  --color-atlas-4: var(--atlas-4);
+  --color-atlas-5: var(--atlas-5);
+  --color-atlas-6: var(--atlas-6);
+  --color-atlas-7: var(--atlas-7);
+  --color-atlas-8: var(--atlas-8);
 }
 
-/* ── Light mode ─────────────────────────────────────────────────────────────*/
+/* ── Light mode (Figma "Color" collection, source of truth) ─────────────────*/
 :root {
-  /* shadcn / NativeWind default tokens */
-  --background: var(--color-neutral-50);
-  --foreground: var(--color-neutral-950);
-  --card: var(--color-neutral-100);
-  --card-foreground: var(--color-neutral-950);
-  --popover: var(--color-neutral-50);
-  --popover-foreground: var(--color-neutral-950);
+  /* shadcn / NativeWind default tokens → mapped to Figma semantics */
+  --background: #ffffff;                         /* bg */
+  --foreground: var(--color-gray-900);           /* text-primary */
+  --card: #ffffff;                               /* surface */
+  --card-foreground: var(--color-gray-900);
+  --popover: #ffffff;
+  --popover-foreground: var(--color-gray-900);
   --primary: var(--color-emerald-500);
-  --primary-foreground: var(--color-neutral-50);
-  --secondary: var(--color-neutral-100);
-  --secondary-foreground: var(--color-neutral-950);
-  --muted: var(--color-neutral-200);
-  --muted-foreground: var(--color-neutral-500);
-  --accent: var(--color-neutral-200);
-  --accent-foreground: var(--color-neutral-950);
-  --destructive: var(--color-red-600);
-  --border: var(--color-neutral-200);
-  --input: var(--color-neutral-200);
-  --ring: var(--color-neutral-400);
+  --primary-foreground: #ffffff;                 /* text-inverse */
+  --secondary: var(--color-gray-50);             /* bg-secondary */
+  --secondary-foreground: var(--color-gray-900);
+  --muted: var(--color-gray-100);
+  --muted-foreground: var(--color-gray-500);     /* text-secondary */
+  --accent: var(--color-gray-100);
+  --accent-foreground: var(--color-gray-900);
+  --destructive: var(--color-red-500);           /* error */
+  --border: var(--color-gray-100);               /* border */
+  --input: var(--color-gray-200);                /* border-strong */
+  --ring: var(--color-gray-400);
 
-  /* Atlas custom tokens */
-  --text-primary: var(--color-neutral-900);
-  --text-secondary: var(--color-neutral-700);
-  --text-tertiary: var(--color-neutral-500);
-  --handle: var(--color-neutral-300);
+  /* Atlas semantic tokens */
+  --primary-pressed: var(--color-emerald-600);
+  --primary-light: var(--color-emerald-50);
+  --primary-strong: var(--color-emerald-700);
+  --bg: #ffffff;
+  --bg-secondary: var(--color-gray-50);
+  --bg-secondary-transparent: rgba(0, 0, 0, 0.05);
+  --surface: #ffffff;
+  --surface-inverse: var(--color-gray-900);
+  --border-strong: var(--color-gray-200);
+  --text-primary: var(--color-gray-900);
+  --text-secondary: var(--color-gray-500);
+  --text-tertiary: var(--color-gray-400);
+  --text-inverse: #ffffff;
+  --warning: var(--color-amber-500);
+  --error: var(--color-red-500);
+  --handle: var(--color-gray-300);
+  --atlas-1: var(--color-emerald-500);
+  --atlas-2: var(--color-coral-500);
+  --atlas-3: var(--color-amber-500);
+  --atlas-4: var(--color-indigo-500);
+  --atlas-5: var(--color-purple-500);
+  --atlas-6: var(--color-teal-500);
+  --atlas-7: var(--color-rose-500);
+  --atlas-8: var(--color-olive-500);
 }
 
-/* ── Dark mode ──────────────────────────────────────────────────────────────*/
+/* ── Dark mode ──────────────────────────────────────────────────────────────
+   Kept from the teammate's setup (no Figma dark foundation yet). Re-pointed at
+   the Figma gray/emerald primitives; inverse + surface tokens flipped.        */
 .dark {
-  /* shadcn / NativeWind default tokens */
-  --background: var(--color-neutral-950);
-  --foreground: var(--color-neutral-50);
-  --card: hsl(0, 0%, 11%);
-  --card-foreground: var(--color-neutral-50);
-  --popover: var(--color-neutral-900);
-  --popover-foreground: var(--color-neutral-50);
+  --background: var(--color-gray-900);
+  --foreground: var(--color-gray-50);
+  --card: #1c1c1c;
+  --card-foreground: var(--color-gray-50);
+  --popover: var(--color-gray-900);
+  --popover-foreground: var(--color-gray-50);
   --primary: var(--color-emerald-500);
-  --primary-foreground: var(--color-neutral-950);
-  --secondary: var(--color-neutral-800);
-  --secondary-foreground: var(--color-neutral-50);
-  --muted: var(--color-neutral-800);
-  --muted-foreground: var(--color-neutral-400);
-  --accent: var(--color-neutral-800);
-  --accent-foreground: var(--color-neutral-50);
-  --destructive: var(--color-red-400);
+  --primary-foreground: var(--color-gray-900);
+  --secondary: var(--color-gray-800);
+  --secondary-foreground: var(--color-gray-50);
+  --muted: var(--color-gray-800);
+  --muted-foreground: var(--color-gray-400);
+  --accent: var(--color-gray-800);
+  --accent-foreground: var(--color-gray-50);
+  --destructive: var(--color-red-500);
   --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.15);
-  --ring: var(--color-neutral-500);
+  --ring: var(--color-gray-500);
 
-  /* Atlas custom tokens */
-  --text-primary: var(--color-neutral-200);
-  --text-secondary: var(--color-neutral-400);
-  --text-tertiary: var(--color-neutral-500);
-  --handle: var(--color-neutral-800);
+  /* Atlas semantic tokens */
+  --bg: var(--color-gray-900);
+  --bg-secondary: var(--color-gray-800);
+  --bg-secondary-transparent: rgba(255, 255, 255, 0.05);
+  --surface: #1c1c1c;
+  --surface-inverse: #ffffff;
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text-primary: var(--color-gray-50);
+  --text-secondary: var(--color-gray-400);
+  --text-tertiary: var(--color-gray-500);
+  --text-inverse: var(--color-gray-900);
+  --handle: var(--color-gray-800);
 }
