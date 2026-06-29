@@ -12,19 +12,19 @@ import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import ContentPanel from '@/components/content-panel/ContentPanel';
-import { mockPlaceDetails } from '../../../mock-data/mockPlaceDetails';
+import { mockPlaceDetails } from '../../../../mock-data/mockPlaceDetails';
 import type { PlannedPlace } from '../create-plan/plan-place/types';
 import { newPlannedPlace } from '../create-plan/plan-place/types';
 
 const FILTERS = ['Recommended', 'Best for Summer', 'Nearby', 'Not Yet Visited'];
 
-type AddPlaceProps = {
+type AddPlaceToPlanProps = {
   visible: boolean;
   onDismiss: () => void;
   onSelect: (places: PlannedPlace[]) => void;
 };
 
-export default function AddPlace({ visible, onDismiss, onSelect }: AddPlaceProps) {
+export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlaceToPlanProps) {
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<string | null>('Recommended');
   const [selected, setSelected] = useState<Set<string>>(new Set());

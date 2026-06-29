@@ -6,9 +6,9 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import PlanCard from '@/components/plan-card/PlanCard';
 import { usePlanDelete } from '@/components/plan-card/usePlanDelete';
 import { mockUser } from '../../../mock-data/mockUser';
-import CreatePlan from '../create-plan/CreatePlan';
+import CreatePlan from './create-plan/CreatePlan';
 import { useHome } from '../home/HomeContext';
-import type { SavedPlan } from '../create-plan/savePlan';
+import type { SavedPlan } from './create-plan/savePlan';
 
 const CREATE_ITEM = { id: '__create__', title: 'Create a plan', placeCount: 0, imageUrl: undefined };
 

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState } from 'react';
 import { Dimensions } from 'react-native';
-import type { PlannedPlace } from '../create-plan/plan-place/types';
+import type { PlannedPlace } from '../my-plan/create-plan/plan-place/types';
 
 // --- Panel height constants ---
 
@@ -17,7 +17,7 @@ export type Overlay =
   | { kind: 'none' }
   | { kind: 'placeDetail'; placeName: string }
   | { kind: 'planDetail'; planId: string }
-  | { kind: 'addPlace'; onSelect: (places: PlannedPlace[]) => void };
+  | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void };
 
 type HomeContextValue = {
   overlay: Overlay;

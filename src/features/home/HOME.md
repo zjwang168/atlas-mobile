@@ -9,7 +9,7 @@ HomeScreen  (HomeProvider)
 ├── MapboxMap          ← full-screen, behind everything
 ├── HomePanel          ← draggable bottom panel; hidden when any overlay is active
 ├── PlaceDetail        ← slides up when overlay.kind === 'placeDetail'
-├── AddPlace           ← slides up when overlay.kind === 'addPlace'
+├── AddPlaceToPlan     ← slides up when overlay.kind === 'addPlaceToPlan'
 └── BottomBar          ← always on top
 ```
 
@@ -48,7 +48,7 @@ type Overlay =
   | { kind: 'none' }
   | { kind: 'placeDetail'; placeName: string }
   | { kind: 'planDetail'; planId: string }
-  | { kind: 'addPlace'; onSelect: (places: PlannedPlace[]) => void };
+  | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void };
 ```
 
 ---
@@ -67,12 +67,12 @@ setOverlay({ kind: 'placeDetail', placeName: 'Noma Restaurant' });
 setOverlay({ kind: 'planDetail', planId: 'plan-abc123' });
 ```
 
-### Open add-place and receive the result
+### Open add-place-to-plan and receive the result
 ```ts
 const { setOverlay } = useHome();
 
 setOverlay({
-  kind: 'addPlace',
+  kind: 'addPlaceToPlan',
   onSelect: (places) => {
     // places: PlannedPlace[] — insert wherever needed
   },

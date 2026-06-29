@@ -11,7 +11,7 @@ import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, Da
 | Type | Used by |
 |---|---|
 | `Place` | Map markers, list rows — minimal identity + coordinates |
-| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker |
+| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlaceToPlan picker |
 | `PlaceTag` | PlaceCard tags, PlaceInfoSection, Badge pills |
 | `PlaceLink` | PlaceInfoSection link rows |
 | `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |

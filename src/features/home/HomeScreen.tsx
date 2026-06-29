@@ -6,10 +6,10 @@ import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
 import BottomBar from '../../components/bottom-nav/BottomBar';
 import TopNav from '../../components/top-nav/TopNav';
 import PlaceDetail from '../place-detail/PlaceDetail';
-import PlanDetail from '../plan-detail/PlanDetail';
+import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import HomePanel from './HomePanel';
-import AddPlace from '../add-place/AddPlace';
+import AddPlaceToPlan from '../my-plan/add-place-to-plan/AddPlaceToPlan';
 import { HomeProvider, useHome } from './HomeContext';
 
 // ---- Types ----
@@ -156,11 +156,11 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
         onDismiss={() => setOverlay({ kind: 'none' })}
       />
 
-      <AddPlace
-        visible={overlay.kind === 'addPlace'}
+      <AddPlaceToPlan
+        visible={overlay.kind === 'addPlaceToPlan'}
         onDismiss={() => setOverlay({ kind: 'none' })}
         onSelect={(places) => {
-          if (overlay.kind === 'addPlace') overlay.onSelect(places);
+          if (overlay.kind === 'addPlaceToPlan') overlay.onSelect(places);
           setOverlay({ kind: 'none' });
         }}
       />

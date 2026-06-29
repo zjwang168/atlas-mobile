@@ -7,7 +7,7 @@
 ## File Structure
 
 ```
-src/features/plan-detail/
+src/features/my-plan/plan-detail/
   PlanDetail.tsx                              ← panel container + PlanHeader
   PlanCompactView.tsx                         ← compact snap: title, location, action buttons
   plan-detail-sections/
@@ -83,11 +83,11 @@ type PlanScheduleSectionProps = {
 
 ## Data Model
 
-All types below are **defined in `src/features/create-plan/savePlan.ts`** — import from there, do not re-declare:
+All types below are **defined in `src/features/my-plan/create-plan/savePlan.ts`** — import from there, do not re-declare:
 
 ```ts
-import type { SavedPlan, PlanDateSlot } from '@/features/create-plan/savePlan';
-import type { PlannedPlace, VisitSlot } from '@/features/create-plan/plan-place/types';
+import type { SavedPlan, PlanDateSlot } from '@/features/my-plan/create-plan/savePlan';
+import type { PlannedPlace, VisitSlot } from '@/features/my-plan/create-plan/plan-place/types';
 ```
 
 ```ts

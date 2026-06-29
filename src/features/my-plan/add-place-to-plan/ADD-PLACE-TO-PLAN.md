@@ -1,21 +1,21 @@
-# Add Place Feature
+# Add Place to Plan Feature
 
 ## Overview
 
-`AddPlace` is a full-height overlay panel that lets users search and multi-select places to add to a plan slot. It is opened exclusively via `HomeContext.setOverlay({ kind: 'addPlace', onSelect })` and delivers its result through the `onSelect` callback.
+`AddPlaceToPlan` is a full-height overlay panel that lets users search and multi-select places to add to a plan slot. It is opened exclusively via `HomeContext.setOverlay({ kind: 'addPlaceToPlan', onSelect })` and delivers its result through the `onSelect` callback.
 
 ## File Structure
 
 ```
-src/features/add-place/
-  AddPlace.tsx    ← panel component
-  ADD-PLACE.md    ← this document
+src/features/my-plan/add-place-to-plan/
+  AddPlaceToPlan.tsx    ← panel component
+  ADD-PLACE-TO-PLAN.md  ← this document
 ```
 
 ## Props
 
 ```ts
-type AddPlaceProps = {
+type AddPlaceToPlanProps = {
   visible: boolean;                          // controls slide-in / slide-out animation
   onDismiss: () => void;                     // user tapped close without confirming
   onSelect: (places: PlannedPlace[]) => void; // user confirmed; receives selected places
@@ -33,13 +33,13 @@ type AddPlaceProps = {
 
 ## Integration via HomeContext
 
-This is the only correct way to open `AddPlace`:
+This is the only correct way to open `AddPlaceToPlan`:
 
 ```ts
 const { setOverlay } = useHome();
 
 setOverlay({
-  kind: 'addPlace',
+  kind: 'addPlaceToPlan',
   onSelect: (places) => {
     // insert places wherever needed (e.g. into a PlanPlace slot)
     setOverlay({ kind: 'none' });
@@ -47,7 +47,7 @@ setOverlay({
 });
 ```
 
-`HomeScreen` owns the `<AddPlace>` instance and wires `onSelect` → `overlay.onSelect(places)` + `setOverlay({ kind: 'none' })` automatically.
+`HomeScreen` owns the `<AddPlaceToPlan>` instance and wires `onSelect` → `overlay.onSelect(places)` + `setOverlay({ kind: 'none' })` automatically.
 
 ## Data Sources
 
@@ -55,7 +55,7 @@ setOverlay({
 |---|---|
 | `mock-data/mockPlaceDetails.ts` | The list of places shown in the picker (`results`) |
 | `src/types/place.ts` | `PlaceDetail` — the type of each item in `mockPlaceDetails` |
-| `src/features/create-plan/plan-place/types.ts` | `PlannedPlace`, `newPlannedPlace()` |
+| `src/features/my-plan/create-plan/plan-place/types.ts` | `PlannedPlace`, `newPlannedPlace()` |
 
 ## Types
 
@@ -66,7 +66,7 @@ type PlaceDetail = Place & {
   tags: PlaceTag[]; summary: string; visitStrategy: string; ...
 };
 
-// from src/features/create-plan/plan-place/types.ts
+// from src/features/my-plan/create-plan/plan-place/types.ts
 type PlannedPlace = {
   id: string;      // unique instance id (not the underlying place id)
   placeId: string; // id of the source PlaceDetail

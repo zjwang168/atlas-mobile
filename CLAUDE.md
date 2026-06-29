@@ -24,7 +24,7 @@ HomeScreen (HomeProvider)
 │   └── MyPlan tab             plan grid + inline CreatePlan wizard
 ├── PlaceDetail (ContentPanel) overlay: place info, triggered via HomeContext
 ├── PlanDetail (ContentPanel)  overlay: plan schedule, triggered via HomeContext
-├── AddPlace (ContentPanel)    overlay: place picker, triggered via HomeContext
+├── AddPlaceToPlan (ContentPanel) overlay: place picker, triggered via HomeContext
 └── BottomBar                  fixed bottom nav
 ```
 
@@ -43,6 +43,7 @@ find src -name "*.md" | sort
 Key entry points if you need a starting point:
 
 - Feature docs: `src/features/<name>/<NAME>.md`
+- Subfeature docs: `src/features/<name>/<sub>/<SUB>.md` — every named subdirectory inside a feature has its own doc
 - Component docs: `src/components/<name>/<NAME>.md`
 - UI primitives: `src/components/ui/UI.md`
 - Types: `src/types/TYPES.md`
@@ -85,8 +86,8 @@ Import from `src/types/` — never re-declare inline:
 
 - `Place` / `PlaceDetail` / `PlaceTag` / `PlaceLink` → `@/types/place`
 - `ParseResult` / `ChatMessage` / `GeocodedLocation` → `@/types/route`
-- `SavedPlan` / `PlanDateSlot` → `@/features/create-plan/savePlan`
-- `PlannedPlace` / `SlotKey` / `PlacesState` / `VisitSlot` → `@/features/create-plan/plan-place/types`
+- `SavedPlan` / `PlanDateSlot` → `@/features/my-plan/create-plan/savePlan`
+- `PlannedPlace` / `SlotKey` / `PlacesState` / `VisitSlot` → `@/features/my-plan/create-plan/plan-place/types`
 
 ## Services
 
@@ -101,10 +102,10 @@ Never call `fetch()` inside a feature — use a service in `src/services/`. See 
 
 ```ts
 const { setOverlay } = useHome();
-setOverlay({ kind: 'addPlace', onSelect: (places) => { /* insert */ } });
+setOverlay({ kind: 'addPlaceToPlan', onSelect: (places) => { /* insert */ } });
 ```
 
-Never render `<AddPlace>` directly — only `HomeScreen` owns that instance.
+Never render `<AddPlaceToPlan>` directly — only `HomeScreen` owns that instance.
 
 ---
 
@@ -122,6 +123,7 @@ Internal implementation details — local variables, private helpers, internal c
 | New exported function or hook | Add to the doc's API section |
 | New overlay kind in `HomeContext` | `Overlay` type block + usage examples in `HOME.md` |
 | New feature directory created | Create `FEATURE-NAME.md` using the template below |
+| New subdirectory created inside a feature | Create `<SUBDIR-NAME>.md` in that directory using the template below |
 | New component directory created | Create `COMPONENT-NAME.md` using the template below |
 | Service stub activated (file goes from empty to real) | Replace stub notice in `SERVICES.md` with the real API |
 | New shared type added to `src/types/` | Add to `TYPES.md` |

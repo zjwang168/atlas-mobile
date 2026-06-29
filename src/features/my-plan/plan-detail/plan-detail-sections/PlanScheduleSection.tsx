@@ -1,6 +1,6 @@
 import { Linking, Pressable, View } from 'react-native';
 import { Text } from '@/components/ui/text';
-import { mockPlaceDetails } from '../../../../mock-data/mockPlaceDetails';
+import { mockPlaceDetails } from '../../../../../mock-data/mockPlaceDetails';
 import type { SavedPlan, PlanDateSlot } from '../../create-plan/savePlan';
 import type { PlannedPlace, VisitSlot } from '../../create-plan/plan-place/types';
 

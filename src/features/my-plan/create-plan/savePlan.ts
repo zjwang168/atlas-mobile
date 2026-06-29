@@ -5,7 +5,7 @@
  * Swap the two implementations below for real API calls when the server is ready.
  */
 
-import { mockPlans } from '../../../mock-data/mockPlans';
+import { mockPlans } from '../../../../mock-data/mockPlans';
 import type { DateRange } from './CreatePlan';
 import type { PlacesState, PlannedPlace, VisitSlot } from './plan-place/types';
 

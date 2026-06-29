@@ -6,7 +6,7 @@ import { createPlanCache, type DateRange } from '../CreatePlan';
 import { DndProvider } from './dnd/DndProvider';
 import AddPlaceField from './components/AddPlaceField';
 import AddPlaceInDate from './components/AddPlaceInDate';
-import { useHome } from '../../home/HomeContext';
+import { useHome } from '../../../home/HomeContext';
 import { type PlacesState, type SlotKey, type PlannedPlace, type VisitSlot } from './types';
 import { savePlan, type SavedPlan } from '../savePlan';
 
@@ -47,7 +47,7 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
   function openForFree() {
     setOverlay({
-      kind: 'addPlace',
+      kind: 'addPlaceToPlan',
       onSelect: (newPlaces) => {
         updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
       },
@@ -56,7 +56,7 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
   function openForSlot(date: string, slot: VisitSlot) {
     setOverlay({
-      kind: 'addPlace',
+      kind: 'addPlaceToPlan',
       onSelect: (newPlaces) => {
         updatePlaces((prev) => {
           const prevByDate = (prev.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;

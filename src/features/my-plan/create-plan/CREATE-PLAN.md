@@ -7,7 +7,7 @@ Create Plan is a two-step wizard rendered inside the `MyPlan` tab when the user 
 ## File Structure
 
 ```
-src/features/create-plan/
+src/features/my-plan/create-plan/
   CreatePlan.tsx                         ← wizard shell; owns step navigation
   savePlan.ts                            ← persistence service (mock → real API)
   plan-destination/
@@ -121,7 +121,7 @@ To swap for a real API: replace the mock blocks inside `savePlan` and `findSaved
 
 Renders a "Flexible" drop zone and (when dates are set) a horizontal pager of per-day columns. Each column has four time slots: `morning`, `noon`, `afternoon`, `night`.
 
-Places are added by calling `useHome().setOverlay({ kind: 'addPlace', onSelect })` — the overlay delivers `PlannedPlace[]` back into the wizard.
+Places are added by calling `useHome().setOverlay({ kind: 'addPlaceToPlan', onSelect })` — the overlay delivers `PlannedPlace[]` back into the wizard.
 
 ### Drag-and-drop
 

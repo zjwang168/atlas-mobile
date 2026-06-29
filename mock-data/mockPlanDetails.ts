@@ -1,5 +1,5 @@
-import { seedPlan } from '../src/features/create-plan/savePlan';
-import type { SavedPlan } from '../src/features/create-plan/savePlan';
+import { seedPlan } from '../src/features/my-plan/create-plan/savePlan';
+import type { SavedPlan } from '../src/features/my-plan/create-plan/savePlan';
 
 function pp(placeId: string, name: string, subtitle: string, idx: number) {
   return { id: `seed-${placeId}-${idx}`, placeId, name, subtitle };

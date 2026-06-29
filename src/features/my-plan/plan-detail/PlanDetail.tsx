@@ -3,10 +3,10 @@ import { useEffect, useState } from 'react';
 import { ScrollView, useColorScheme, View } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import ContentPanel from '../../components/content-panel/ContentPanel';
+import ContentPanel from '../../../components/content-panel/ContentPanel';
 import { findSavedPlan } from '../create-plan/savePlan';
 import type { SavedPlan } from '../create-plan/savePlan';
-import { seedMockPlanDetails } from '../../../mock-data/mockPlanDetails';
+import { seedMockPlanDetails } from '../../../../mock-data/mockPlanDetails';
 import PlanCompactView from './PlanCompactView';
 import PlanScheduleSection from './plan-detail-sections/PlanScheduleSection';
 
