@@ -3,8 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import PlanLocation from './plan-location/PlanLocation';
 import PlanDate from './plan-date/PlanDate';
-
-type DateRange = { start: string | null; end: string | null };
+import type { DateRange } from '../CreatePlan';
 
 type PlanDestinationProps = {
   onNext: () => void;

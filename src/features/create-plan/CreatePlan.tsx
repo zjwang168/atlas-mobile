@@ -18,7 +18,12 @@ import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
 
 type CreatePlanStep = 'destination' | 'places';
-type DateRange = { start: string | null; end: string | null };
+export type DateRange = { start: string | null; end: string | null };
+
+export const createPlanCache: { location: string; range: DateRange } = {
+  location: '',
+  range: { start: null, end: null },
+};
 
 const STEPS: CreatePlanStep[] = ['destination', 'places'];
 
@@ -34,6 +39,16 @@ export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
+
+  function handleLocationChange(value: string) {
+    setLocation(value);
+    createPlanCache.location = value;
+  }
+
+  function handleRangeChange(value: DateRange) {
+    setRange(value);
+    createPlanCache.range = value;
+  }
 
   const stepIndex = STEPS.indexOf(step);
 
@@ -90,9 +105,9 @@ export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps
           onNext={goNext}
           bottomInset={bottomInset}
           location={location}
-          onLocationChange={setLocation}
+          onLocationChange={handleLocationChange}
           range={range}
-          onRangeChange={setRange}
+          onRangeChange={handleRangeChange}
         />
       )}
       {step === 'places' && <PlanPlace onBack={goBack} />}
