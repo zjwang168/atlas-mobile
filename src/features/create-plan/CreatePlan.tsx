@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
-import type { PlacesState, PlannedPlace } from './plan-place/types';
+import type { PlacesState } from './plan-place/types';
 
 type CreatePlanStep = 'destination' | 'places';
 export type DateRange = { start: string | null; end: string | null };
@@ -37,13 +37,11 @@ type CreatePlanProps = {
   onClose: () => void;
   bottomInset?: number;
   reportScrollY: (y: number) => void;
-  onOpenAddPlace: (onSelect: (places: PlannedPlace[]) => void) => void;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
-export const CREATE_PLAN_HEIGHT = SCREEN_HEIGHT * 0.7;
 
-export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY, onOpenAddPlace }: CreatePlanProps) {
+export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY }: CreatePlanProps) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
@@ -130,7 +128,6 @@ export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY, on
           location={location}
           range={range}
           reportScrollY={reportScrollY}
-          onOpenAddPlace={onOpenAddPlace}
         />
       )}
     </View>

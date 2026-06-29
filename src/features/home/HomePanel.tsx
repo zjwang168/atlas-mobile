@@ -6,8 +6,7 @@ import { Place } from '../../types/place';
 import { ChatMessage, ParseResult } from '../../types/route';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
-import type { PlannedPlace } from '../create-plan/plan-place/types';
+import { useHome, PANEL_HEIGHT } from './HomeContext';
 
 const BOTTOM_BAR_CLEARANCE = 84;
 
@@ -19,9 +18,6 @@ type HomePanelProps = {
   messages: ChatMessage[];
   onSendMessage: (text: string) => void;
   error: string | null;
-  onPlacePress?: (place: Place) => void;
-  visible?: boolean;
-  onOpenAddPlace?: (onSelect: (places: PlannedPlace[]) => void) => void;
 };
 
 export default function HomePanel({
@@ -32,18 +28,16 @@ export default function HomePanel({
   messages,
   onSendMessage,
   error,
-  onPlacePress,
-  visible,
-  onOpenAddPlace,
 }: HomePanelProps) {
+  const { overlay, setOverlay } = useHome();
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
   return (
     <ContentPanel
       initialSnap="default"
       zIndex={30}
-      visible={visible}
-      defaultSnapHeight={activeTab === 'travelPlan' && isCreatingPlan ? CREATE_PLAN_HEIGHT : undefined}
+      visible={overlay.kind === 'none'}
+      defaultSnapHeight={activeTab === 'travelPlan' && isCreatingPlan ? PANEL_HEIGHT.createPlan : undefined}
       compactContent={() =>
         activeTab === 'myPlaces' ? (
           <MyPlaces
@@ -60,7 +54,9 @@ export default function HomePanel({
         <>
           <View style={{ display: activeTab === 'myPlaces' ? 'flex' : 'none', flex: 1 }}>
             <MyPlaces
-              onPlacePress={onPlacePress}
+              onPlacePress={(place: Place) =>
+                setOverlay({ kind: 'placeDetail', placeName: place.name })
+              }
               onScroll={reportScrollY}
               bottomInset={BOTTOM_BAR_CLEARANCE}
               avatarUri={mockUser.avatarUri}
@@ -72,7 +68,6 @@ export default function HomePanel({
               onScroll={reportScrollY}
               bottomInset={BOTTOM_BAR_CLEARANCE}
               onCreateModeChange={setIsCreatingPlan}
-              onOpenAddPlace={onOpenAddPlace}
             />
           </View>
         </>

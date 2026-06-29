@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { StatusBar, StyleSheet, View } from 'react-native';
 
 import { mockPlaces } from '../../../mock-data/mockPlaces';
@@ -9,7 +9,7 @@ import PlaceDetail from '../place-detail/PlaceDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import HomePanel from './HomePanel';
 import AddPlace from '../add-place/AddPlace';
-import type { PlannedPlace } from '../create-plan/plan-place/types';
+import { HomeProvider, useHome } from './HomeContext';
 
 // ---- Types ----
 
@@ -54,39 +54,28 @@ const toRouteGeoJSON = (
 
 const uid = (): string => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
-function formatDistanceSummary(km: number): string {
-  if (km < 1) return `${Math.round(km * 1000)} m total`;
-  if (km < 10) return `${km.toFixed(1)} km total`;
-  return `${Math.round(km)} km total`;
-}
-
-// ---- Component ----
+// ---- Root export — just provides the context ----
 
 interface HomeScreenProps {
-  /** Opens the ImportScreen overlay — passed down from App.tsx */
   onOpenImport?: () => void;
 }
 
-const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
+export default function HomeScreen({ onOpenImport }: HomeScreenProps) {
+  return (
+    <HomeProvider>
+      <HomeScreenContent onOpenImport={onOpenImport} />
+    </HomeProvider>
+  );
+}
+
+// ---- Inner component — consumes the context ----
+
+function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
+  const { overlay, setOverlay } = useHome();
   const defaultMarkers = useMemo(() => toMapMarkers(mockPlaces), []);
 
-  const [selectedPlaceName, setSelectedPlaceName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'myPlaces' | 'travelPlan'>('myPlaces');
-  const [showAddPlace, setShowAddPlace] = useState(false);
-  const addPlaceCallbackRef = useRef<((places: PlannedPlace[]) => void) | null>(null);
 
-  function handleOpenAddPlace(onSelect: (places: PlannedPlace[]) => void) {
-    addPlaceCallbackRef.current = onSelect;
-    setShowAddPlace(true);
-  }
-
-  function handleAddPlaceSelect(places: PlannedPlace[]) {
-    addPlaceCallbackRef.current?.(places);
-    addPlaceCallbackRef.current = null;
-    setShowAddPlace(false);
-  }
-
-  // Parse-route flow state — populated by PlanMode when a link is submitted
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('Fetching post...');
@@ -105,7 +94,6 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     return toRouteMarkers(parseResult.route.ordered_locations);
   }, [parseResult]);
 
-  // Center camera on the mean of all route points
   const routeCenter = useMemo((): [number, number] | undefined => {
     if (!parseResult?.route.ordered_locations.length) return undefined;
     const locs = parseResult.route.ordered_locations;
@@ -114,13 +102,10 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     return [avgLng, avgLat];
   }, [parseResult]);
 
-  /** Follow-up message handler passed to PlanMode */
   const handleSendMessage = useCallback(
     async (text: string) => {
       const userMsg: ChatMessage = { id: uid(), role: 'user', text, timestamp: Date.now() };
       setMessages((prev) => [...prev, userMsg]);
-
-      // MVP auto-reply — real AI follow-up handled in PlanMode
       const autoReply: ChatMessage = {
         id: uid(),
         role: 'assistant',
@@ -136,20 +121,19 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
-      {/* Full-screen map — sits behind all panels */}
       <MapboxMap
         markers={defaultMarkers}
         centerCoordinate={routeCenter ?? [-122.3321, 47.6062]}
         zoomLevel={hasRouteData ? 10 : 12}
         routeGeoJSON={routeGeoJSON}
         routeMarkers={routeMarkers}
-        onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
+        onMarkerPress={(marker) =>
+          setOverlay({ kind: 'placeDetail', placeName: marker.title ?? '' })
+        }
       />
 
-      {/* Top nav — avatar left, search/globe/navigate right */}
       <TopNav />
 
-      {/* Bottom content panel — hidden while place detail is open */}
       <HomePanel
         activeTab={activeTab}
         parseResult={parseResult}
@@ -158,26 +142,23 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         messages={messages}
         onSendMessage={handleSendMessage}
         error={error}
-        onPlacePress={(place) => setSelectedPlaceName(place.name)}
-        visible={selectedPlaceName === null && !showAddPlace}
-        onOpenAddPlace={handleOpenAddPlace}
       />
 
-      {/* Place detail overlay — slides up when a place is selected */}
       <PlaceDetail
-        placeName={selectedPlaceName}
-        onDismiss={() => setSelectedPlaceName(null)}
+        placeName={overlay.kind === 'placeDetail' ? overlay.placeName : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
       />
 
-      {/* Add place panel — slides up from HomeScreen level, fading out HomePanel */}
       <AddPlace
-        visible={showAddPlace}
-        onDismiss={() => setShowAddPlace(false)}
-        onSelect={handleAddPlaceSelect}
+        visible={overlay.kind === 'addPlace'}
+        onDismiss={() => setOverlay({ kind: 'none' })}
+        onSelect={(places) => {
+          if (overlay.kind === 'addPlace') overlay.onSelect(places);
+          setOverlay({ kind: 'none' });
+        }}
       />
 
-      {/* Tab bar + add-place button — always on top */}
       <BottomBar
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -185,7 +166,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
       />
     </View>
   );
-};
+}
 
 // ---- Styles ----
 
@@ -195,5 +176,3 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
 });
-
-export default HomeScreen;

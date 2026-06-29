@@ -6,7 +6,6 @@ import PlanCard from '@/components/plan-card/PlanCard';
 import { mockUser } from '../../../mock-data/mockUser';
 import { mockPlans } from '../../../mock-data/mockPlans';
 import CreatePlan from '../create-plan/CreatePlan';
-import type { PlannedPlace } from '../create-plan/plan-place/types';
 
 const CREATE_ITEM = { id: '__create__', title: 'Create a plan', placeCount: 0, imageUrl: undefined };
 
@@ -24,7 +23,6 @@ type MyPlanProps = {
   compact?: boolean;
   /** Called when create-plan mode is entered or exited, so the parent can adjust panel height */
   onCreateModeChange?: (active: boolean) => void;
-  onOpenAddPlace?: (onSelect: (places: PlannedPlace[]) => void) => void;
 };
 
 export default function MyPlan({
@@ -33,7 +31,6 @@ export default function MyPlan({
   bottomInset = 0,
   compact = false,
   onCreateModeChange,
-  onOpenAddPlace,
 }: MyPlanProps) {
   const [showCreatePlan, setShowCreatePlan] = useState(false);
 
@@ -71,7 +68,6 @@ export default function MyPlan({
         onClose={() => setShowCreatePlan(false)}
         bottomInset={bottomInset}
         reportScrollY={onScroll ?? (() => {})}
-        onOpenAddPlace={onOpenAddPlace ?? (() => {})}
       />
     );
   }

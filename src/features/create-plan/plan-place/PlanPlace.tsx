@@ -6,6 +6,7 @@ import { createPlanCache, type DateRange } from '../CreatePlan';
 import { DndProvider } from './dnd/DndProvider';
 import AddPlaceField from './AddPlaceField';
 import AddPlaceInDate from './AddPlaceInDate';
+import { useHome } from '../../home/HomeContext';
 import { type PlacesState, type SlotKey, type PlannedPlace, type VisitSlot } from './types';
 
 type PlanPlaceProps = {
@@ -13,7 +14,6 @@ type PlanPlaceProps = {
   location: string;
   range: DateRange;
   reportScrollY: (y: number) => void;
-  onOpenAddPlace: (onSelect: (places: PlannedPlace[]) => void) => void;
 };
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -30,7 +30,8 @@ function formatRangeSummary(location: string, range: DateRange): string {
   return location ? `${location} · ${startStr} – ${endStr}` : `${startStr} – ${endStr}`;
 }
 
-export default function PlanPlace({ onBack, location, range, reportScrollY, onOpenAddPlace }: PlanPlaceProps) {
+export default function PlanPlace({ onBack, location, range, reportScrollY }: PlanPlaceProps) {
+  const { setOverlay } = useHome();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
 
   function updatePlaces(updater: (prev: PlacesState) => PlacesState) {
@@ -42,24 +43,30 @@ export default function PlanPlace({ onBack, location, range, reportScrollY, onOp
   }
 
   function openForFree() {
-    onOpenAddPlace((newPlaces) => {
-      updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
+    setOverlay({
+      kind: 'addPlace',
+      onSelect: (newPlaces) => {
+        updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
+      },
     });
   }
 
   function openForSlot(date: string, slot: VisitSlot) {
-    onOpenAddPlace((newPlaces) => {
-      updatePlaces((prev) => {
-        const prevByDate = (prev.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
-        const prevSlot = prevByDate[slot] ?? [];
-        return {
-          ...prev,
-          byDate: {
-            ...prev.byDate,
-            [date]: { ...prevByDate, [slot]: [...prevSlot, ...newPlaces] },
-          },
-        };
-      });
+    setOverlay({
+      kind: 'addPlace',
+      onSelect: (newPlaces) => {
+        updatePlaces((prev) => {
+          const prevByDate = (prev.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
+          const prevSlot = prevByDate[slot] ?? [];
+          return {
+            ...prev,
+            byDate: {
+              ...prev.byDate,
+              [date]: { ...prevByDate, [slot]: [...prevSlot, ...newPlaces] },
+            },
+          };
+        });
+      },
     });
   }
 

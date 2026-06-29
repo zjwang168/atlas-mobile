@@ -2,48 +2,102 @@
 
 ## Overview
 
-The home screen is the root of the app. It layers a full-screen map, a draggable content panel, a place-detail overlay, and a bottom navigation bar. All state that needs to cross these layers (active tab, parse results, selected place) lives in `HomeScreen` and is passed down as props.
-
-## File Structure
+The home screen layers a full-screen map, a draggable content panel, and overlay panels (place detail, add place). All cross-cutting state lives in `HomeContext` — the single API surface for this feature.
 
 ```
-src/features/home/
-  HomeScreen.tsx   ← root screen: map + panel + place detail + bottom bar
-  HomePanel.tsx    ← content panel switcher: My Places vs Plan Mode
+HomeScreen  (HomeProvider)
+├── MapboxMap          ← full-screen, behind everything
+├── HomePanel          ← draggable bottom panel; hidden when any overlay is active
+├── PlaceDetail        ← slides up when overlay.kind === 'placeDetail'
+├── AddPlace           ← slides up when overlay.kind === 'addPlace'
+└── BottomBar          ← always on top
 ```
 
-## Component Hierarchy
+---
 
+## `HomeContext`
+
+**`src/features/home/HomeContext.tsx`** — the only import consumers need.
+
+### `useHome()`
+
+```ts
+const { overlay, setOverlay } = useHome();
 ```
-HomeScreen
-├── MapboxMap               ← full-screen, behind everything
-├── HomePanel               ← draggable bottom content panel
-│   ├── MyPlaces            ← active when tab = 'myPlaces'
-│   └── PlanMode            ← active when tab = 'travelPlan'
-├── PlaceDetail             ← overlay, slides up when a place is selected
-└── BottomBar               ← tab pill + add-place button, always on top
+
+| Value | Type | Description |
+|---|---|---|
+| `overlay` | `Overlay` | Currently active overlay |
+| `setOverlay` | `(o: Overlay) => void` | Opens or closes an overlay |
+
+### `PANEL_HEIGHT`
+
+Static height constants for the bottom panel.
+
+```ts
+import { PANEL_HEIGHT } from '@/features/home/HomeContext';
+
+PANEL_HEIGHT.default      // SCREEN_HEIGHT * 0.55
+PANEL_HEIGHT.createPlan   // SCREEN_HEIGHT * 0.70
 ```
 
-## State Ownership
+### `Overlay` type
 
-All shared state lives in `HomeScreen`:
+```ts
+type Overlay =
+  | { kind: 'none' }
+  | { kind: 'placeDetail'; placeName: string }
+  | { kind: 'addPlace'; onSelect: (places: PlannedPlace[]) => void };
+```
 
-| State | Purpose |
-|---|---|
-| `selectedPlaceName` | Drives the PlaceDetail overlay (null = hidden) |
-| `activeTab` | Switches HomePanel between My Places and Plan Mode |
-| `parseResult` | Route data from the backend parse flow |
-| `isLoading / error` | Loading and error state for the parse flow |
-| `messages` | Chat message thread shown in Plan Mode |
+---
 
-## Parse-Route Flow
+## Usage Examples
 
-The parse flow (submit URL → backend → route on map) is owned by `HomeScreen`. The entry point (currently a placeholder) will live inside `PlanMode`. When a URL is submitted:
+### Open place detail
+```ts
+const { setOverlay } = useHome();
 
-1. `PlanMode` calls up via a prop callback
-2. `HomeScreen` calls `parseLink()` and updates `parseResult`, `messages`, `isLoading`, `error`
-3. The new route is reflected on `MapboxMap` and in `PlanMode`'s message thread
+setOverlay({ kind: 'placeDetail', placeName: 'Noma Restaurant' });
+```
 
-## Navigation
+### Open add-place and receive the result
+```ts
+const { setOverlay } = useHome();
 
-`HomeScreen` receives `onOpenImport` from `App.tsx` to open the import overlay. No router is used — App.tsx manages screen-level overlays directly.
+setOverlay({
+  kind: 'addPlace',
+  onSelect: (places) => {
+    // places: PlannedPlace[] — insert wherever needed
+  },
+});
+```
+
+`HomeScreen` calls `onSelect` and resets to `{ kind: 'none' }` automatically when the user confirms.
+
+### Dismiss any overlay
+```ts
+setOverlay({ kind: 'none' });
+```
+
+### Read panel height (e.g. to size a sibling panel)
+```ts
+import { PANEL_HEIGHT } from '@/features/home/HomeContext';
+
+// Pin a panel to the same height as the create-plan panel
+<ContentPanel defaultSnapHeight={PANEL_HEIGHT.createPlan} />
+```
+
+---
+
+## `HomeProvider`
+
+Wrap the root of the feature tree. Already done inside `HomeScreen` — no setup needed elsewhere.
+
+```tsx
+import { HomeProvider } from '@/features/home/HomeContext';
+
+<HomeProvider>
+  <HomeScreen />
+</HomeProvider>
+```
