@@ -15,14 +15,16 @@ const ICON_PLAN_FILL = require('../../../assets/tabs/tab-plan-fill.png');
 // "+" — single state, rendered as-is (always dark) via imageSource.
 const ICON_ADD = require('../../../assets/tabs/tab-add.png');
 import { mockUser } from '../../../mock-data/mockUser';
-import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
+import { GeocodedLocation, ParseResult } from '../../types/route';
 import TopNav from '../../components/top-nav/TopNav';
 import PlaceDetail from '../place-detail/PlaceDetail';
+import PlanDetail from '../my-plan/plan-detail/PlanDetail';
+import AddPlaceToPlan from '../my-plan/add-place-to-plan/AddPlaceToPlan';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
+import { HomeProvider, useHome, PANEL_HEIGHT } from './HomeContext';
 
 // ---- Types ----
 
@@ -74,19 +76,29 @@ const toRouteGeoJSON = (
   },
 });
 
-// ---- Component ----
+// ---- Root export — provides the Home context ----
 
-const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
+export default function HomeScreen({ onOpenImport }: HomeScreenProps) {
+  return (
+    <HomeProvider>
+      <HomeScreenContent onOpenImport={onOpenImport} />
+    </HomeProvider>
+  );
+}
+
+// ---- Inner component — consumes the context ----
+
+function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
+  const { overlay, setOverlay } = useHome();
   const defaultMarkers = useMemo(() => toMapMarkers(mockPlaces), []);
 
-  const [selectedPlaceName, setSelectedPlaceName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
   // Provenance of the last navigation state acknowledged by the native side.
   const [provenance, setProvenance] = useState(0);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
 
-  // Parse-route flow state
+  // Parse-route flow state (route rendered on the plan tab map)
   const [parseResult] = useState<ParseResult | null>(null);
 
   const hasRouteData = parseResult !== null && parseResult.locations.length > 0;
@@ -126,6 +138,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     setAddMenuOpen(true);
   }, []);
 
+  // The draggable panel hides whenever a full-screen overlay is up.
+  const panelVisible = overlay.kind === 'none';
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
@@ -150,7 +165,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
               markers={defaultMarkers}
               centerCoordinate={[-122.3321, 47.6062]}
               zoomLevel={12}
-              onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
+              onMarkerPress={(marker) =>
+                setOverlay({ kind: 'placeDetail', placeName: marker.title ?? '' })
+              }
             />
             {/* Top scrim — progressive blur so the status bar + controls stay
                 legible over the map. Above the map, below the controls. */}
@@ -161,7 +178,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
             <ContentPanel
               initialSnap="default"
               zIndex={30}
-              visible={selectedPlaceName === null}
+              visible={panelVisible}
               compactContent={() => (
                 <MyPlaces
                   compact
@@ -172,7 +189,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
             >
               {({ reportScrollY }) => (
                 <MyPlaces
-                  onPlacePress={(place) => setSelectedPlaceName(place.name)}
+                  onPlacePress={(place) =>
+                    setOverlay({ kind: 'placeDetail', placeName: place.name })
+                  }
                   onScroll={reportScrollY}
                   avatarUri={mockUser.avatarUri}
                   avatarFallback={mockUser.avatarFallback}
@@ -198,22 +217,21 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
               zoomLevel={hasRouteData ? 10 : 12}
               routeGeoJSON={routeGeoJSON}
               routeMarkers={routeMarkers}
-              onMarkerPress={(marker) => setSelectedPlaceName(marker.title ?? null)}
+              onMarkerPress={(marker) =>
+                setOverlay({ kind: 'placeDetail', placeName: marker.title ?? '' })
+              }
             />
             <TopBlurFade />
             <TopNav />
             <ContentPanel
               initialSnap="default"
               zIndex={30}
-              visible={selectedPlaceName === null}
-              defaultSnapHeight={isCreatingPlan ? CREATE_PLAN_HEIGHT : undefined}
+              visible={panelVisible}
+              defaultSnapHeight={isCreatingPlan ? PANEL_HEIGHT.createPlan : undefined}
               compactContent={() => <MyPlan compact />}
             >
               {({ reportScrollY }) => (
-                <MyPlan
-                  onScroll={reportScrollY}
-                  onCreateModeChange={setIsCreatingPlan}
-                />
+                <MyPlan onScroll={reportScrollY} onCreateModeChange={setIsCreatingPlan} />
               )}
             </ContentPanel>
           </View>
@@ -247,15 +265,29 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         }}
       />
 
-      {/* PlaceDetail overlay stays above the tab controller (full-screen detail). */}
+      {/* Full-screen overlays — driven by HomeContext, above the tab controller. */}
       <PlaceDetail
-        placeName={selectedPlaceName}
-        onDismiss={() => setSelectedPlaceName(null)}
+        placeName={overlay.kind === 'placeDetail' ? overlay.placeName : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+      />
+
+      <PlanDetail
+        planId={overlay.kind === 'planDetail' ? overlay.planId : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
+      />
+
+      <AddPlaceToPlan
+        visible={overlay.kind === 'addPlaceToPlan'}
+        onDismiss={() => setOverlay({ kind: 'none' })}
+        onSelect={(places) => {
+          if (overlay.kind === 'addPlaceToPlan') overlay.onSelect(places);
+          setOverlay({ kind: 'none' });
+        }}
       />
     </View>
   );
-};
+}
 
 // ---- Styles ----
 
@@ -268,5 +300,3 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 });
-
-export default HomeScreen;

@@ -7,14 +7,6 @@ import { typography } from '@/theme/typography';
 import { mockPlaceDetails } from '../../../../mock-data/mockPlaceDetails';
 import { PlaceDetail } from '@/types/place';
 
-const MOCK_DATES = [
-  'May 31, 2025',
-  'Jun 2, 2025',
-  'Jun 8, 2025',
-  'Jun 15, 2025',
-  'Jun 22, 2025',
-];
-
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
   bottomInset?: number;
@@ -48,14 +40,14 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
       ItemSeparatorComponent={() => (
         <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
       )}
-      renderItem={({ item, index }) => (
+      renderItem={({ item }) => (
         <View style={{ paddingHorizontal: 16 }}>
           <PlaceCard
             name={item.name}
             description={item.summary}
             imageUrl={item.thumbnailUrl}
             tags={item.tags}
-            date={MOCK_DATES[index % MOCK_DATES.length]}
+            date={item.savedAt}
             onPress={() => onPlacePress?.(item)}
           />
         </View>

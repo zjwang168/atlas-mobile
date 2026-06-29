@@ -8,8 +8,7 @@
 
 ```
 src/features/place-detail/
-  PlaceDetail.tsx                        ← panel container, snap logic, PlaceHeader
-  PlaceCompactView.tsx                   ← compact snap: name, address, action buttons
+  PlaceDetail.tsx                        ← panel container, snap logic, PlaceHeader, PlaceCompactView
   place-detail-sections/
     PlaceOverviewSection.tsx             ← thumbnail, address, open status, action row
     PlaceInfoSection.tsx                 ← tags, summary, visit strategy, links, note
@@ -20,9 +19,9 @@ src/features/place-detail/
 
 Related files outside this directory:
 ```
-src/types/place.ts                       ← Place, PlaceDetail, DaySchedule, PlaceTag, PlaceLink
-src/data/mockPlaces.ts                   ← Place[] used for map markers
-src/data/mockPlaceDetails.ts             ← PlaceDetail[] + findPlaceDetail(name)
+src/types/place.ts                         ← canonical types: Place, PlaceDetail, DaySchedule, PlaceTag, PlaceLink
+mock-data/mockPlaces.ts                    ← Place[] used for map markers
+mock-data/mockPlaceDetails.ts              ← PlaceDetail[] + findPlaceDetail(name) + findPlaceDetailById(id)
 ```
 
 ## Data Model
@@ -43,13 +42,12 @@ type PlaceDetail = Place & {
   thumbnailUrl: string;
   schedule: DaySchedule[];
   tags: PlaceTag[];
+  collections?: PlaceTag[];
   summary: string;
   visitStrategy: string;
-  priceRange: 1 | 2 | 3 | 4;
+  note?: string;
   phoneNumber?: string;
   links?: PlaceLink[];
-  note?: string;
-  collections?: PlaceTag[];
 };
 ```
 
@@ -57,7 +55,7 @@ type PlaceDetail = Place & {
 
 | State | Height | Content |
 |---|---|---|
-| `compact` | Dynamic (from `PlaceCompactView` layout) | `PlaceCompactView` — name, address, share/map/close |
+| `compact` | Dynamic (measured from layout) | `PlaceCompactView` — name, address, share/map/close |
 | `default` | 60% of screen | `PlaceHeader` + `PlaceOverviewSection` + `PlaceInfoSection` |
 | `full` | 100% of screen | Same as default, with `paddingTop: insets.top` |
 
@@ -89,9 +87,24 @@ type PlaceDetailProps = {
 
 Changing `placeName` from `null → string` triggers the enter animation and `findPlaceDetail` lookup. Changing back to `null` triggers the dismiss animation.
 
-## Hours Utility
+## Hours Utility (`utils/placeHours.ts`)
 
-`getOpenStatus(schedule)` derives open/closed state at runtime from `new Date()` — never stored on the model so it cannot go stale. Returns `{ isOpen, todayLabel, statusLine }`.
+```ts
+type OpenStatus = {
+  isOpen: boolean;
+  todayLabel: string;   // e.g. "9:00 AM – 10:00 PM"
+  statusLine: string;   // e.g. "Open · Closes at 10:00 PM" or "Closed · Opens Mon at 9:00 AM"
+};
+
+// Derives open/closed state at runtime from new Date() — never stored so it can't go stale
+export function getOpenStatus(schedule: DaySchedule[]): OpenStatus
+
+// Formats a TimeSlot[] into a human-readable hours string
+export function formatDaySlots(slots: TimeSlot[]): string
+
+// Mon-indexed day order used for schedule lookup
+export const orderedDays: DayOfWeek[]
+```
 
 ## Styling
 

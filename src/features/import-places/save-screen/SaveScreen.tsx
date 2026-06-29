@@ -16,11 +16,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import TopBlurFade from '../../components/ui/top-blur-fade';
-import MapboxMap, { type MapMarker } from '../map/MapboxMap';
-import PlaceDetail from '../place-detail/PlaceDetail';
-import type { ParseResult } from '../../services/import/importService';
-import { typography } from '../../theme/typography';
+import TopBlurFade from '../../../components/ui/top-blur-fade';
+import MapboxMap, { type MapMarker } from '../../map/MapboxMap';
+import PlaceDetail from '../../place-detail/PlaceDetail';
+import type { ParseResult } from '../../../services/import/importService';
+import { typography } from '../../../theme/typography';
 
 const COLOR = {
   primary: '#12C170',

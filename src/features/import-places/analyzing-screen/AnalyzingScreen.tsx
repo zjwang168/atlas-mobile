@@ -12,7 +12,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 
-import { typography } from '../../theme/typography';
+import { typography } from '../../../theme/typography';
 
 const COLOR = {
   textPrimary: '#1A1A1A',

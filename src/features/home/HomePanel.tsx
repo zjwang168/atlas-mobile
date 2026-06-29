@@ -6,7 +6,7 @@ import { Place } from '../../types/place';
 import { ChatMessage, ParseResult } from '../../types/route';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
+import { useHome, PANEL_HEIGHT } from './HomeContext';
 
 const BOTTOM_BAR_CLEARANCE = 84;
 
@@ -18,24 +18,27 @@ type HomePanelProps = {
   messages: ChatMessage[];
   onSendMessage: (text: string) => void;
   error: string | null;
-  onPlacePress?: (place: Place) => void;
-  visible?: boolean;
 };
 
 export default function HomePanel({
   activeTab,
-  onPlacePress,
-  visible,
+  parseResult,
+  isLoading,
+  loadingMessage,
+  messages,
+  onSendMessage,
+  error,
 }: HomePanelProps) {
+  const { overlay, setOverlay } = useHome();
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
   return (
     <ContentPanel
       initialSnap="default"
       zIndex={30}
-      visible={visible}
-      defaultSnapHeight={activeTab === 'travelPlan' && isCreatingPlan ? CREATE_PLAN_HEIGHT : undefined}
-      compactContent={({ snapTo }) =>
+      visible={overlay.kind === 'none'}
+      defaultSnapHeight={activeTab === 'travelPlan' && isCreatingPlan ? PANEL_HEIGHT.createPlan : undefined}
+      compactContent={() =>
         activeTab === 'myPlaces' ? (
           <MyPlaces
             compact
@@ -51,7 +54,9 @@ export default function HomePanel({
         <>
           <View style={{ display: activeTab === 'myPlaces' ? 'flex' : 'none', flex: 1 }}>
             <MyPlaces
-              onPlacePress={onPlacePress}
+              onPlacePress={(place: Place) =>
+                setOverlay({ kind: 'placeDetail', placeName: place.name })
+              }
               onScroll={reportScrollY}
               bottomInset={BOTTOM_BAR_CLEARANCE}
               avatarUri={mockUser.avatarUri}

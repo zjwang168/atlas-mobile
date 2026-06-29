@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, type TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { typography } from '../../theme/typography';
+import { typography } from '../../../theme/typography';
 
 // Semantic colors — mirror the SPARC Figma color tokens.
 const COLOR = {

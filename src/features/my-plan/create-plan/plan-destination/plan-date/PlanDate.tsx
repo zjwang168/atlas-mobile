@@ -1,6 +1,5 @@
 import { Calendar, DateData } from 'react-native-calendars';
-
-type DateRange = { start: string | null; end: string | null };
+import type { DateRange } from '../../CreatePlan';
 
 type PlanDateProps = {
   range: DateRange;

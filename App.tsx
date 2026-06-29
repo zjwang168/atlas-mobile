@@ -7,9 +7,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PortalHost } from '@rn-primitives/portal';
 
 import HomeScreen from './src/features/home/HomeScreen';
-import ImportScreen from './src/features/import/ImportScreen';
-import AnalyzingScreen from './src/features/import/AnalyzingScreen';
-import SaveScreen from './src/features/import/SaveScreen';
+import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
+import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
+import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
 import { parseLink, type ParseResult } from './src/services/import/importService';
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';

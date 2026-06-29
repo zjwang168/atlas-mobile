@@ -46,4 +46,5 @@ export type PlaceDetail = Place & {
   note?: string;
   phoneNumber?: string;
   links?: PlaceLink[];
+  savedAt: string;
 };
