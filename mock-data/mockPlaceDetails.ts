@@ -85,6 +85,7 @@ export const mockPlaceDetails: PlaceDetail[] = [
       { label: 'Reservations', url: 'https://example.com/noma/reservations' },
       { label: 'Sample Menu', url: 'https://example.com/noma/menu' },
     ],
+    savedAt: 'May 31, 2025',
   },
   {
     id: '2',
@@ -117,6 +118,7 @@ export const mockPlaceDetails: PlaceDetail[] = [
     note: 'The uni course at dinner is exceptional when available — worth asking about when you call. Lunch is the better value by a wide margin.',
     phoneNumber: '+1 206-555-0274',
     links: [],
+    savedAt: 'Jun 2, 2025',
   },
   {
     id: '3',
@@ -139,6 +141,7 @@ export const mockPlaceDetails: PlaceDetail[] = [
     visitStrategy:
       'Drop in before ten in the morning for the quietest tables and the freshest pastries. The corner window seat opens up most weekday mornings around nine when the early crowd moves on.\n\nAvoid the noon hour on weekdays — the lunch rush from the surrounding offices fills the counter quickly and service slows noticeably.',
     note: 'The oat milk flat white is consistently good. Pastries sell out by 10:30 most days — the almond croissant goes first.',
+    savedAt: 'Jun 8, 2025',
   },
   {
     id: '4',
@@ -170,6 +173,7 @@ export const mockPlaceDetails: PlaceDetail[] = [
       { label: 'Instagram', url: 'https://example.com/gastropub/instagram' },
       { label: 'Newsletter', url: 'https://example.com/gastropub/newsletter' },
     ],
+    savedAt: 'Jun 15, 2025',
   },
   {
     id: '5',
@@ -214,6 +218,7 @@ export const mockPlaceDetails: PlaceDetail[] = [
       { label: 'Menu', url: 'https://example.com/sakura-ramen/menu' },
       { label: 'Instagram', url: 'https://example.com/sakura-ramen/instagram' },
     ],
+    savedAt: 'Jun 22, 2025',
   },
 ];
 
