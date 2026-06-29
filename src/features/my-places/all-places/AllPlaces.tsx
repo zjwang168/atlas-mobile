@@ -23,7 +23,7 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
       data={mockPlaceDetails}
       keyExtractor={(item) => item.id}
       style={{ flex: 1 }}
-      contentContainerStyle={{ paddingBottom: bottomInset + 100 }}
+      contentContainerStyle={{ paddingBottom: bottomInset + 20 }}
       onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
       scrollEventThrottle={16}
       ListHeaderComponent={

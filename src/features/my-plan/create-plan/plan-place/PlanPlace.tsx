@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import { createPlanCache, type DateRange } from '../CreatePlan';
@@ -16,7 +17,6 @@ type PlanPlaceProps = {
   location: string;
   range: DateRange;
   reportScrollY: (y: number) => void;
-  bottomInset?: number;
 };
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -33,8 +33,9 @@ function formatRangeSummary(location: string, range: DateRange): string {
   return location ? `${location} · ${startStr} – ${endStr}` : `${startStr} – ${endStr}`;
 }
 
-export default function PlanPlace({ onBack, onConfirm, location, range, reportScrollY, bottomInset = 0 }: PlanPlaceProps) {
+export default function PlanPlace({ onBack, onConfirm, location, range, reportScrollY }: PlanPlaceProps) {
   const { setOverlay } = useHome();
+  const insets = useSafeAreaInsets();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
 
   function updatePlaces(updater: (prev: PlacesState) => PlacesState) {
@@ -139,34 +140,36 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
   return (
     <DndProvider onDrop={handleDrop} reportScrollYToPanel={reportScrollY}>
-      <View style={{ paddingHorizontal: 16 }}>
-        <Text style={{ fontSize: 14, color: '#71717a', marginBottom: 16 }}>{summary}</Text>
+      <View style={{ flex: 1 }}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={{ fontSize: 14, color: '#71717a', marginBottom: 16 }}>{summary}</Text>
 
-        <AddPlaceField
-          label="Flexible"
-          places={places.free}
-          slotKey={{ kind: 'free' }}
-          onAdd={openForFree}
-          onRemove={handleRemoveFree}
-        />
-      </View>
-
-      {range.start && (
-        <View style={{ flex: 1, marginTop: 16 }}>
-          <AddPlaceInDate
-            range={range}
-            byDate={places.byDate}
-            onAdd={openForSlot}
-            onRemove={handleRemoveDated}
+          <AddPlaceField
+            label="Flexible"
+            places={places.free}
+            slotKey={{ kind: 'free' }}
+            onAdd={openForFree}
+            onRemove={handleRemoveFree}
           />
         </View>
-      )}
 
-      <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 8, paddingBottom: bottomInset }}>
-        <Button variant="secondary" onPress={onBack} size="lg" className="flex-1 rounded-xl">
+        {range.start && (
+          <View style={{ flex: 1, marginTop: 16 }}>
+            <AddPlaceInDate
+              range={range}
+              byDate={places.byDate}
+              onAdd={openForSlot}
+              onRemove={handleRemoveDated}
+            />
+          </View>
+        )}
+      </View>
+
+      <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 20, paddingTop: 8, paddingBottom: insets.bottom + 16 }}>
+        <Button variant="secondary" onPress={onBack} size="lg" className="flex-1 rounded-full">
           <Text>Back</Text>
         </Button>
-        <Button onPress={handleConfirm} size="lg" className="flex-1 rounded-xl">
+        <Button onPress={handleConfirm} size="lg" className="flex-1 rounded-full">
           <Text>Confirm</Text>
         </Button>
       </View>

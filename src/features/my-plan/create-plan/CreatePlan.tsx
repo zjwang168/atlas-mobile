@@ -26,13 +26,12 @@ const STEPS: CreatePlanStep[] = ['destination', 'places'];
 type CreatePlanProps = {
   onClose: () => void;
   onPlanCreated?: (plan: SavedPlan) => void;
-  bottomInset?: number;
   reportScrollY: (y: number) => void;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
-export default function CreatePlan({ onClose, onPlanCreated, bottomInset = 0, reportScrollY }: CreatePlanProps) {
+export default function CreatePlan({ onClose, onPlanCreated, reportScrollY }: CreatePlanProps) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
@@ -96,7 +95,6 @@ export default function CreatePlan({ onClose, onPlanCreated, bottomInset = 0, re
       {step === 'destination' && (
         <PlanDestination
           onNext={goNext}
-          bottomInset={bottomInset}
           location={location}
           onLocationChange={handleLocationChange}
           range={range}
@@ -110,7 +108,6 @@ export default function CreatePlan({ onClose, onPlanCreated, bottomInset = 0, re
           location={location}
           range={range}
           reportScrollY={reportScrollY}
-          bottomInset={bottomInset}
         />
       )}
     </View>

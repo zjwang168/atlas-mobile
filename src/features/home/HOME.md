@@ -28,24 +28,15 @@ HomeScreen  (HomeProvider)
 ### `useHome()`
 
 ```ts
-const { overlay, setOverlay } = useHome();
+const { overlay, setOverlay, tabBarVisible, setTabBarVisible } = useHome();
 ```
 
 | Value | Type | Description |
 |---|---|---|
 | `overlay` | `Overlay` | Currently active overlay |
 | `setOverlay` | `(o: Overlay) => void` | Opens or closes an overlay |
-
-### `PANEL_HEIGHT`
-
-Static height constants for the bottom panel.
-
-```ts
-import { PANEL_HEIGHT } from '@/features/home/HomeContext';
-
-PANEL_HEIGHT.default      // SCREEN_HEIGHT * 0.55
-PANEL_HEIGHT.createPlan   // SCREEN_HEIGHT * 0.70
-```
+| `tabBarVisible` | `boolean` | Whether the native tab bar is shown |
+| `setTabBarVisible` | `(visible: boolean) => void` | Fade the tab bar in or out (220 ms) |
 
 ### `Overlay` type
 

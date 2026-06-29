@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { StatusBar, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, StatusBar, StyleSheet, View } from 'react-native';
 
 import AddMenu from '../../components/add-menu/AddMenu';
 import TopBlurFade from '../../components/ui/top-blur-fade';
@@ -72,7 +72,16 @@ export default function HomeScreen({ onOpenImport }: HomeScreenProps) {
 // ---- Inner component — consumes the context ----
 
 function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
-  const { overlay, setOverlay } = useHome();
+  const { overlay, setOverlay, tabBarVisible } = useHome();
+  const tabBarOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.timing(tabBarOpacity, {
+      toValue: tabBarVisible ? 1 : 0,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [tabBarVisible]);
   const defaultMarkers = useMemo(() => toMapMarkers(mockPlaces), []);
 
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
@@ -137,12 +146,17 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
       {/* Single content panel — preserves snap state and scroll position across tab switches */}
       <HomePanel activeTab={activeTab} visible={panelVisible} />
 
-      {/* Native tab bar */}
-      <HomeTabBar
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-        onAddPress={handleAddPress}
-      />
+      {/* Native tab bar — fades out when overlay features request it */}
+      <Animated.View
+        style={{ opacity: tabBarOpacity }}
+        pointerEvents={tabBarVisible ? 'box-none' : 'none'}
+      >
+        <HomeTabBar
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          onAddPress={handleAddPress}
+        />
+      </Animated.View>
 
       {/* "+" pop-up menu */}
       <AddMenu

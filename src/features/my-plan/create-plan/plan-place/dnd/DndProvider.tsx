@@ -135,7 +135,6 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
     shadowRadius: 8,
     elevation: 8,
     zIndex: 100,
-    pointerEvents: 'none' as const,
   }));
 
   return (

@@ -39,16 +39,13 @@ export default function PlaceDetail({ placeName, onDismiss, onEdit: _onEdit }: P
     <ContentPanel
       initialSnap="default"
       visible={isVisible}
-      onHidden={() => {
-        setPlace(null);
-        onDismiss();
-      }}
+      onHidden={() => setPlace(null)}
       zIndex={40}
       compactContent={({ snapTo }) =>
         place ? (
           <PlaceCompactView
             place={place}
-            onDismiss={() => setIsVisible(false)}
+            onDismiss={onDismiss}
             onExpand={() => snapTo('default')}
           />
         ) : null
@@ -60,7 +57,7 @@ export default function PlaceDetail({ placeName, onDismiss, onEdit: _onEdit }: P
           <>
             <PlaceHeader
               place={place}
-              onDismiss={() => setIsVisible(false)}
+              onDismiss={onDismiss}
             />
             <ScrollView
               bounces

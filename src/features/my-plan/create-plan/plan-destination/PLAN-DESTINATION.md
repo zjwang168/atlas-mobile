@@ -19,7 +19,6 @@ src/features/my-plan/create-plan/plan-destination/
 ```ts
 type PlanDestinationProps = {
   onNext: () => void;
-  bottomInset?: number;         // default: 0 — safe-area inset for the CTA button
   location: string;
   onLocationChange: (value: string) => void;
   range: DateRange;

@@ -5,7 +5,7 @@ import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place } from '../../types/place';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import { useHome, PANEL_HEIGHT } from './HomeContext';
+import { useHome } from './HomeContext';
 import { TAB_PLAN } from './HomeTabBar';
 
 const BOTTOM_BAR_CLEARANCE = 84;
@@ -23,7 +23,7 @@ export default function HomePanel({ activeTab, visible }: HomePanelProps) {
     <ContentPanel
       initialSnap="default"
       visible={visible}
-      defaultSnapHeight={activeTab === TAB_PLAN && isCreatingPlan ? PANEL_HEIGHT.createPlan : undefined}
+      snapState={activeTab === TAB_PLAN && isCreatingPlan ? 'full' : undefined}
       compactContent={({ snapTo }) =>
         activeTab !== TAB_PLAN ? (
           <MyPlaces

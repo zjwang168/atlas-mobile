@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { FlatList, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
@@ -37,11 +37,19 @@ export default function MyPlan({
 }: MyPlanProps) {
   const [showCreatePlan, setShowCreatePlan] = useState(false);
   const { plans, editMode, toggleEditMode, requestDelete, addPlan } = usePlanDelete();
-  const { setOverlay } = useHome();
+  const { setOverlay, setTabBarVisible } = useHome();
 
-  useEffect(() => {
-    onCreateModeChange?.(showCreatePlan);
-  }, [showCreatePlan]);
+  function enterCreateMode() {
+    setShowCreatePlan(true);
+    onCreateModeChange?.(true);
+    setTabBarVisible(false);
+  }
+
+  function exitCreateMode() {
+    setShowCreatePlan(false);
+    onCreateModeChange?.(false);
+    setTabBarVisible(true);
+  }
 
   if (compact) {
     return (
@@ -69,16 +77,15 @@ export default function MyPlan({
 
   function handlePlanCreated(plan: SavedPlan) {
     addPlan({ id: plan.id, title: plan.title, placeCount: plan.placeCount, imageUrl: plan.imageUrl });
-    setShowCreatePlan(false);
+    exitCreateMode();
     setOverlay({ kind: 'planDetail', planId: plan.id });
   }
 
   if (showCreatePlan) {
     return (
       <CreatePlan
-        onClose={() => setShowCreatePlan(false)}
+        onClose={exitCreateMode}
         onPlanCreated={handlePlanCreated}
-        bottomInset={bottomInset}
         reportScrollY={onScroll ?? (() => {})}
       />
     );
@@ -131,7 +138,7 @@ export default function MyPlan({
               deletionMode={editMode}
               onPress={
                 item.id === '__create__'
-                  ? () => setShowCreatePlan(true)
+                  ? enterCreateMode
                   : item.id === '__spacer__'
                   ? undefined
                   : () => setOverlay({ kind: 'planDetail', planId: item.id })

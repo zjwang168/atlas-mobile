@@ -40,7 +40,6 @@ Top-level wizard component.
 type CreatePlanProps = {
   onClose: () => void;                   // user discards the plan
   onPlanCreated?: (plan: SavedPlan) => void; // plan saved successfully
-  bottomInset?: number;                  // safe-area bottom inset for action buttons
   reportScrollY: (y: number) => void;    // forward to ContentPanel for gesture coordination
 };
 ```

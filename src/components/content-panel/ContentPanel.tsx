@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -144,7 +144,7 @@ export default function ContentPanel({
     if (height === undefined) return;
     Animated.timing(panelHeight, {
       toValue: height,
-      duration: 240,
+      duration: 260,
       useNativeDriver: false,
     }).start();
   }, [height]);
@@ -162,7 +162,7 @@ export default function ContentPanel({
     setSnapState('default');
     Animated.timing(panelHeight, {
       toValue: defaultSnapHeight,
-      duration: 240,
+      duration: 260,
       useNativeDriver: false,
     }).start();
   }, [defaultSnapHeight]);
@@ -193,8 +193,16 @@ export default function ContentPanel({
   };
 
   // Respond to controlled snapState changes from the parent
-  useEffect(() => {
-    if (controlledSnapState === undefined) return;
+  const prevControlledSnapState = useRef(controlledSnapState);
+  useLayoutEffect(() => {
+    const prev = prevControlledSnapState.current;
+    prevControlledSnapState.current = controlledSnapState;
+
+    if (controlledSnapState === undefined) {
+      // Control removed — return to initial position
+      if (prev !== undefined) snapTo(initialSnap);
+      return;
+    }
     if (controlledSnapState !== snapStateRef.current) {
       snapTo(controlledSnapState);
     }
@@ -211,17 +219,17 @@ export default function ContentPanel({
   useEffect(() => {
     if (visible === undefined) return;
     if (visible) {
-      snapTo(initialSnap, false);
+      snapTo(controlledSnapState ?? initialSnap, false);
       translateY.setValue(40);
       opacity.setValue(0);
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 0, duration: 280, useNativeDriver: false }),
-        Animated.timing(opacity, { toValue: 1, duration: 280, useNativeDriver: false }),
+        Animated.timing(translateY, { toValue: 0, duration: 260, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: false }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 40, duration: 220, useNativeDriver: false }),
-        Animated.timing(opacity, { toValue: 0, duration: 220, useNativeDriver: false }),
+        Animated.timing(translateY, { toValue: 40, duration: 260, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: false }),
       ]).start(({ finished }) => {
         if (finished) onHidden?.();
       });
