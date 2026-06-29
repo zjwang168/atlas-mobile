@@ -3,9 +3,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
-import { useDragCard } from './dnd/useDragCard';
-import { registerPlaceSlotCard } from './dnd/DndProvider';
-import type { PlannedPlace, SlotKey } from './types';
+import { useDragCard } from '../dnd/useDragCard';
+import { registerPlaceSlotCard } from '../dnd/DndProvider';
+import type { PlannedPlace, SlotKey } from '../types';
 
 type PlaceSlotCardProps = {
   place: PlannedPlace;

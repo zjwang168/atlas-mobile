@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import { createPlanCache, type DateRange } from '../CreatePlan';
 import { DndProvider } from './dnd/DndProvider';
-import AddPlaceField from './AddPlaceField';
-import AddPlaceInDate from './AddPlaceInDate';
+import AddPlaceField from './components/AddPlaceField';
+import AddPlaceInDate from './components/AddPlaceInDate';
 import { useHome } from '../../home/HomeContext';
 import { type PlacesState, type SlotKey, type PlannedPlace, type VisitSlot } from './types';
 
@@ -14,6 +14,7 @@ type PlanPlaceProps = {
   location: string;
   range: DateRange;
   reportScrollY: (y: number) => void;
+  bottomInset?: number;
 };
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -30,7 +31,7 @@ function formatRangeSummary(location: string, range: DateRange): string {
   return location ? `${location} · ${startStr} – ${endStr}` : `${startStr} – ${endStr}`;
 }
 
-export default function PlanPlace({ onBack, location, range, reportScrollY }: PlanPlaceProps) {
+export default function PlanPlace({ onBack, location, range, reportScrollY, bottomInset = 0 }: PlanPlaceProps) {
   const { setOverlay } = useHome();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
 
@@ -131,13 +132,7 @@ export default function PlanPlace({ onBack, location, range, reportScrollY }: Pl
 
   return (
     <DndProvider onDrop={handleDrop} reportScrollYToPanel={reportScrollY}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
-        showsVerticalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onScroll={(e) => reportScrollY(e.nativeEvent.contentOffset.y)}
-      >
+      <View style={{ paddingHorizontal: 16 }}>
         <Text style={{ fontSize: 14, color: '#71717a', marginBottom: 16 }}>{summary}</Text>
 
         <AddPlaceField
@@ -147,24 +142,27 @@ export default function PlanPlace({ onBack, location, range, reportScrollY }: Pl
           onAdd={openForFree}
           onRemove={handleRemoveFree}
         />
+      </View>
 
-        {range.start && (
-          <View style={{ marginTop: 16 }}>
-            <AddPlaceInDate
-              range={range}
-              byDate={places.byDate}
-              onAdd={openForSlot}
-              onRemove={handleRemoveDated}
-            />
-          </View>
-        )}
-
-        <View style={{ marginTop: 24 }}>
-          <Button variant="secondary" onPress={onBack} size="lg" className="rounded-xl">
-            <Text>Back</Text>
-          </Button>
+      {range.start && (
+        <View style={{ flex: 1, marginTop: 16 }}>
+          <AddPlaceInDate
+            range={range}
+            byDate={places.byDate}
+            onAdd={openForSlot}
+            onRemove={handleRemoveDated}
+          />
         </View>
-      </ScrollView>
+      )}
+
+      <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 8, paddingBottom: bottomInset }}>
+        <Button variant="secondary" onPress={onBack} size="lg" className="flex-1 rounded-xl">
+          <Text>Back</Text>
+        </Button>
+        <Button onPress={() => {}} size="lg" className="flex-1 rounded-xl">
+          <Text>Confirm</Text>
+        </Button>
+      </View>
     </DndProvider>
   );
 }

@@ -14,16 +14,17 @@ export function useDragCard(place: PlannedPlace, slotKey: SlotKey) {
     finishDrag,
   } = useDndContext();
 
-  const longPress = Gesture.LongPress()
-    .minDuration(400)
+  // activateAfterLongPress waits 400ms before the pan activates, which:
+  // 1. Tolerates slight finger movement during the hold (unlike Simultaneous(LongPress, Pan))
+  // 2. Properly defers ScrollView scroll until the drag activates
+  const pan = Gesture.Pan()
+    .activateAfterLongPress(400)
     .onStart((e) => {
       'worklet';
       isDragging.value = true;
       ghostY.value = e.absoluteY - containerScreenY.value;
       runOnJS(startDrag)(place, slotKey);
-    });
-
-  const pan = Gesture.Pan()
+    })
     .onChange((e) => {
       'worklet';
       if (!isDragging.value) return;
@@ -56,5 +57,5 @@ export function useDragCard(place: PlannedPlace, slotKey: SlotKey) {
       }
     });
 
-  return { gesture: Gesture.Simultaneous(longPress, pan) };
+  return { gesture: pan };
 }

@@ -3,10 +3,10 @@ import { Dimensions, ScrollView, View } from 'react-native';
 import { useAnimatedReaction, runOnJS } from 'react-native-reanimated';
 import { Text } from '@/components/ui/text';
 import AddPlaceField from './AddPlaceField';
-import { useDndContext } from './dnd/DndProvider';
-import { enumerateDates } from './utils';
-import { VISIT_SLOTS, type VisitSlot, type PlannedPlace } from './types';
-import type { DateRange } from '../CreatePlan';
+import { useDndContext } from '../dnd/DndProvider';
+import { enumerateDates } from '../utils';
+import { VISIT_SLOTS, type VisitSlot, type PlannedPlace } from '../types';
+import type { DateRange } from '../../CreatePlan';
 
 const COLUMN_WIDTH = Dimensions.get('window').width * 0.78;
 
@@ -43,30 +43,37 @@ export default function AddPlaceInDate({ range, byDate, onAdd, onRemove }: AddPl
   return (
     <ScrollView
       horizontal
+      style={{ flex: 1 }}
       showsHorizontalScrollIndicator={false}
       scrollEnabled={!scrollLocked}
-      contentContainerStyle={{ gap: 12, paddingRight: 16 }}
+      contentContainerStyle={{ gap: 12, paddingHorizontal: 16 }}
     >
       {dates.map((date) => {
         const { month, day } = formatColumnHeader(date);
         const slots = (byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
         return (
-          <View key={date} style={{ width: COLUMN_WIDTH }}>
+          <View key={date} style={{ width: COLUMN_WIDTH, flex: 1 }}>
             <View style={{ marginBottom: 12 }}>
               <Text style={{ fontSize: 15, fontWeight: '600', color: '#09090b' }}>{month}</Text>
               <Text style={{ fontSize: 13, color: '#71717a' }}>{day}</Text>
             </View>
 
-            {VISIT_SLOTS.map((slot) => (
-              <AddPlaceField
-                key={slot}
-                label={slot}
-                places={slots[slot] ?? []}
-                slotKey={{ kind: 'dated', date, slot }}
-                onAdd={() => onAdd(date, slot)}
-                onRemove={(id) => onRemove(date, slot, id)}
-              />
-            ))}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              scrollEnabled={!scrollLocked}
+              style={{ flex: 1 }}
+            >
+              {VISIT_SLOTS.map((slot) => (
+                <AddPlaceField
+                  key={slot}
+                  label={slot}
+                  places={slots[slot] ?? []}
+                  slotKey={{ kind: 'dated', date, slot }}
+                  onAdd={() => onAdd(date, slot)}
+                  onRemove={(id) => onRemove(date, slot, id)}
+                />
+              ))}
+            </ScrollView>
           </View>
         );
       })}

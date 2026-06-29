@@ -6,9 +6,9 @@ import { NativeOnlyAnimatedView } from '@/components/ui/native-only-animated-vie
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import PlaceSlotCard from './PlaceSlotCard';
-import { useDndContext } from './dnd/DndProvider';
-import type { PlannedPlace, SlotKey } from './types';
-import { slotKeyToString } from './types';
+import { useDndContext } from '../dnd/DndProvider';
+import type { PlannedPlace, SlotKey } from '../types';
+import { slotKeyToString } from '../types';
 
 type AddPlaceFieldProps = {
   label?: string;

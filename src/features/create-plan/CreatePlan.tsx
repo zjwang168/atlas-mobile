@@ -128,6 +128,7 @@ export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY }: 
           location={location}
           range={range}
           reportScrollY={reportScrollY}
+          bottomInset={bottomInset}
         />
       )}
     </View>
