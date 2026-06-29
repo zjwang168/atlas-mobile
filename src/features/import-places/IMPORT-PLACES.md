@@ -2,88 +2,83 @@
 
 ## Overview
 
-The Import Places flow lets users paste arbitrary text (links, notes, etc.) for Atlas to parse into structured place data. It is a two-screen flow: `ImportScreen` collects the raw input, `PreviewScreen` shows the extracted places for review before saving.
+The Import Places flow lets users paste a URL or freeform text for Atlas to parse into structured place data. It is a four-screen flow: `ImportScreen` collects the raw input, `AnalyzingScreen` shows an animated state while the parse runs, `SaveScreen` presents the extracted places on a live map for review and selection, and `PreviewScreen` is an older stub kept for reference.
 
 ## File Structure
 
 ```
 src/features/import-places/
   import-screen/
-    ImportScreen.tsx    ← input entry point (full-screen modal)
+    ImportScreen.tsx        ← input bottom sheet (92% snap)
+    IMPORT-SCREEN.md
+  analyzing-screen/
+    AnalyzingScreen.tsx     ← animated full-screen parse-in-progress state
+    ANALYZING-SCREEN.md
+  save-screen/
+    SaveScreen.tsx          ← results screen: live map + place selection panel
+    SAVE-SCREEN.md
   preview-screen/
-    PreviewScreen.tsx   ← extracted-places review sheet
-  IMPORT-PLACES.md      ← this document
+    PreviewScreen.tsx       ← older stub (hardcoded mock data); superseded by SaveScreen
+    PREVIEW-SCREEN.md
+  IMPORT-PLACES.md          ← this document
 ```
-
----
-
-## `ImportScreen`
-
-Full-screen input modal. The user types or pastes a link / freeform note, then taps the send button to submit.
-
-### Props
-
-```ts
-type ImportScreenProps = {
-  onClose: () => void;              // user dismissed without submitting
-  onSubmit: (text: string) => void; // user submitted; text is the raw input
-};
-```
-
-### Behaviour
-
-- Send button is disabled when the input is empty (trimmed).
-- Uses `KeyboardAvoidingView` so the composer stays above the keyboard on iOS.
-- The input is multiline with a max height of 150 dp before scrolling.
-
----
-
-## `PreviewScreen`
-
-Bottom sheet overlay showing the places extracted from the submitted content. The user can delete individual places before saving.
-
-### Props
-
-```ts
-type PreviewScreenProps = {
-  onClose: () => void;  // back to ImportScreen
-  onSave: () => void;   // save the displayed places
-};
-```
-
-### Status
-
-The extracted places list is currently hardcoded mock data (`extractedPlaces` inside the file). Wire to a real API response when the parse endpoint is ready.
-
----
-
-## Service Layer (stubs)
-
-When wiring real import logic, use these placeholder files — **do not create new service files**:
-
-| File | Purpose |
-|---|---|
-| `src/services/import/importService.ts` | Import parsing + place extraction service |
-| `src/types/import.ts` | Type definitions for import payloads and responses |
-
-Both are empty stubs. Add types to `import.ts` first, then implement `importService.ts` against those types.
 
 ---
 
 ## Screen Flow
 
 ```
-BottomBar.onAddPlace
+HomeTabBar "+" → AddMenu.onImportPlaces
   → HomeScreen.onOpenImport
-    → ImportScreen (user enters text)
-      → onSubmit(text) triggers parse
-        → PreviewScreen (user reviews extracted places)
-          → onSave() → save to place store → dismiss
-          → onClose() → back to ImportScreen
+    → ImportScreen (user pastes text / URL → onSubmit(text))
+      → AnalyzingScreen (parseLink(text) running → onCancel returns to ImportScreen)
+        → SaveScreen (result: ParseResult)
+            → onSave(selectedIds)   → persist places → dismiss flow
+            → onAddToPlan(selectedIds) → open plan flow → dismiss
+            → onClose()             → dismiss flow
 ```
+
+---
+
+## Service Layer
+
+`src/services/import/importService.ts` is active (not a stub). It exports:
+
+```ts
+export type ParsedPlace = {
+  id: string;
+  name: string;
+  subtitle: string;
+  type: string;
+  latitude: number;
+  longitude: number;
+  imageUri?: string;
+};
+
+export type ParseResult = {
+  sourceTitle: string;       // shown in the top pill on SaveScreen
+  sourceThumbnail?: string;  // optional thumbnail for the pill
+  centerCoordinate: [number, number]; // initial map camera center
+  region?: string;
+  places: ParsedPlace[];
+};
+
+export async function parseLink(input: string): Promise<ParseResult>
+```
+
+`parseLink` currently returns mocked data after a 2.2 s delay. Replace its body with the real native parser call when ready — the UI contract is stable.
+
+`src/types/import.ts` is an empty stub; add any additional shared types there if needed.
 
 ---
 
 ## Entry Point
 
-`ImportScreen` is opened from `BottomBar` via the `onAddPlace` callback, which bubbles up to `HomeScreen.onOpenImport`. The navigation between `ImportScreen` → `PreviewScreen` is managed by the parent that mounts both screens (currently `app/(tabs)/index.tsx`).
+`ImportScreen` is opened from the "+" tab → `AddMenu` → `HomeScreen.onOpenImport`. The parent that mounts the flow manages which screen is visible and wires the callbacks between screens.
+
+## Related docs
+
+- [IMPORT-SCREEN.md](import-screen/IMPORT-SCREEN.md)
+- [ANALYZING-SCREEN.md](analyzing-screen/ANALYZING-SCREEN.md)
+- [SAVE-SCREEN.md](save-screen/SAVE-SCREEN.md)
+- [SERVICES.md](../../services/SERVICES.md)

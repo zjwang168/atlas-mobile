@@ -58,7 +58,16 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
     }
   }, []);
 
+  const prevCenterRef = useRef(centerCoordinate);
+  const prevZoomRef = useRef(zoomLevel);
   useEffect(() => {
+    const [lng, lat] = centerCoordinate;
+    const [prevLng, prevLat] = prevCenterRef.current;
+    const centerChanged = lng !== prevLng || lat !== prevLat;
+    const zoomChanged = zoomLevel !== prevZoomRef.current;
+    if (!centerChanged && !zoomChanged) return;
+    prevCenterRef.current = centerCoordinate;
+    prevZoomRef.current = zoomLevel;
     cameraRef.current?.setCamera({ centerCoordinate, zoomLevel, animationDuration: 500 });
   }, [centerCoordinate, zoomLevel]);
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Full-screen modal where the user types or pastes a link, note, or any freeform text for Atlas to parse into places. Calls `onSubmit` with the raw input when the user taps send, or `onClose` when dismissed without submitting.
+A `@gorhom/bottom-sheet` that slides up from the bottom (92% snap height) over the home screen. The user types or pastes a link or freeform text, then taps send. Calls `onSubmit` with the raw input; closes itself (and calls `onClose`) when the user swipes it away.
 
 ## File Structure
 
@@ -16,22 +16,25 @@ src/features/import-places/import-screen/
 
 ```ts
 type ImportScreenProps = {
-  onClose: () => void;              // user dismissed without submitting
-  onSubmit: (text: string) => void; // user submitted; text is the raw input
+  onClose: () => void;              // sheet dismissed without submitting
+  onSubmit: (text: string) => void; // user tapped send; text is trimmed raw input
 };
 ```
 
 ## Behaviour
 
-- Send button is disabled when the input is empty (trimmed).
-- Uses `KeyboardAvoidingView` so the composer stays above the keyboard on iOS.
-- The input is multiline with a max height of 150 dp before scrolling.
+- On mount, reads the clipboard once. If it contains a URL, shows a "Paste copied link?" banner above the composer. Tapping "Paste" fills the input and hides the banner.
+- The sheet snaps to 92% with pan-down-to-close enabled. `onClose` is called when the sheet index reaches -1 (fully closed).
+- Keyboard behaviour is `"interactive"` — the sheet rides up with the keyboard.
+- Send button is disabled when the input is empty (trimmed). Input max height is 120 dp before scrolling.
+- "Add files" and "Screenshots" source cards are stubbed (no-op presses).
+- The attach button ("+" icon) in the composer is stubbed.
 
 ## Integration
 
-Opened from `BottomBar` via `onAddPlace` → `HomeScreen.onOpenImport`. The parent (`App.tsx`) mounts this screen as a full-screen overlay and passes `onSubmit` to transition to `PreviewScreen`.
+Opened by `HomeScreen` via `onOpenImport`. The parent mounts this as a full-screen `absoluteFill` overlay (with `pointerEvents="box-none"`) so the map remains visible behind it.
 
 ## Related docs
 
-- [IMPORT-PLACES.md](../IMPORT-PLACES.md) — full import flow and entry point
-- [PREVIEW-SCREEN.md](../preview-screen/PREVIEW-SCREEN.md) — next step after submission
+- [IMPORT-PLACES.md](../IMPORT-PLACES.md) — full flow and entry point
+- [ANALYZING-SCREEN.md](../analyzing-screen/ANALYZING-SCREEN.md) — next step after submission

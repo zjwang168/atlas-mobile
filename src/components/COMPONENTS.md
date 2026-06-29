@@ -6,7 +6,6 @@ Each component has its own doc file — **read the doc before editing the compon
 
 | Component | Doc | Purpose |
 |---|---|---|
-| `bottom-nav/BottomBar` | [BOTTOM-NAV.md](bottom-nav/BOTTOM-NAV.md) | Floating tab bar + add button |
 | `content-panel/ContentPanel` | [CONTENT-PANEL.md](content-panel/CONTENT-PANEL.md) | Draggable bottom sheet with snap states |
 | `place-card/PlaceCard` | [PLACE-CARD.md](place-card/PLACE-CARD.md) | List row card for a saved place |
 | `plan-card/PlanCard` + `usePlanDelete` | [PLAN-CARD.md](plan-card/PLAN-CARD.md) | Grid card for a travel plan |

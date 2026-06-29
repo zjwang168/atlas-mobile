@@ -71,7 +71,7 @@ export default function ContentPanel({
   onSnapStateChange,
   visible,
   onHidden,
-  zIndex = 30,
+  zIndex,
   height,
   defaultSnapHeight,
 }: ContentPanelProps) {
@@ -226,22 +226,21 @@ export default function ContentPanel({
     }
   }, [visible]);
 
-  const resolveSnap = (dy: number, vy: number = 0) => {
+  const resolveSnap = (dy: number) => {
     const finalHeight = Math.max(
       snapHeights.current.compact,
       Math.min(snapHeights.current.full, gestureStartHeight.current - dy),
     );
-    // Bias the height using release velocity so a fast flick snaps farther
-    // vy is px/ms (negative = upward). Multiply by 150 to convert to a height offset.
-    const biasedHeight = finalHeight - vy * 150;
-    const states: SnapState[] = ['compact', 'default', 'full'];
-    const nearest = states.reduce((best, s) =>
-      Math.abs(biasedHeight - snapHeights.current[s]) <
-      Math.abs(biasedHeight - snapHeights.current[best])
-        ? s
-        : best,
-    );
-    snapTo(nearest);
+    if (finalHeight >= TOP_SNAP_THRESHOLD) {
+      snapTo('full');
+    } else if (finalHeight <= BOTTOM_SNAP_THRESHOLD) {
+      snapTo('compact');
+    } else {
+      // Between thresholds — leave panel at the dragged height, no snap
+      snapStateRef.current = 'default';
+      setSnapState('default');
+      onSnapStateChange?.('default');
+    }
   };
 
   const dragToHeight = (dy: number) => {
@@ -258,6 +257,28 @@ export default function ContentPanel({
   const dragToHeightRef = useRef(dragToHeight);
   dragToHeightRef.current = dragToHeight;
 
+  // Captures downward drag only when scroll is at the top
+  const panelPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gs) => scrollY.current <= 0 && gs.dy > 4,
+        onPanResponderGrant: () => {
+          isDragging.current = true;
+          gestureStartHeight.current = currentPanelHeight.current;
+        },
+        onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
+        onPanResponderRelease: (_, gs) => {
+          isDragging.current = false;
+          resolveSnapRef.current(gs.dy);
+        },
+        onPanResponderTerminate: (_, gs) => {
+          isDragging.current = false;
+          resolveSnapRef.current(gs.dy);
+        },
+      }),
+    [],
+  );
+
   // Captures all directions — used on the drag handle bar
   const handlePanResponder = useMemo(
     () =>
@@ -271,11 +292,11 @@ export default function ContentPanel({
         onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
         onPanResponderRelease: (_, gs) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy, gs.vy);
+          resolveSnapRef.current(gs.dy);
         },
         onPanResponderTerminate: (_, gs) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy, gs.vy);
+          resolveSnapRef.current(gs.dy);
         },
       }),
     [],
@@ -313,6 +334,7 @@ export default function ContentPanel({
           overflow: 'hidden',
           paddingTop: animatedPaddingTop,
         }}
+        {...panelPanResponder.panHandlers}
       >
         <View className="absolute inset-0" style={{ backgroundColor: '#FFFFFF' }} />
 

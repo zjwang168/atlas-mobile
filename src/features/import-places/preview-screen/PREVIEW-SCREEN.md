@@ -1,5 +1,7 @@
 # PreviewScreen
 
+> **Superseded.** `SaveScreen` is the current results screen. `PreviewScreen` is kept as a reference stub but is no longer part of the active import flow.
+
 ## Overview
 
 Bottom-sheet overlay that shows the places extracted from the user's submitted content. The user can delete individual places before confirming. Calls `onSave` to persist and dismiss, or `onClose` to go back to `ImportScreen`.

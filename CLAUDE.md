@@ -25,7 +25,7 @@ HomeScreen (HomeProvider)
 ├── PlaceDetail (ContentPanel) overlay: place info, triggered via HomeContext
 ├── PlanDetail (ContentPanel)  overlay: plan schedule, triggered via HomeContext
 ├── AddPlaceToPlan (ContentPanel) overlay: place picker, triggered via HomeContext
-└── BottomBar                  fixed bottom nav
+└── HomeTabBar                 native iOS tab bar (My Places / My Plan / Add)
 ```
 
 Cross-feature communication is exclusively through `HomeContext.setOverlay()`. Features do not import each other.

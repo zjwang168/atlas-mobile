@@ -2,16 +2,22 @@
 
 ## Overview
 
-The home screen layers a full-screen map, a draggable content panel, and overlay panels (place detail, add place). All cross-cutting state lives in `HomeContext` — the single API surface for this feature.
+The home screen layers a full-screen map, a native tab bar, a draggable content panel, and overlay panels. All cross-cutting state lives in `HomeContext` — the single API surface for this feature.
 
 ```
 HomeScreen  (HomeProvider)
-├── MapboxMap          ← full-screen, behind everything
-├── HomePanel          ← draggable bottom panel; hidden when any overlay is active
+├── MapboxMap          ← single instance, full-screen, behind everything
+├── TopBlurFade        ← status-bar scrim
+├── TopNav             ← search + globe controls
+├── HomeTabBar         ← native iOS tab bar; screens are transparent/passthrough
+├── HomePanel          ← single ContentPanel; toggles MyPlaces/MyPlan via activeTab
+├── AddMenu            ← "+" pop-up menu
 ├── PlaceDetail        ← slides up when overlay.kind === 'placeDetail'
-├── AddPlaceToPlan     ← slides up when overlay.kind === 'addPlaceToPlan'
-└── BottomBar          ← always on top
+├── PlanDetail         ← slides up when overlay.kind === 'planDetail'
+└── AddPlaceToPlan     ← slides up when overlay.kind === 'addPlaceToPlan'
 ```
+
+**Single map, single panel:** `HomeTabBar` uses transparent `pointerEvents="none"` screens so touch events fall through to the map. `HomePanel` mounts both tab views and toggles their visibility — snap state and scroll position are preserved when switching tabs.
 
 ---
 
@@ -96,17 +102,17 @@ import { PANEL_HEIGHT } from '@/features/home/HomeContext';
 
 ---
 
-## Parse-link data flow
-
-`HomeScreen` imports `parseLink` from `src/services/api/apiService.ts` and `ParseResult` / `ChatMessage` from `src/types/route.ts`. When a link is submitted:
-
-1. `HomeScreen.handleSendMessage` calls `parseLink(url)`.
-2. On success, `parseResult` state is set, which drives the route polyline and markers on `MapboxMap`.
-3. `HomePanel` receives `parseResult`, `isLoading`, `messages`, `onSendMessage`, and `error` as props — these are forwarded to whichever tab is active. They are **not consumed by `HomePanel` itself**; they exist as a pass-through conduit for future tab implementations.
-
 ## `HomePanel` visibility rule
 
-`HomePanel` is only visible when `overlay.kind === 'none'`. When any overlay (`placeDetail`, `planDetail`, `addPlace`) is active, `HomePanel` slides out. When the overlay closes, it slides back in automatically. This is wired in `HomePanel` via `visible={overlay.kind === 'none'}`.
+`HomePanel` is only visible when `overlay.kind === 'none'`. When any overlay is active, the panel slides out. It slides back in when the overlay closes. Wired via `visible={overlay.kind === 'none'}` in `HomeScreen`.
+
+## `HomeTabBar` tab constants
+
+Tab key strings are exported from `HomeTabBar.tsx` — import them instead of using raw string literals:
+
+```ts
+import { TAB_PLACES, TAB_PLAN } from '@/features/home/HomeTabBar';
+```
 
 ## `HomeProvider`
 
