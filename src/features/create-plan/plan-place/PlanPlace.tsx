@@ -8,9 +8,11 @@ import AddPlaceField from './components/AddPlaceField';
 import AddPlaceInDate from './components/AddPlaceInDate';
 import { useHome } from '../../home/HomeContext';
 import { type PlacesState, type SlotKey, type PlannedPlace, type VisitSlot } from './types';
+import { savePlan, type SavedPlan } from '../savePlan';
 
 type PlanPlaceProps = {
   onBack: () => void;
+  onConfirm?: (plan: SavedPlan) => void;
   location: string;
   range: DateRange;
   reportScrollY: (y: number) => void;
@@ -31,7 +33,7 @@ function formatRangeSummary(location: string, range: DateRange): string {
   return location ? `${location} · ${startStr} – ${endStr}` : `${startStr} – ${endStr}`;
 }
 
-export default function PlanPlace({ onBack, location, range, reportScrollY, bottomInset = 0 }: PlanPlaceProps) {
+export default function PlanPlace({ onBack, onConfirm, location, range, reportScrollY, bottomInset = 0 }: PlanPlaceProps) {
   const { setOverlay } = useHome();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
 
@@ -128,6 +130,11 @@ export default function PlanPlace({ onBack, location, range, reportScrollY, bott
     });
   }
 
+  async function handleConfirm() {
+    const plan = await savePlan({ location, range, places });
+    onConfirm?.(plan);
+  }
+
   const summary = formatRangeSummary(location, range);
 
   return (
@@ -159,7 +166,7 @@ export default function PlanPlace({ onBack, location, range, reportScrollY, bott
         <Button variant="secondary" onPress={onBack} size="lg" className="flex-1 rounded-xl">
           <Text>Back</Text>
         </Button>
-        <Button onPress={() => {}} size="lg" className="flex-1 rounded-xl">
+        <Button onPress={handleConfirm} size="lg" className="flex-1 rounded-xl">
           <Text>Confirm</Text>
         </Button>
       </View>

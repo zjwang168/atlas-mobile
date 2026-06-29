@@ -7,6 +7,8 @@ import PlanCard from '@/components/plan-card/PlanCard';
 import { usePlanDelete } from '@/components/plan-card/usePlanDelete';
 import { mockUser } from '../../../mock-data/mockUser';
 import CreatePlan from '../create-plan/CreatePlan';
+import { useHome } from '../home/HomeContext';
+import type { SavedPlan } from '../create-plan/savePlan';
 
 const CREATE_ITEM = { id: '__create__', title: 'Create a plan', placeCount: 0, imageUrl: undefined };
 
@@ -34,7 +36,8 @@ export default function MyPlan({
   onCreateModeChange,
 }: MyPlanProps) {
   const [showCreatePlan, setShowCreatePlan] = useState(false);
-  const { plans, editMode, toggleEditMode, requestDelete } = usePlanDelete();
+  const { plans, editMode, toggleEditMode, requestDelete, addPlan } = usePlanDelete();
+  const { setOverlay } = useHome();
 
   useEffect(() => {
     onCreateModeChange?.(showCreatePlan);
@@ -64,10 +67,17 @@ export default function MyPlan({
     );
   }
 
+  function handlePlanCreated(plan: SavedPlan) {
+    addPlan({ id: plan.id, title: plan.title, placeCount: plan.placeCount, imageUrl: plan.imageUrl });
+    setShowCreatePlan(false);
+    setOverlay({ kind: 'planDetail', planId: plan.id });
+  }
+
   if (showCreatePlan) {
     return (
       <CreatePlan
         onClose={() => setShowCreatePlan(false)}
+        onPlanCreated={handlePlanCreated}
         bottomInset={bottomInset}
         reportScrollY={onScroll ?? (() => {})}
       />
@@ -90,11 +100,13 @@ export default function MyPlan({
         <Text style={{ fontSize: 28, fontWeight: '600', lineHeight: 34, color: '#09090b' }}>
           My plan
         </Text>
-        <Button variant="ghost" size="sm" onPress={toggleEditMode}>
-          <Text style={{ fontSize: 15, fontWeight: '500', color: '#007aff' }}>
-            {editMode ? 'Done' : 'Edit'}
-          </Text>
-        </Button>
+        <View style={{ height: 40, justifyContent: 'center' }}>
+          <Button variant="ghost" size="sm" onPress={toggleEditMode}>
+            <Text style={{ fontSize: 15, fontWeight: '500', color: '#007aff' }}>
+              {editMode ? 'Done' : 'Edit'}
+            </Text>
+          </Button>
+        </View>
       </View>
 
       {/* 2-column plan grid */}
@@ -117,7 +129,13 @@ export default function MyPlan({
               imageUrl={item.imageUrl}
               create={item.id === '__create__'}
               deletionMode={editMode}
-              onPress={item.id === '__create__' ? () => setShowCreatePlan(true) : undefined}
+              onPress={
+                item.id === '__create__'
+                  ? () => setShowCreatePlan(true)
+                  : item.id === '__spacer__'
+                  ? undefined
+                  : () => setOverlay({ kind: 'planDetail', planId: item.id })
+              }
               onDeletePress={item.id !== '__create__' ? () => requestDelete(item.id) : undefined}
             />
           )

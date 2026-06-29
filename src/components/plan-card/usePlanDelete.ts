@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert } from 'react-native';
-import { mockPlans } from '../../../mock-data/mockPlans';
+import { mockPlans, type MockPlan } from '../../../mock-data/mockPlans';
 
 export function usePlanDelete() {
   const [plans, setPlans] = useState([...mockPlans]);
@@ -32,5 +32,9 @@ export function usePlanDelete() {
     );
   }
 
-  return { plans, editMode, toggleEditMode, requestDelete };
+  function addPlan(plan: MockPlan) {
+    setPlans((prev) => [plan, ...prev]);
+  }
+
+  return { plans, editMode, toggleEditMode, requestDelete, addPlan };
 }

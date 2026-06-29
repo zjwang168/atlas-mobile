@@ -16,6 +16,7 @@ export const PANEL_HEIGHT = {
 export type Overlay =
   | { kind: 'none' }
   | { kind: 'placeDetail'; placeName: string }
+  | { kind: 'planDetail'; planId: string }
   | { kind: 'addPlace'; onSelect: (places: PlannedPlace[]) => void };
 
 type HomeContextValue = {

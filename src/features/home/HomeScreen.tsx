@@ -6,6 +6,7 @@ import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
 import BottomBar from '../../components/bottom-nav/BottomBar';
 import TopNav from '../../components/top-nav/TopNav';
 import PlaceDetail from '../place-detail/PlaceDetail';
+import PlanDetail from '../plan-detail/PlanDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import HomePanel from './HomePanel';
 import AddPlace from '../add-place/AddPlace';
@@ -148,6 +149,11 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
         placeName={overlay.kind === 'placeDetail' ? overlay.placeName : null}
         onDismiss={() => setOverlay({ kind: 'none' })}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+      />
+
+      <PlanDetail
+        planId={overlay.kind === 'planDetail' ? overlay.planId : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
       />
 
       <AddPlace

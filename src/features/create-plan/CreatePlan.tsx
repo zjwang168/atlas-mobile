@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
 import type { PlacesState } from './plan-place/types';
+import type { SavedPlan } from './savePlan';
 
 type CreatePlanStep = 'destination' | 'places';
 export type DateRange = { start: string | null; end: string | null };
@@ -24,13 +25,14 @@ const STEPS: CreatePlanStep[] = ['destination', 'places'];
 
 type CreatePlanProps = {
   onClose: () => void;
+  onPlanCreated?: (plan: SavedPlan) => void;
   bottomInset?: number;
   reportScrollY: (y: number) => void;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
-export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY }: CreatePlanProps) {
+export default function CreatePlan({ onClose, onPlanCreated, bottomInset = 0, reportScrollY }: CreatePlanProps) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
@@ -104,6 +106,7 @@ export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY }: 
       {step === 'places' && (
         <PlanPlace
           onBack={goBack}
+          onConfirm={onPlanCreated}
           location={location}
           range={range}
           reportScrollY={reportScrollY}
