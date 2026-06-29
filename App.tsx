@@ -1,6 +1,6 @@
 import './global.css';
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -8,9 +8,11 @@ import { PortalHost } from '@rn-primitives/portal';
 
 import HomeScreen from './src/features/home/HomeScreen';
 import ImportScreen from './src/features/import/ImportScreen';
-import PreviewScreen from './src/features/import/PreviewScreen';
+import AnalyzingScreen from './src/features/import/AnalyzingScreen';
+import SaveScreen from './src/features/import/SaveScreen';
+import { parseLink, type ParseResult } from './src/services/import/importService';
 
-type Overlay = 'none' | 'import' | 'preview';
+type Overlay = 'none' | 'import' | 'analyzing' | 'save';
 
 /**
  * Error boundary to catch rendering errors from Mapbox or other native modules.
@@ -67,18 +69,49 @@ const errorBoundaryStyles = StyleSheet.create({
 
 export default function App() {
   const [overlay, setOverlay] = useState<Overlay>('none');
+  const [importText, setImportText] = useState('');
+  const [parseResult, setParseResult] = useState<ParseResult | null>(null);
+
+  // Run the parse while the Analyzing screen is showing; advance to the Save
+  // screen when it resolves (unless the user cancelled out of analyzing).
+  useEffect(() => {
+    if (overlay !== 'analyzing') return;
+    let cancelled = false;
+    parseLink(importText)
+      .then((result) => {
+        if (!cancelled) {
+          setParseResult(result);
+          setOverlay('save');
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('Parse failed:', err);
+          setOverlay('import');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [overlay, importText]);
 
   return (
     <SafeAreaProvider>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="dark" />
 
-      {overlay === 'import' ? (
-        <ImportScreen
+      {overlay === 'save' && parseResult ? (
+        // Results screen fully replaces the home screen.
+        <SaveScreen
+          result={parseResult}
           onClose={() => setOverlay('none')}
-          onSubmit={(text) => {
-            console.log('Imported text:', text);
-            setOverlay('preview');
+          onSave={(ids) => {
+            console.log('Save places to general list:', ids);
+            setOverlay('none');
+          }}
+          onAddToPlan={(ids) => {
+            console.log('Add to plan:', ids);
+            setOverlay('none');
           }}
         />
       ) : (
@@ -87,11 +120,20 @@ export default function App() {
             <HomeScreen onOpenImport={() => setOverlay('import')} />
           </MapErrorBoundary>
 
-          {overlay === 'preview' && (
-            <PreviewScreen
-              onClose={() => setOverlay('import')}
-              onSave={() => setOverlay('none')}
+          {/* "Add places" sheet — pulls up over the home. */}
+          {overlay === 'import' && (
+            <ImportScreen
+              onClose={() => setOverlay('none')}
+              onSubmit={(text) => {
+                setImportText(text);
+                setOverlay('analyzing');
+              }}
             />
+          )}
+
+          {/* Processing state while the link is parsed. */}
+          {overlay === 'analyzing' && (
+            <AnalyzingScreen url={importText} onCancel={() => setOverlay('none')} />
           )}
         </>
       )}
