@@ -35,10 +35,10 @@ type BottomBarProps = {
 ```
 BottomBar.onAddPlace
   → HomeScreen.onOpenImport
-    → ImportScreen (src/features/import/ImportScreen.tsx)
+    → ImportScreen (src/features/import-places/import-screen/ImportScreen.tsx)
 ```
 
-`onAddPlace` is the only prop that crosses the feature boundary. See `IMPORT.md` for the full import flow.
+`onAddPlace` is the only prop that crosses the feature boundary. See `IMPORT-PLACES.md` for the full import flow.
 
 ## Styling Notes
 

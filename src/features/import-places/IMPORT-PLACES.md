@@ -1,16 +1,18 @@
-# Import Feature
+# Import Places Feature
 
 ## Overview
 
-The Import flow lets users paste arbitrary text (links, notes, etc.) for Atlas to parse into structured place data. It is a two-screen flow: `ImportScreen` collects the raw input, `PreviewScreen` shows the extracted places for review before saving.
+The Import Places flow lets users paste arbitrary text (links, notes, etc.) for Atlas to parse into structured place data. It is a two-screen flow: `ImportScreen` collects the raw input, `PreviewScreen` shows the extracted places for review before saving.
 
 ## File Structure
 
 ```
-src/features/import/
-  ImportScreen.tsx    ← input entry point (full-screen modal)
-  PreviewScreen.tsx   ← extracted-places review sheet
-  IMPORT.md           ← this document
+src/features/import-places/
+  import-screen/
+    ImportScreen.tsx    ← input entry point (full-screen modal)
+  preview-screen/
+    PreviewScreen.tsx   ← extracted-places review sheet
+  IMPORT-PLACES.md      ← this document
 ```
 
 ---

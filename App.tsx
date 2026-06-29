@@ -7,8 +7,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PortalHost } from '@rn-primitives/portal';
 
 import HomeScreen from './src/features/home/HomeScreen';
-import ImportScreen from './src/features/import/ImportScreen';
-import PreviewScreen from './src/features/import/PreviewScreen';
+import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
+import PreviewScreen from './src/features/import-places/preview-screen/PreviewScreen';
 
 type Overlay = 'none' | 'import' | 'preview';
 

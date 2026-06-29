@@ -52,8 +52,8 @@
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| 导入界面 | `src/features/import/ImportScreen.tsx` | 已有的全屏导入界面，与新的 SearchBar 方案不重叠 |
-| 预览界面 | `src/features/import/PreviewScreen.tsx` | 已有的地点预览面板，Sidekick 承担了类似角色 |
+| 导入界面 | `src/features/import-places/ImportScreen.tsx` | 已有的全屏导入界面，与新的 SearchBar 方案不重叠 |
+| 预览界面 | `src/features/import-places/PreviewScreen.tsx` | 已有的地点预览面板，Sidekick 承担了类似角色 |
 | 收藏功能 | `src/features/collections/*` | 独立的收藏模块 |
 | 地点详情 | `src/features/place/PlaceDetailScreen.tsx` | 地点详情页，由其他队友负责 |
 | 已有服务层 | `src/services/aiService.ts` | 与本功能无关的 AI 服务预留 |
