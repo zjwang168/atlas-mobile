@@ -1,6 +1,6 @@
 import { Dimensions, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,13 +16,19 @@ import {
 } from '@/components/ui/alert-dialog';
 import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
+import type { PlacesState, PlannedPlace } from './plan-place/types';
 
 type CreatePlanStep = 'destination' | 'places';
 export type DateRange = { start: string | null; end: string | null };
 
-export const createPlanCache: { location: string; range: DateRange } = {
+export const createPlanCache: {
+  location: string;
+  range: DateRange;
+  places: PlacesState;
+} = {
   location: '',
   range: { start: null, end: null },
+  places: { free: [], byDate: {} },
 };
 
 const STEPS: CreatePlanStep[] = ['destination', 'places'];
@@ -30,15 +36,23 @@ const STEPS: CreatePlanStep[] = ['destination', 'places'];
 type CreatePlanProps = {
   onClose: () => void;
   bottomInset?: number;
+  reportScrollY: (y: number) => void;
+  onOpenAddPlace: (onSelect: (places: PlannedPlace[]) => void) => void;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 export const CREATE_PLAN_HEIGHT = SCREEN_HEIGHT * 0.7;
 
-export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps) {
+export default function CreatePlan({ onClose, bottomInset = 0, reportScrollY, onOpenAddPlace }: CreatePlanProps) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
+
+  useEffect(() => {
+    createPlanCache.location = '';
+    createPlanCache.range = { start: null, end: null };
+    createPlanCache.places = { free: [], byDate: {} };
+  }, []);
 
   function handleLocationChange(value: string) {
     setLocation(value);
@@ -110,7 +124,15 @@ export default function CreatePlan({ onClose, bottomInset = 0 }: CreatePlanProps
           onRangeChange={handleRangeChange}
         />
       )}
-      {step === 'places' && <PlanPlace onBack={goBack} />}
+      {step === 'places' && (
+        <PlanPlace
+          onBack={goBack}
+          location={location}
+          range={range}
+          reportScrollY={reportScrollY}
+          onOpenAddPlace={onOpenAddPlace}
+        />
+      )}
     </View>
   );
 }

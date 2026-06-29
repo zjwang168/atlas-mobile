@@ -7,6 +7,7 @@ import { ChatMessage, ParseResult } from '../../types/route';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import { CREATE_PLAN_HEIGHT } from '../create-plan/CreatePlan';
+import type { PlannedPlace } from '../create-plan/plan-place/types';
 
 const BOTTOM_BAR_CLEARANCE = 84;
 
@@ -20,6 +21,7 @@ type HomePanelProps = {
   error: string | null;
   onPlacePress?: (place: Place) => void;
   visible?: boolean;
+  onOpenAddPlace?: (onSelect: (places: PlannedPlace[]) => void) => void;
 };
 
 export default function HomePanel({
@@ -32,6 +34,7 @@ export default function HomePanel({
   error,
   onPlacePress,
   visible,
+  onOpenAddPlace,
 }: HomePanelProps) {
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
@@ -69,6 +72,7 @@ export default function HomePanel({
               onScroll={reportScrollY}
               bottomInset={BOTTOM_BAR_CLEARANCE}
               onCreateModeChange={setIsCreatingPlan}
+              onOpenAddPlace={onOpenAddPlace}
             />
           </View>
         </>

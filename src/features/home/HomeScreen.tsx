@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { StatusBar, StyleSheet, View } from 'react-native';
 
 import { mockPlaces } from '../../../mock-data/mockPlaces';
@@ -8,6 +8,8 @@ import TopNav from '../../components/top-nav/TopNav';
 import PlaceDetail from '../place-detail/PlaceDetail';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import HomePanel from './HomePanel';
+import AddPlace from '../add-place/AddPlace';
+import type { PlannedPlace } from '../create-plan/plan-place/types';
 
 // ---- Types ----
 
@@ -70,6 +72,19 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
 
   const [selectedPlaceName, setSelectedPlaceName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'myPlaces' | 'travelPlan'>('myPlaces');
+  const [showAddPlace, setShowAddPlace] = useState(false);
+  const addPlaceCallbackRef = useRef<((places: PlannedPlace[]) => void) | null>(null);
+
+  function handleOpenAddPlace(onSelect: (places: PlannedPlace[]) => void) {
+    addPlaceCallbackRef.current = onSelect;
+    setShowAddPlace(true);
+  }
+
+  function handleAddPlaceSelect(places: PlannedPlace[]) {
+    addPlaceCallbackRef.current?.(places);
+    addPlaceCallbackRef.current = null;
+    setShowAddPlace(false);
+  }
 
   // Parse-route flow state — populated by PlanMode when a link is submitted
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
@@ -144,7 +159,8 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         onSendMessage={handleSendMessage}
         error={error}
         onPlacePress={(place) => setSelectedPlaceName(place.name)}
-        visible={selectedPlaceName === null}
+        visible={selectedPlaceName === null && !showAddPlace}
+        onOpenAddPlace={handleOpenAddPlace}
       />
 
       {/* Place detail overlay — slides up when a place is selected */}
@@ -152,6 +168,13 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         placeName={selectedPlaceName}
         onDismiss={() => setSelectedPlaceName(null)}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+      />
+
+      {/* Add place panel — slides up from HomeScreen level, fading out HomePanel */}
+      <AddPlace
+        visible={showAddPlace}
+        onDismiss={() => setShowAddPlace(false)}
+        onSelect={handleAddPlaceSelect}
       />
 
       {/* Tab bar + add-place button — always on top */}
