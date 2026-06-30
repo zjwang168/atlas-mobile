@@ -1,14 +1,24 @@
 // src/features/home/HomeScreen.tsx
 import React, { useCallback, useMemo, useState } from 'react';
 import {
+  FlatList,
   SafeAreaView,
   StatusBar,
-  StyleSheet
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 import { mockPlaces } from '../../data/mockPlaces';
-import { parseLink } from '../../services/apiService';
-import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
+import { chat, getConversation, getConversations, parseLink } from '../../services/apiService';
+import {
+  ChatMessage,
+  Conversation,
+  GeocodedLocation,
+  ParseResult,
+  ParseResultV2,
+} from '../../types/route';
 import MapboxMap, { MapMarker } from '../map/MapboxMap';
 import SearchBar from './SearchBar';
 import Sidekick from './Sidekick';
@@ -89,6 +99,11 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
+  // v2 Agentic session state
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
   // Track whether we have active route data to display
   const hasRouteData = parseResult !== null && parseResult.locations.length > 0;
 
@@ -134,8 +149,13 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     }, 2000);
 
     try {
-      const result = await parseLink(url);
+      const result = await parseLink(url) as ParseResultV2;
       setParseResult(result);
+
+      // Store session_id if returned (v2 agentic pipeline)
+      if (result.session_id) {
+        setSessionId(result.session_id);
+      }
 
       // Add system message with the result
       const sysMsg: ChatMessage = {
@@ -185,6 +205,38 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     }
   }, []);
 
+  /** Send a follow-up message to the agent backend */
+  const handleChat = useCallback(async (message: string) => {
+    if (!sessionId) return;
+
+    setIsLoading(true);
+    try {
+      const result = await chat({ session_id: sessionId, message });
+
+      // Add assistant response to messages
+      const assistantMsg: ChatMessage = {
+        id: uid(),
+        role: 'assistant',
+        text: result.response,
+        timestamp: Date.now(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+
+      // Update locations/route if modified by agent
+      if (result.locations) {
+        setParseResult(prev => prev ? {
+          ...prev,
+          locations: result.locations!,
+          route: result.route || prev.route,
+        } : prev);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [sessionId]);
+
   /** Handle follow-up messages in the Sidekick chat */
   const handleSendMessage = useCallback(
     async (text: string) => {
@@ -209,11 +261,78 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     [parseResult],
   );
 
-  /** Handle history button press */
-  const handleHistoryPress = useCallback(() => {
-    // MVP: toggle the bottom sheet to show past results
-    // For now, just log. In future: show a history list overlay.
-    console.log('[HomeScreen] History pressed');
+  /** Toggle the conversation history panel */
+  const toggleHistory = useCallback(async () => {
+    if (!showHistory) {
+      // Load conversations
+      try {
+        const convs = await getConversations();
+        setConversations(convs);
+      } catch (err) {
+        console.error('Failed to load conversations:', err);
+      }
+    }
+    setShowHistory(!showHistory);
+  }, [showHistory]);
+
+  /** Load a saved conversation from history */
+  const loadConversation = useCallback(async (convId: string) => {
+    try {
+      const detail = await getConversation(convId);
+      // Restore session
+      setSessionId(detail.session.session_id);
+      // Restore locations and route
+      const restoredResult: ParseResult = {
+        title: detail.session.title,
+        locations: detail.session.locations,
+        route: detail.session.route || {
+          ordered_locations: detail.session.locations,
+          total_distance_km: 0,
+          segments: [],
+        },
+        removed_noise: null,
+      };
+      setParseResult(restoredResult);
+      // Restore messages
+      setMessages(detail.messages.map((m: any) => ({
+        id: m.id || uid(),
+        role: m.role,
+        text: m.content,
+        timestamp: typeof m.timestamp === 'number' ? m.timestamp : Date.now(),
+      })));
+      setShowHistory(false);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }, []);
+
+  /** Delete a location by index and update map markers */
+  const handleDeleteLocation = useCallback((index: number) => {
+    if (!parseResult) return;
+
+    const newLocations = [...parseResult.locations];
+    newLocations.splice(index, 1);
+
+    // Also remove from route ordered_locations
+    const newRoute = { ...parseResult.route };
+    if (newRoute.ordered_locations) {
+      newRoute.ordered_locations = newRoute.ordered_locations.filter(
+        (_, i) => i !== index,
+      );
+    }
+
+    setParseResult({
+      ...parseResult,
+      locations: newLocations,
+      route: newRoute,
+    });
+  }, [parseResult]);
+
+  /** Save a location (placeholder for MVP — logs to console) */
+  const handleSaveLocation = useCallback(async (location: GeocodedLocation) => {
+    // For MVP: just log it
+    console.log('Save location:', location.name);
+    // TODO: Integrate with collections feature
   }, []);
 
   return (
@@ -224,8 +343,30 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
       <SearchBar
         onSend={handleSend}
         isLoading={isLoading}
-        onHistoryPress={handleHistoryPress}
+        onHistoryPress={toggleHistory}
       />
+
+      {/* History panel */}
+      {showHistory && (
+        <View style={styles.historyPanel}>
+          <Text style={styles.historyTitle}>Conversation History</Text>
+          <FlatList
+            data={conversations}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.historyItem}
+                onPress={() => loadConversation(item.id)}
+              >
+                <Text style={styles.historyItemTitle}>{item.title || 'Untitled'}</Text>
+                <Text style={styles.historyItemMeta}>
+                  {item.location_count} places · {item.message_count} messages
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      )}
 
       {/* Mapbox map filling the entire screen */}
       <MapboxMap
@@ -247,7 +388,11 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         loadingMessage={loadingMessage}
         messages={messages}
         onSendMessage={handleSendMessage}
+        onChat={sessionId ? handleChat : undefined}
+        sessionId={sessionId}
         error={error}
+        onDeleteLocation={handleDeleteLocation}
+        onSaveLocation={handleSaveLocation}
       />
     </SafeAreaView>
   );
@@ -259,6 +404,41 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  historyPanel: {
+    position: 'absolute',
+    top: 80,
+    left: 10,
+    right: 10,
+    maxHeight: 300,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    zIndex: 30,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  historyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  historyItem: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  historyItemTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  historyItemMeta: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 2,
   },
 });
 

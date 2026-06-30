@@ -116,3 +116,50 @@ src/
 └── utils/
     └── constants.ts             ← (修改)
 ```
+
+---
+
+## 六、v2 Agentic Pipeline 新增文件（共 6 个）
+
+| # | 文件路径 | 职责 |
+|---|----------|------|
+| 1 | `backend/services/web_scraper.py` | 多源网页抓取器（Reddit + trafilatura + HTML fallback） |
+| 2 | `backend/services/extraction_pipeline.py` | 两阶段层次化地理实体提取 + 规则过滤 |
+| 3 | `backend/services/tool_definitions.py` | 9 个工具定义 + ToolRegistry 注册表 |
+| 4 | `backend/services/conversation_manager.py` | 三层记忆系统（短期/会话/长期） |
+| 5 | `backend/services/agent_orchestrator.py` | Supervisor Agent 核心循环 |
+| 6 | `backend/services/supabase_service.py` | Supabase 持久化 CRUD |
+
+## 七、v2 Agentic Pipeline 修改文件（共 6 个）
+
+| # | 文件路径 | 修改内容 |
+|---|----------|----------|
+| 1 | `backend/main.py` | 重构 parse_link 使用 AgentOrchestrator；新增 6 个端点 |
+| 2 | `backend/requirements.txt` | 添加 trafilatura, supabase 依赖 |
+| 3 | `src/types/route.ts` | 添加 v2 类型定义 |
+| 4 | `src/services/apiService.ts` | 添加 chat/conversation API 方法 |
+| 5 | `src/features/home/HomeScreen.tsx` | 添加 session 管理 + 历史记录面板 |
+| 6 | `src/features/home/Sidekick.tsx` | 添加 agent chat 支持 + 保存按钮 |
+
+## 八、文件操作汇总
+
+```
+操作总计: 新增 6 个 + 修改 6 个 = 12 个文件（v2）
+
+v2 新建文件:
+backend/services/
+├── web_scraper.py
+├── extraction_pipeline.py
+├── tool_definitions.py
+├── conversation_manager.py
+├── agent_orchestrator.py
+└── supabase_service.py
+
+v2 修改文件:
+├── backend/main.py
+├── backend/requirements.txt
+├── src/types/route.ts
+├── src/services/apiService.ts
+├── src/features/home/HomeScreen.tsx
+└── src/features/home/Sidekick.tsx
+```

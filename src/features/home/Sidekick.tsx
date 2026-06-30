@@ -1,17 +1,20 @@
 // src/features/home/Sidekick.tsx
 import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
-import { ChatMessage, ParseResult } from '../../types/route';
+import { saveSession } from '../../services/apiService';
+import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
 
 // ---- Types ----
 
@@ -21,7 +24,13 @@ interface SidekickProps {
   loadingMessage?: string;
   messages: ChatMessage[];
   onSendMessage: (text: string) => void;
+  onChat?: (message: string) => void;  // Send to agent backend
+  sessionId?: string | null;
   error: string | null;
+  onDeleteLocation?: (index: number) => void;
+  onSaveLocation?: (location: GeocodedLocation) => void;
+  activeTab?: 'chat' | 'locations';
+  onTabChange?: (tab: 'chat' | 'locations') => void;
 }
 
 // ---- Helpers ----
@@ -50,21 +59,27 @@ const Sidekick: React.FC<SidekickProps> = ({
   loadingMessage,
   messages,
   onSendMessage,
+  onChat,
+  sessionId,
   error,
+  onDeleteLocation,
+  onSaveLocation,
+  activeTab: externalActiveTab,
+  onTabChange,
 }) => {
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['40%', '100%'], []);
   const [chatInput, setChatInput] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const [internalActiveTab, setInternalActiveTab] = useState<'chat' | 'locations'>('chat');
+
+  const activeTab = externalActiveTab ?? internalActiveTab;
+  const setActiveTab = onTabChange ?? setInternalActiveTab;
 
   const canSendChat = chatInput.trim().length > 0;
 
   // Auto-expand the bottom sheet when data arrives
   const hasContent = parseResult !== null || isLoading || messages.length > 0 || error !== null;
-  useEffect(() => {
-    if (hasContent && sheetRef.current) {
-      sheetRef.current.snapToIndex(0);
-    }
-  }, [hasContent]);
 
   /** Build the initial system message content when a result comes in */
   const resultContent = useMemo(() => {
@@ -95,12 +110,33 @@ const Sidekick: React.FC<SidekickProps> = ({
     return content;
   }, [parseResult]);
 
-  /** Send a chat message */
+  /** Send a chat message — routes to agent backend or local fallback */
   const handleSendChat = useCallback(() => {
     if (!canSendChat) return;
-    onSendMessage(chatInput.trim());
+    const text = chatInput.trim();
     setChatInput('');
-  }, [canSendChat, chatInput, onSendMessage]);
+
+    if (onChat && parseResult) {
+      // Send to agent backend
+      onChat(text);
+    } else {
+      // Local auto-reply (fallback)
+      onSendMessage(text);
+    }
+  }, [canSendChat, chatInput, onChat, onSendMessage, parseResult]);
+
+  /** Save the current session to Supabase */
+  const handleSaveSession = useCallback(async () => {
+    if (!sessionId) return;
+    setSaving(true);
+    try {
+      await saveSession(sessionId);
+    } catch (err) {
+      console.error('Failed to save session:', err);
+    } finally {
+      setSaving(false);
+    }
+  }, [sessionId]);
 
   /** Render a single message bubble */
   const renderMessage = useCallback(
@@ -165,6 +201,20 @@ const Sidekick: React.FC<SidekickProps> = ({
         showsVerticalScrollIndicator={false}
       />
 
+      {/* Show hierarchy filtering info */}
+      {(parseResult as any)?.removed_hierarchy?.length > 0 && (
+        <View style={styles.hierarchyInfo}>
+          <Text style={styles.hierarchyInfoTitle}>
+            🗂️ Removed broader locations:
+          </Text>
+          {(parseResult as any).removed_hierarchy.map((h: any, i: number) => (
+            <Text key={i} style={styles.hierarchyInfoText}>
+              • {h.name} — {h.reason}
+            </Text>
+          ))}
+        </View>
+      )}
+
       {/* Chat input bar */}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -196,11 +246,84 @@ const Sidekick: React.FC<SidekickProps> = ({
     </View>
   );
 
+  /** Location list view */
+  const renderLocations = () => {
+    const locations = parseResult?.locations ?? [];
+    return (
+      <View style={styles.locationsContainer}>
+        <FlatList
+          data={locations}
+          keyExtractor={(_, index) => `loc-${index}`}
+          contentContainerStyle={styles.locationsList}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.centerContent}>
+              <Text style={styles.idleSubtitle}>No locations found</Text>
+            </View>
+          }
+          renderItem={({ item, index }) => (
+            <View style={styles.locationItem}>
+              <View style={styles.locationInfo}>
+                <Text style={styles.locationName}>
+                  {index + 1}. {item.name}
+                </Text>
+                <Text style={styles.locationAddress}>{item.full_address}</Text>
+                <Text style={styles.locationCoords}>
+                  {item.latitude.toFixed(4)}, {item.longitude.toFixed(4)}
+                </Text>
+              </View>
+              <View style={styles.locationActions}>
+                <TouchableOpacity
+                  style={styles.locationActionButton}
+                  onPress={() => {
+                    Alert.alert(
+                      'Delete Location',
+                      `Remove "${item.name}" from the list?`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Delete',
+                          style: 'destructive',
+                          onPress: () => onDeleteLocation?.(index),
+                        },
+                      ],
+                    );
+                  }}
+                >
+                  <Text style={styles.locationActionIcon}>🗑️</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.locationActionButton}
+                  onPress={() => onSaveLocation?.(item)}
+                >
+                  <Text style={styles.locationActionIcon}>⭐</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        />
+      </View>
+    );
+  };
+
+  // Use state for BottomSheet index (controlled prop in v4+)
+  const [sheetIndex, setSheetIndex] = useState(-1);
+
+  // When content arrives, update the controlled index
+  useEffect(() => {
+    if (hasContent && sheetIndex === -1) {
+      setSheetIndex(0);
+    } else if (!hasContent) {
+      setSheetIndex(-1);
+    }
+  }, [hasContent, sheetIndex]);
+
   return (
     <BottomSheet
       ref={sheetRef}
       snapPoints={snapPoints}
-      index={-1} // Start hidden; will be changed to 0 when data comes
+      index={sheetIndex}
+      onChange={setSheetIndex}
       enablePanDownToClose={false}
       backgroundStyle={styles.sheetBackground}
       handleIndicatorStyle={styles.handle}
@@ -213,6 +336,19 @@ const Sidekick: React.FC<SidekickProps> = ({
             <View style={styles.handle} />
           </View>
 
+          {/* Save button */}
+          {parseResult && sessionId && (
+            <TouchableOpacity
+              style={styles.saveButton}
+              onPress={handleSaveSession}
+              disabled={saving}
+            >
+              <Text style={styles.saveButtonText}>
+                {saving ? 'Saving...' : '💾 Save'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
           {/* Error banner */}
           {error && (
             <View style={styles.errorBanner}>
@@ -220,10 +356,34 @@ const Sidekick: React.FC<SidekickProps> = ({
             </View>
           )}
 
+          {/* Tab bar — only show when parseResult exists */}
+          {parseResult && (
+            <View style={styles.tabBar}>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'chat' && styles.activeTab]}
+                onPress={() => setActiveTab('chat')}
+              >
+                <Text style={[styles.tabText, activeTab === 'chat' && styles.activeTabText]}>
+                  💬 Chat
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'locations' && styles.activeTab]}
+                onPress={() => setActiveTab('locations')}
+              >
+                <Text style={[styles.tabText, activeTab === 'locations' && styles.activeTabText]}>
+                  📍 Locations ({parseResult.locations.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Content */}
           {isLoading && !parseResult
             ? renderLoading()
-            : renderChat()
+            : activeTab === 'chat'
+              ? renderChat()
+              : renderLocations()
           }
         </>
       ) : null}
@@ -377,6 +537,128 @@ const styles = StyleSheet.create({
     color: '#CC3333',
     fontSize: 13,
     lineHeight: 18,
+  },
+
+  /* Hierarchy info */
+  hierarchyInfo: {
+    backgroundColor: '#f8f8f8',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+    marginHorizontal: 12,
+  },
+  hierarchyInfoTitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#666',
+    marginBottom: 4,
+  },
+  hierarchyInfoText: {
+    fontSize: 11,
+    color: '#999',
+    marginLeft: 4,
+  },
+
+  /* Save button */
+  saveButton: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#007AFF',
+    borderRadius: 6,
+    marginRight: 12,
+    marginTop: 4,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+
+  /* Tab bar */
+  tabBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F4',
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+    marginHorizontal: 4,
+    backgroundColor: '#F4F4F5',
+  },
+  activeTab: {
+    backgroundColor: '#007AFF',
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+  },
+  activeTabText: {
+    color: '#FFFFFF',
+  },
+
+  /* Location list */
+  locationsContainer: {
+    flex: 1,
+  },
+  locationsList: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  locationItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#F9F9FB',
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  locationInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  locationName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111',
+    marginBottom: 2,
+  },
+  locationAddress: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 2,
+  },
+  locationCoords: {
+    fontSize: 11,
+    color: '#999',
+  },
+  locationActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  locationActionButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  locationActionIcon: {
+    fontSize: 16,
   },
 });
 

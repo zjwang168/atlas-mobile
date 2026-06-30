@@ -33,6 +33,33 @@ def _extract_post_id(url: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def _extract_comments(comments_data: list) -> list[str]:
+    """Recursively extract all comment texts including replies."""
+    texts = []
+    for comment in comments_data:
+        if isinstance(comment, dict):
+            # Get the comment data
+            data = comment.get("data", {}) if "data" in comment else comment
+
+            # Skip removed/deleted comments
+            if data.get("body") in ("[removed]", "[deleted]", None):
+                pass
+            elif data.get("body"):
+                texts.append(data["body"].strip())
+
+            # Recursively extract replies
+            replies = data.get("replies")
+            if isinstance(replies, dict):
+                reply_data = replies.get("data", {})
+                reply_children = reply_data.get("children", [])
+                if reply_children:
+                    texts.extend(_extract_comments(reply_children))
+            elif isinstance(replies, list):
+                texts.extend(_extract_comments(replies))
+
+    return texts
+
+
 def _try_json_api(subreddit: str, post_id: str) -> Optional[dict]:
     """Try fetching via the Reddit JSON API.
 
@@ -51,13 +78,24 @@ def _try_json_api(subreddit: str, post_id: str) -> Optional[dict]:
             response.raise_for_status()
             data = response.json()
             post_data = data[0]["data"]["children"][0]["data"]
+
+            # Recursively extract comments including all replies
+            comment_children = data[1]["data"]["children"]
+            comments = _extract_comments(comment_children)
+
+            # Combine post body with comments
+            selftext = post_data.get("selftext", "")
+            if comments:
+                comment_text = "\n\n---\n\nComments:\n\n" + "\n\n".join(comments[:50])
+                selftext += comment_text
+
             return {
                 "title": post_data.get("title", ""),
-                "selftext": post_data.get("selftext", ""),
+                "selftext": selftext,
                 "url": post_data.get("url", ""),
                 "subreddit": subreddit,
             }
-    except (httpx.HTTPError, (KeyError, IndexError, TypeError)):
+    except (httpx.HTTPError, KeyError, IndexError, TypeError):
         return None
 
 

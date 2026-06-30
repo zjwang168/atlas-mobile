@@ -251,3 +251,50 @@ Mapbox map component — **modified** to support route rendering.
 | `src/features/home/HomeScreen.tsx` | Added parse/fetch state management, SearchBar + Sidekick integration, route-to-map conversion |
 | `src/features/map/MapboxMap.tsx` | Added `routeGeoJSON` and `routeMarkers` props, route polyline rendering, camera recentering |
 | `src/utils/constants.ts` | Added `API_BASE_URL`, map defaults, route styling constants |
+
+---
+
+## v2 — Multi-Agent Pipeline Upgrade (2026-06-29)
+
+### Overview
+
+The linear pipeline was upgraded to a **Supervisor + Workers multi-agent architecture** with:
+- Tool-calling agent loop (max 10 steps, 60s timeout)
+- Hierarchical geographic extraction (LLM + rule-based filtering)
+- Multi-source web scraping (Reddit + generic web pages via trafilatura)
+- Three-tier memory system (short-term context, session memory, long-term Supabase)
+- 9 registered tools for agent use
+
+### New Backend Files (6)
+
+| File | Purpose |
+|------|---------|
+| `backend/services/web_scraper.py` | Multi-source scraper: Reddit + trafilatura generic + BeautifulSoup fallback |
+| `backend/services/extraction_pipeline.py` | Two-stage hierarchical location extraction with noise filtering |
+| `backend/services/tool_definitions.py` | 9 tool schemas + ToolRegistry for agent function calling |
+| `backend/services/conversation_manager.py` | Three-tier memory: short-term, session, long-term (Supabase) |
+| `backend/services/agent_orchestrator.py` | Supervisor Agent: deterministic pipeline + tool-calling agent loop |
+| `backend/services/supabase_service.py` | Supabase CRUD for conversation persistence |
+
+### Modified Backend Files (2)
+
+| File | Changes |
+|------|---------|
+| `backend/main.py` | Refactored `/parse_link` to use AgentOrchestrator; added 6 new endpoints (`/chat`, `/sessions`, `/sessions/{id}/save`, `/conversations`, `/conversations/{id}`, `/conversations/{id}` delete); API v2.0.0 |
+| `backend/requirements.txt` | Added `trafilatura==2.0.0`, `supabase==2.6.0` |
+
+### Modified Frontend Files (3)
+
+| File | Changes |
+|------|---------|
+| `src/types/route.ts` | Added v2 types: `ParseResultV2`, `Conversation`, `ConversationDetail`, `ChatRequest`, `ChatResponse`, `HierarchyInfo`, `NoiseInfo`, `MapUpdate` |
+| `src/services/apiService.ts` | Added `chat()`, `getConversations()`, `getConversation()`, `saveSession()`, `deleteConversation()`; extracted `fetchWithTimeout()` |
+| `src/features/home/HomeScreen.tsx` | Added session management, conversation history panel, agent chat integration |
+| `src/features/home/Sidekick.tsx` | Added `onChat` prop, hierarchy info display, save button |
+
+### No Storage / Cache Changes (Confirmed)
+
+- **No Redis** was implemented — still in-memory only
+- **No new caching layer** — existing `cache.py` unchanged
+- **Supabase is only for conversation persistence** — teammate-managed, AI module reads/writes through the API
+- All session data is ephemeral (lost on process restart) unless explicitly saved
