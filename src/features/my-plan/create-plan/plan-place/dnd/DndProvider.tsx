@@ -5,11 +5,11 @@ import { NativeOnlyAnimatedView } from '@/components/ui/native-only-animated-vie
 import type { PlannedPlace, SlotKey } from '../types';
 import { slotKeyToString } from '../types';
 
-// Forward declaration to avoid circular import — PlaceSlotCard imports useDragCard which imports DndProvider
+// Forward declaration to avoid circular import — FlexiblePlaceCard imports useDragCard which imports DndProvider
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let PlaceSlotCardComponent: React.ComponentType<any> | null = null;
-export function registerPlaceSlotCard(c: React.ComponentType<any>) {
-  PlaceSlotCardComponent = c;
+let DragGhostComponent: React.ComponentType<any> | null = null;
+export function registerDragGhostCard(c: React.ComponentType<any>) {
+  DragGhostComponent = c;
 }
 
 type DropZoneEntry = {
@@ -21,6 +21,8 @@ type DropZoneEntry = {
 export type DropZoneRect = {
   key: string;
   slotKey: SlotKey;
+  x: number;
+  width: number;
   y: number;
   height: number;
 };
@@ -31,13 +33,19 @@ export type DndContextValue = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   activeZoneKey: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ghostX: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ghostY: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dragSourceKind: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dropZonesSnap: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   scrollOffset: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   containerScreenY: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  containerScreenX: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registerDropZone: (slotKey: SlotKey, ref: React.RefObject<any>) => void;
   unregisterDropZone: (slotKey: SlotKey) => void;
@@ -55,25 +63,29 @@ export function useDndContext(): DndContextValue {
 
 type DndProviderProps = {
   children: React.ReactNode;
-  onDrop: (from: SlotKey, to: SlotKey, place: PlannedPlace, targetIndex?: number) => void;
+  onDrop: (from: SlotKey, to: SlotKey, place: PlannedPlace) => void;
   reportScrollYToPanel: (y: number) => void;
 };
 
 export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProviderProps) {
   const isDragging = useSharedValue(false);
   const activeZoneKey = useSharedValue('');
+  const ghostX = useSharedValue(0);
   const ghostY = useSharedValue(0);
+  const dragSourceKind = useSharedValue<'free' | 'dated'>('free');
   const dropZonesSnap = useSharedValue<DropZoneRect[]>([]);
   const scrollOffset = useSharedValue(0);
   const containerScreenY = useSharedValue(0);
+  const containerScreenX = useSharedValue(0);
 
   const containerRef = useRef<View>(null);
   const zonesRef = useRef<Map<string, DropZoneEntry>>(new Map());
   const ghostPlaceRef = useRef<PlannedPlace | null>(null);
   const ghostSourceSlotRef = useRef<SlotKey | null>(null);
 
-  const [ghostPlace, setGhostPlace] = useState<PlannedPlace | null>(null);
+  const [ghostState, setGhostState] = useState<{ place: PlannedPlace; kind: 'free' | 'dated' } | null>(null);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const registerDropZone = (slotKey: SlotKey, ref: React.RefObject<any>) => {
     zonesRef.current.set(slotKeyToString(slotKey), { slotKey, ref });
   };
@@ -85,7 +97,7 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
   const startDrag = (place: PlannedPlace, sourceSlot: SlotKey) => {
     ghostPlaceRef.current = place;
     ghostSourceSlotRef.current = sourceSlot;
-    setGhostPlace(place);
+    setGhostState({ place, kind: sourceSlot.kind });
 
     const entries = [...zonesRef.current.entries()];
     reportScrollYToPanel(1);
@@ -99,7 +111,7 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
     let remaining = entries.length;
     for (const [key, { slotKey: sk, ref }] of entries) {
       ref.current?.measureInWindow((x: number, y: number, w: number, h: number) => {
-        snaps.push({ key, slotKey: sk, y, height: h });
+        snaps.push({ key, slotKey: sk, x, y, width: w, height: h });
         remaining--;
         if (remaining === 0) {
           dropZonesSnap.value = [...snaps];
@@ -118,16 +130,15 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
       }
     }
 
-    setGhostPlace(null);
+    setGhostState(null);
     ghostPlaceRef.current = null;
     ghostSourceSlotRef.current = null;
   };
 
   const ghostStyle = useAnimatedStyle(() => ({
     position: 'absolute' as const,
-    left: 16,
-    right: 16,
-    top: ghostY.value - 28,
+    left: ghostX.value - 32,
+    top: ghostY.value - 48,
     opacity: isDragging.value ? 0.9 : 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -142,10 +153,13 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
       value={{
         isDragging,
         activeZoneKey,
+        ghostX,
         ghostY,
+        dragSourceKind,
         dropZonesSnap,
         scrollOffset,
         containerScreenY,
+        containerScreenX,
         registerDropZone,
         unregisterDropZone,
         startDrag,
@@ -156,20 +170,16 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
         ref={containerRef}
         style={{ flex: 1 }}
         onLayout={() => {
-          containerRef.current?.measureInWindow((_x: number, y: number) => {
+          containerRef.current?.measureInWindow((x: number, y: number) => {
+            containerScreenX.value = x;
             containerScreenY.value = y;
           });
         }}
       >
         {children}
         <NativeOnlyAnimatedView pointerEvents="none" style={ghostStyle}>
-          {ghostPlace && PlaceSlotCardComponent && (
-            <PlaceSlotCardComponent
-              place={ghostPlace}
-              slotKey={{ kind: 'free' }}
-              onRemove={() => {}}
-              isGhost
-            />
+          {ghostState && DragGhostComponent && (
+            <DragGhostComponent place={ghostState.place} onRemove={() => {}} isGhost />
           )}
         </NativeOnlyAnimatedView>
       </View>

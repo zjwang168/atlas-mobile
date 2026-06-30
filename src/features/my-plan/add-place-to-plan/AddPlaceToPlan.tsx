@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -193,6 +194,11 @@ export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlac
                     gap: 12,
                   }}
                 >
+                  <View style={{ width: 44, height: 44, borderRadius: 8, overflow: 'hidden', backgroundColor: '#f4f4f5' }}>
+                    {item.thumbnailUrl ? (
+                      <Image source={{ uri: item.thumbnailUrl }} style={{ width: 44, height: 44 }} resizeMode="cover" />
+                    ) : null}
+                  </View>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text className="text-base text-text-primary" numberOfLines={1}>
                       {item.name}

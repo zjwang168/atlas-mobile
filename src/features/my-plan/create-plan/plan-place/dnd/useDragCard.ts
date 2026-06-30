@@ -7,9 +7,12 @@ export function useDragCard(place: PlannedPlace, slotKey: SlotKey) {
   const {
     isDragging,
     activeZoneKey,
+    ghostX,
     ghostY,
+    dragSourceKind,
     dropZonesSnap,
     containerScreenY,
+    containerScreenX,
     startDrag,
     finishDrag,
   } = useDndContext();
@@ -22,19 +25,27 @@ export function useDragCard(place: PlannedPlace, slotKey: SlotKey) {
     .onStart((e) => {
       'worklet';
       isDragging.value = true;
+      dragSourceKind.value = slotKey.kind === 'free' ? 'free' : 'dated';
+      ghostX.value = e.absoluteX - containerScreenX.value;
       ghostY.value = e.absoluteY - containerScreenY.value;
       runOnJS(startDrag)(place, slotKey);
     })
     .onChange((e) => {
       'worklet';
       if (!isDragging.value) return;
+      ghostX.value = e.absoluteX - containerScreenX.value;
       ghostY.value = e.absoluteY - containerScreenY.value;
 
+      const absX = e.absoluteX;
+      const absY = e.absoluteY;
       let hitKey = '';
       const zones = dropZonesSnap.value;
       for (let i = 0; i < zones.length; i++) {
         const zone = zones[i];
-        if (e.absoluteY >= zone.y && e.absoluteY <= zone.y + zone.height) {
+        if (
+          absX >= zone.x && absX <= zone.x + zone.width &&
+          absY >= zone.y && absY <= zone.y + zone.height
+        ) {
           hitKey = zone.key;
           break;
         }

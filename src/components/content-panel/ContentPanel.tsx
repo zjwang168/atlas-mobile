@@ -219,7 +219,6 @@ export default function ContentPanel({
   useEffect(() => {
     if (visible === undefined) return;
     if (visible) {
-      snapTo(controlledSnapState ?? initialSnap, false);
       translateY.setValue(40);
       opacity.setValue(0);
       Animated.parallel([

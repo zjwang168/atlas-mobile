@@ -5,10 +5,10 @@ import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import { createPlanCache, type DateRange } from '../CreatePlan';
 import { DndProvider } from './dnd/DndProvider';
-import AddPlaceField from './components/AddPlaceField';
-import AddPlaceInDate from './components/AddPlaceInDate';
+import FlexiblePlaceField from './flexible-place-field/FlexiblePlaceField';
+import DateRangeField from './date-range-field/DateRangeField';
 import { useHome } from '../../../home/HomeContext';
-import { type PlacesState, type SlotKey, type PlannedPlace, type VisitSlot } from './types';
+import { type PlacesState, type SlotKey, type PlannedPlace, type TimeSlot } from './types';
 import { savePlan, type SavedPlan } from '../savePlan';
 
 type PlanPlaceProps = {
@@ -55,20 +55,14 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
     });
   }
 
-  function openForSlot(date: string, slot: VisitSlot) {
+  function openForDate(date: string, timeSlot: TimeSlot) {
     setOverlay({
       kind: 'addPlaceToPlan',
       onSelect: (newPlaces) => {
         updatePlaces((prev) => {
-          const prevByDate = (prev.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
-          const prevSlot = prevByDate[slot] ?? [];
-          return {
-            ...prev,
-            byDate: {
-              ...prev.byDate,
-              [date]: { ...prevByDate, [slot]: [...prevSlot, ...newPlaces] },
-            },
-          };
+          const existing = prev.byDate[date] ?? [];
+          const tagged = newPlaces.map((p) => ({ ...p, timeSlot }));
+          return { ...prev, byDate: { ...prev.byDate, [date]: [...existing, ...tagged] } };
         });
       },
     });
@@ -78,18 +72,17 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
     updatePlaces((prev) => ({ ...prev, free: prev.free.filter((p) => p.id !== id) }));
   }
 
-  function handleRemoveDated(date: string, slot: VisitSlot, id: string) {
-    updatePlaces((prev) => {
-      const prevByDate = (prev.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
-      const filtered = (prevByDate[slot] ?? []).filter((p) => p.id !== id);
-      return {
-        ...prev,
-        byDate: { ...prev.byDate, [date]: { ...prevByDate, [slot]: filtered } },
-      };
-    });
+  function handleRemoveDated(date: string, id: string) {
+    updatePlaces((prev) => ({
+      ...prev,
+      byDate: {
+        ...prev.byDate,
+        [date]: (prev.byDate[date] ?? []).filter((p) => p.id !== id),
+      },
+    }));
   }
 
-  function handleDrop(from: SlotKey, to: SlotKey, place: PlannedPlace, targetIndex?: number) {
+  function handleDrop(from: SlotKey, to: SlotKey, place: PlannedPlace) {
     updatePlaces((prev) => {
       let next = { ...prev };
 
@@ -97,33 +90,27 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
       if (from.kind === 'free') {
         next = { ...next, free: next.free.filter((p) => p.id !== place.id) };
       } else {
-        const { date, slot } = from;
-        const prevByDate = (next.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
+        const { date } = from;
         next = {
           ...next,
           byDate: {
             ...next.byDate,
-            [date]: {
-              ...prevByDate,
-              [slot]: (prevByDate[slot] ?? []).filter((p) => p.id !== place.id),
-            },
+            [date]: (next.byDate[date] ?? []).filter((p) => p.id !== place.id),
           },
         };
       }
 
       // Insert into target
       if (to.kind === 'free') {
-        const arr = [...next.free];
-        arr.splice(targetIndex ?? arr.length, 0, place);
-        next = { ...next, free: arr };
+        next = { ...next, free: [...next.free, { ...place, timeSlot: undefined }] };
       } else {
-        const { date, slot } = to;
-        const prevByDate = (next.byDate[date] ?? {}) as Record<VisitSlot, PlannedPlace[]>;
-        const arr = [...(prevByDate[slot] ?? [])];
-        arr.splice(targetIndex ?? arr.length, 0, place);
+        const { date, timeSlot } = to;
         next = {
           ...next,
-          byDate: { ...next.byDate, [date]: { ...prevByDate, [slot]: arr } },
+          byDate: {
+            ...next.byDate,
+            [date]: [...(next.byDate[date] ?? []), { ...place, timeSlot }],
+          },
         };
       }
 
@@ -142,12 +129,13 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
     <DndProvider onDrop={handleDrop} reportScrollYToPanel={reportScrollY}>
       <View style={{ flex: 1 }}>
         <View style={{ paddingHorizontal: 16 }}>
-          <Text style={{ fontSize: 14, color: '#71717a', marginBottom: 16 }}>{summary}</Text>
+          <Text style={{ fontSize: 14, color: '#71717a', marginBottom: 12 }}>{summary}</Text>
 
-          <AddPlaceField
-            label="Flexible"
+          <Text style={{ fontSize: 13, fontWeight: '500', color: '#71717a', marginBottom: 8 }}>
+            Flexible
+          </Text>
+          <FlexiblePlaceField
             places={places.free}
-            slotKey={{ kind: 'free' }}
             onAdd={openForFree}
             onRemove={handleRemoveFree}
           />
@@ -155,17 +143,25 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
         {range.start && (
           <View style={{ flex: 1, marginTop: 16 }}>
-            <AddPlaceInDate
+            <DateRangeField
               range={range}
               byDate={places.byDate}
-              onAdd={openForSlot}
+              onAdd={openForDate}
               onRemove={handleRemoveDated}
             />
           </View>
         )}
       </View>
 
-      <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 20, paddingTop: 8, paddingBottom: insets.bottom + 16 }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          gap: 12,
+          paddingHorizontal: 20,
+          paddingTop: 8,
+          paddingBottom: insets.bottom + 16,
+        }}
+      >
         <Button variant="secondary" onPress={onBack} size="lg" className="flex-1 rounded-full">
           <Text>Back</Text>
         </Button>

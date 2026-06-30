@@ -1,37 +1,47 @@
-export type VisitSlot = 'morning' | 'noon' | 'afternoon' | 'night';
+export type TimeSlot = 'morning' | 'noon' | 'afternoon' | 'night';
 
-export const VISIT_SLOTS: VisitSlot[] = ['morning', 'noon', 'afternoon', 'night'];
+export const TIME_SLOTS: TimeSlot[] = ['morning', 'noon', 'afternoon', 'night'];
+
+export const TIME_SLOT_LABELS: Record<TimeSlot, string> = {
+  morning: 'Morning',
+  noon: 'Noon',
+  afternoon: 'Afternoon',
+  night: 'Night',
+};
 
 export type PlannedPlace = {
   id: string;
   placeId: string;
   name: string;
   subtitle: string;
+  imageUrl?: string;
+  timeSlot?: TimeSlot;
 };
 
 export type SlotKey =
   | { kind: 'free' }
-  | { kind: 'dated'; date: string; slot: VisitSlot };
+  | { kind: 'dated'; date: string; timeSlot: TimeSlot };
 
 export type PlacesState = {
   free: PlannedPlace[];
-  byDate: Record<string, Record<VisitSlot, PlannedPlace[]>>;
+  byDate: Record<string, PlannedPlace[]>;
 };
 
 export function slotKeyToString(key: SlotKey): string {
   if (key.kind === 'free') return 'free';
-  return `dated:${key.date}:${key.slot}`;
+  return `dated:${key.date}:${key.timeSlot}`;
 }
 
 function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function newPlannedPlace(place: { id: string; name: string; subtitle: string }): PlannedPlace {
+export function newPlannedPlace(place: { id: string; name: string; subtitle: string; imageUrl?: string }): PlannedPlace {
   return {
     id: generateId(),
     placeId: place.id,
     name: place.name,
     subtitle: place.subtitle,
+    imageUrl: place.imageUrl,
   };
 }

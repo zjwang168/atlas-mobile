@@ -7,7 +7,7 @@
 
 import { mockPlans } from '../../../../mock-data/mockPlans';
 import type { DateRange } from './CreatePlan';
-import type { PlacesState, PlannedPlace, VisitSlot } from './plan-place/types';
+import type { PlacesState, PlannedPlace } from './plan-place/types';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -21,7 +21,7 @@ export type PlanInput = {
 
 export type PlanDateSlot = {
   date: string; // 'YYYY-MM-DD'
-  slots: Partial<Record<VisitSlot, PlannedPlace[]>>;
+  places: PlannedPlace[];
 };
 
 export type SavedPlan = {
@@ -46,23 +46,15 @@ function generateId(): string {
 }
 
 function countPlaces(places: PlacesState): number {
-  const freeCount = places.free.length;
-  const datedCount = Object.values(places.byDate).reduce((acc, slotMap) => {
-    return acc + Object.values(slotMap).reduce((s, arr) => s + arr.length, 0);
-  }, 0);
-  return freeCount + datedCount;
+  const datedCount = Object.values(places.byDate).reduce((acc, arr) => acc + arr.length, 0);
+  return places.free.length + datedCount;
 }
 
 function buildSchedule(byDate: PlacesState['byDate']): PlanDateSlot[] {
   return Object.entries(byDate)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, slotMap]) => ({
-      date,
-      slots: Object.fromEntries(
-        Object.entries(slotMap).filter(([, places]) => places.length > 0),
-      ) as Partial<Record<VisitSlot, PlannedPlace[]>>,
-    }))
-    .filter((day) => Object.keys(day.slots).length > 0);
+    .map(([date, places]) => ({ date, places }))
+    .filter((day) => day.places.length > 0);
 }
 
 // ---------------------------------------------------------------------------

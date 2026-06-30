@@ -2,15 +2,8 @@ import { Linking, Pressable, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { mockPlaceDetails } from '../../../../../mock-data/mockPlaceDetails';
 import type { SavedPlan, PlanDateSlot } from '../../create-plan/savePlan';
-import type { PlannedPlace, VisitSlot } from '../../create-plan/plan-place/types';
-
-const SLOT_ORDER: VisitSlot[] = ['morning', 'noon', 'afternoon', 'night'];
-const SLOT_LABELS: Record<VisitSlot, string> = {
-  morning: 'Morning',
-  noon: 'Noon',
-  afternoon: 'Afternoon',
-  night: 'Night',
-};
+import type { PlannedPlace } from '../../create-plan/plan-place/types';
+import { TIME_SLOT_LABELS } from '../../create-plan/plan-place/types';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -38,10 +31,16 @@ function findPlaceDetailById(id: string) {
 
 function PlaceRow({ place }: { place: PlannedPlace }) {
   const detail = findPlaceDetailById(place.placeId);
+  const slotLabel = place.timeSlot ? TIME_SLOT_LABELS[place.timeSlot] : null;
 
   return (
     <View style={{ marginBottom: 20 }}>
-      <Text style={{ fontSize: 15, fontWeight: '600', color: '#09090b' }}>{place.name}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        {slotLabel && (
+          <Text style={{ fontSize: 12, color: '#a1a1aa' }}>{slotLabel}</Text>
+        )}
+        <Text style={{ fontSize: 15, fontWeight: '600', color: '#09090b' }}>{place.name}</Text>
+      </View>
       {detail?.address ? (
         <Text style={{ fontSize: 12, color: 'rgba(60,60,67,0.6)', marginTop: 2 }}>
           {detail.address}
@@ -73,27 +72,18 @@ function PlaceRow({ place }: { place: PlannedPlace }) {
 }
 
 function DaySection({ day }: { day: PlanDateSlot }) {
+  if (day.places.length === 0) return null;
+
   return (
     <View style={{ marginBottom: 8 }}>
       <Text style={{ fontSize: 15, fontWeight: '500', color: '#09090b', marginBottom: 10 }}>
         {formatDate(day.date)}
       </Text>
-      {SLOT_ORDER.map((slot) => {
-        const places = day.slots[slot];
-        if (!places || places.length === 0) return null;
-        return (
-          <View key={slot}>
-            <Text style={{ fontSize: 13, color: '#8b8b8b', marginBottom: 8 }}>
-              {SLOT_LABELS[slot]}
-            </Text>
-            <View style={{ paddingLeft: 20 }}>
-              {places.map((place) => (
-                <PlaceRow key={place.id} place={place} />
-              ))}
-            </View>
-          </View>
-        );
-      })}
+      <View style={{ paddingLeft: 20 }}>
+        {day.places.map((place) => (
+          <PlaceRow key={place.id} place={place} />
+        ))}
+      </View>
     </View>
   );
 }
