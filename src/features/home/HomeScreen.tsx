@@ -57,6 +57,7 @@ const toRouteMarkers = (locations: GeocodedLocation[]): MapMarker[] =>
     longitude: loc.longitude,
     title: loc.name,
     description: loc.full_address,
+    sentiment: loc.sentiment,
   }));
 
 /** Convert ordered locations into a GeoJSON LineString for route rendering */
@@ -104,8 +105,21 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [showHistory, setShowHistory] = useState(false);
 
+  // Force map re-render when new parse result arrives (fixes map not centering)
+  const [mapRefreshKey, setMapRefreshKey] = useState(0);
+
+  // Custom center override when user taps a location in the list
+  const [customCenter, setCustomCenter] = useState<[number, number] | undefined>(undefined);
+  // Custom zoom override when user taps a location
+  const [customZoom, setCustomZoom] = useState<number | undefined>(undefined);
+
   // Track whether we have active route data to display
   const hasRouteData = parseResult !== null && parseResult.locations.length > 0;
+
+  // Check if any locations have negative sentiment (red markers)
+  const hasNegativeLocations = parseResult?.locations?.some(
+    loc => loc.sentiment === 'negative'
+  );
 
   // Compute route display props
   const routeGeoJSON = useMemo(() => {
@@ -118,16 +132,56 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     return toRouteMarkers(parseResult.route.ordered_locations);
   }, [parseResult]);
 
-  // Compute camera target from route locations (center of first and last point)
+  // Compute camera target — center on the DENSEST cluster of points
+  // instead of the geometric average. This avoids centering on empty
+  // areas when some locations have wrong coordinates.
   const routeCenter = useMemo((): [number, number] | undefined => {
     if (!parseResult?.route.ordered_locations.length) return undefined;
     const locs = parseResult.route.ordered_locations;
-    const latSum = locs.reduce((s, l) => s + l.latitude, 0);
-    const lngSum = locs.reduce((s, l) => s + l.longitude, 0);
-    const avgLat = latSum / locs.length;
-    const avgLng = lngSum / locs.length;
-    return [avgLng, avgLat];
+
+    if (locs.length <= 3) {
+      // For few points, use average
+      const latSum = locs.reduce((s, l) => s + l.latitude, 0);
+      const lngSum = locs.reduce((s, l) => s + l.longitude, 0);
+      return [lngSum / locs.length, latSum / locs.length];
+    }
+
+    // Grid clustering: divide into ~0.2° x 0.2° cells (~20km at mid-latitudes)
+    // Find the cell with the most points, return its center
+    const grid: Record<string, { lats: number[]; lngs: number[] }> = {};
+    const GRID_SIZE = 0.2;
+
+    for (const loc of locs) {
+      const cellX = Math.round(loc.longitude / GRID_SIZE);
+      const cellY = Math.round(loc.latitude / GRID_SIZE);
+      const key = `${cellX},${cellY}`;
+      if (!grid[key]) grid[key] = { lats: [], lngs: [] };
+      grid[key].lats.push(loc.latitude);
+      grid[key].lngs.push(loc.longitude);
+    }
+
+    // Find densest cell
+    let maxCount = 0;
+    let bestCell = { lats: [0] as number[], lngs: [0] as number[] };
+    for (const key of Object.keys(grid)) {
+      const count = grid[key].lats.length;
+      if (count > maxCount) {
+        maxCount = count;
+        bestCell = grid[key];
+      }
+    }
+
+    // Return center of densest cell
+    const latSum = bestCell.lats.reduce((s, l) => s + l, 0);
+    const lngSum = bestCell.lngs.reduce((s, l) => s + l, 0);
+    return [lngSum / bestCell.lngs.length, latSum / bestCell.lats.length];
   }, [parseResult]);
+
+  // Use customCenter if set, otherwise use routeCenter, otherwise default
+  const mapCenter = customCenter ?? routeCenter ?? [-122.3321, 47.6062];
+
+  // Use customZoom if set, otherwise use default based on route data
+  const mapZoom = customZoom ?? (hasNegativeLocations ? 13 : hasRouteData ? 10 : 12);
 
   /** Handle URL submission from the SearchBar */
   const handleSend = useCallback(async (url: string) => {
@@ -151,6 +205,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     try {
       const result = await parseLink(url) as ParseResultV2;
       setParseResult(result);
+      setCustomCenter(undefined);
+      setCustomZoom(undefined);
+      setMapRefreshKey(prev => prev + 1);  // Force map re-render on new result
 
       // Store session_id if returned (v2 agentic pipeline)
       if (result.session_id) {
@@ -335,6 +392,12 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
     // TODO: Integrate with collections feature
   }, []);
 
+  /** Handle pressing a location in the list — center the map on it and zoom in */
+  const handleLocationPress = useCallback((location: GeocodedLocation) => {
+    setCustomCenter([location.longitude, location.latitude]);
+    setCustomZoom(16);
+  }, []);
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
@@ -371,12 +434,18 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
       {/* Mapbox map filling the entire screen */}
       <MapboxMap
         markers={defaultMarkers}
-        centerCoordinate={routeCenter ?? [-122.3321, 47.6062]}
-        zoomLevel={hasRouteData ? 10 : 12}
-        routeGeoJSON={routeGeoJSON}
+        centerCoordinate={mapCenter}
+        zoomLevel={mapZoom}
         routeMarkers={routeMarkers}
         onMarkerPress={(marker) => {
-          console.log('Marker pressed:', marker.title);
+          const sentimentLabels: Record<string, string> = {
+            positive: 'Recommended',
+            neutral: 'Neutral',
+            negative: 'Not Recommended',
+          };
+          const label = marker.sentiment ? sentimentLabels[marker.sentiment] || 'Unknown' : 'Unrated';
+          const address = marker.description ? ` (${marker.description})` : '';
+          console.log(`Marker pressed: ${marker.title}${address} Label: ${label}`);
           // TODO: Navigate to PlaceDetailScreen
         }}
       />
@@ -393,6 +462,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
         error={error}
         onDeleteLocation={handleDeleteLocation}
         onSaveLocation={handleSaveLocation}
+        onLocationPress={handleLocationPress}
       />
     </SafeAreaView>
   );

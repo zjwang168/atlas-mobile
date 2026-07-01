@@ -29,6 +29,8 @@ export interface MapMarker {
   title?: string;
   /** Optional subtitle/description */
   description?: string;
+  /** Sentiment classification for marker color */
+  sentiment?: 'positive' | 'neutral' | 'negative' | null;
 }
 
 /** Props for the MapboxMap component */
@@ -44,11 +46,21 @@ interface MapboxMapProps {
   /** Callback when a marker is pressed */
   onMarkerPress?: (marker: MapMarker) => void;
 
-  /** Optional GeoJSON LineString to render a route polyline on the map */
-  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
   /** Optional re-ordered markers to display along the route (overrides `markers` when set) */
   routeMarkers?: MapMarker[];
 }
+
+// ---- Helpers ----
+
+/** Map sentiment to marker color */
+const getMarkerColor = (sentiment?: string | null): string => {
+  switch (sentiment) {
+    case 'positive': return '#34C759'; // Green
+    case 'neutral': return '#007AFF';  // Blue
+    case 'negative': return '#FF3B30'; // Red
+    default: return '#007AFF';         // Default blue
+  }
+};
 
 // ---- Component ----
 
@@ -62,11 +74,16 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
   zoomLevel = 12,
   style,
   onMarkerPress,
-  routeGeoJSON,
   routeMarkers,
 }) => {
   // Use routeMarkers if provided, otherwise fall back to the regular markers
   const displayMarkers = routeMarkers ?? markers;
+  // Sort markers so negative sentiment renders last (on top)
+  // MapboxGL renders later elements on top of earlier ones.
+  const sortedMarkers = [...displayMarkers].sort((a, b) => {
+    const order: Record<string, number> = { negative: 1, neutral: 0, positive: 0 };
+    return (order[b.sentiment || ''] || 0) - (order[a.sentiment || ''] || 0);
+  });
   const { width, height } = useWindowDimensions();
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
@@ -145,24 +162,8 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
           }}
         />
 
-        {/* Render route polyline (if provided) */}
-        {routeGeoJSON && (
-          <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
-            <MapboxGL.LineLayer
-              id="routeLine"
-              style={{
-                lineColor: '#007AFF',
-                lineWidth: 4,
-                lineOpacity: 0.8,
-                lineCap: 'round',
-                lineJoin: 'round',
-              }}
-            />
-          </MapboxGL.ShapeSource>
-        )}
-
         {/* Render markers (routeMarkers if provided, otherwise markers) */}
-        {displayMarkers.map((marker) => (
+        {sortedMarkers.map((marker) => (
           <MapboxGL.MarkerView
             key={marker.id}
             coordinate={[marker.longitude, marker.latitude]}
@@ -171,7 +172,10 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
               style={styles.markerContainer}
               onTouchEnd={() => onMarkerPress?.(marker)}
             >
-              <View style={styles.marker} />
+              <View style={[
+                styles.marker,
+                { backgroundColor: getMarkerColor(marker.sentiment) }
+              ]} />
             </View>
           </MapboxGL.MarkerView>
         ))}

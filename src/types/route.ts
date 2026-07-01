@@ -4,6 +4,9 @@ export interface GeocodedLocation {
   latitude: number;
   longitude: number;
   full_address: string;
+  sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  description?: string | null;
+  category?: string | null;
 }
 
 /** A segment between two consecutive locations in the route */

@@ -59,6 +59,12 @@ class LocationItem(BaseModel):
     latitude: float
     longitude: float
     full_address: str
+    sentiment: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    is_exact: Optional[bool] = None
+    confidence: Optional[float] = None
+    source: Optional[str] = None
 
 
 class RouteSegment(BaseModel):

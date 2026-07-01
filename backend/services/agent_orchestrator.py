@@ -92,6 +92,19 @@ class AgentOrchestrator:
             except Exception:
                 pass  # If geocoding the region fails, proceed without proximity
 
+        # 2.8 Deduplicate location names before geocoding
+        seen_names_in_query = set()
+        unique_locations = []
+        for loc in location_names:
+            name_key = loc["name"].strip().lower()
+            if name_key not in seen_names_in_query:
+                seen_names_in_query.add(name_key)
+                unique_locations.append(loc)
+
+        if len(unique_locations) < len(location_names):
+            print(f"[AgentOrchestrator] Pre-geocode dedup: {len(location_names)} -> {len(unique_locations)}")
+        location_names = unique_locations
+
         # 3. Geocode locations — include context + proximity bias
         from backend.services.geocoder import batch_geocode
         contexts = [loc.get("context", "") for loc in location_names]
@@ -102,19 +115,23 @@ class AgentOrchestrator:
         # geocoding accuracy — e.g. "Luxembourg" -> "Luxembourg Gardens, Paris"
         # instead of the country Luxembourg.
         default_context = inferred_region if inferred_region else ""
+        # Shorten verbose region names for geocoding queries
+        # e.g. "Washington DC metropolitan area" -> "Washington DC"
+        if default_context and "metropolitan" in default_context.lower():
+            parts = default_context.split()
+            if parts:
+                default_context = " ".join(parts[:2]) if len(parts) >= 2 else parts[0]
 
-        # Build geocoding queries — prefer entity-level context, fall back
-        # to the inferred region, then empty.
+        # Build geocoding queries — STRICTLY avoid duplicate context
         geocode_queries = []
         for loc in location_names:
             name = loc["name"]
             ctx = loc.get("context", "")
-            if ctx:
-                geocode_queries.append(f"{name}, {ctx}")
-            elif default_context:
-                geocode_queries.append(f"{name}, {default_context}")
-            else:
-                geocode_queries.append(name)
+            
+            # Use the SIMPLEST possible query: just the name.
+            # Entity Linking already appends city/region (e.g. "White House, Washington DC").
+            # Adding any extra context causes Photon/Nominatim 403 from long URLs.
+            geocode_queries.append(name)
 
         geocoded = await batch_geocode(
             geocode_queries, proximity=proximity,
@@ -130,6 +147,9 @@ class AgentOrchestrator:
                 geo["name"] = original_name
                 geo["context"] = contexts[i] if i < len(contexts) else ""
                 geo["hierarchy_level"] = location_names[i].get("hierarchy_level", 2) if i < len(location_names) else 2
+                geo["sentiment"] = location_names[i].get("sentiment")
+                geo["description"] = location_names[i].get("description")
+                geo["category"] = location_names[i].get("category")
                 locations.append(geo)
 
         # 3.5 Deduplicate — by NAME only, NOT by coordinates
@@ -168,6 +188,31 @@ class AgentOrchestrator:
         locations = validated
         session.locations = locations
 
+        # 3.6 Print location descriptions with sentiment
+        print(f"\n📍 Location Details:")
+        for loc in location_names:
+            desc = loc.get("description", "")
+            sentiment = loc.get("sentiment", "")
+            sentiment_icon = {"positive": "👍", "neutral": "➖", "negative": "👎"}.get(sentiment, "❓")
+            desc_part = f" — {desc}" if desc else ""
+            sent_part = f" [{sentiment_icon} {sentiment}]" if sentiment else ""
+            print(f"   • {loc['name']}{desc_part}{sent_part}")
+
+        # 3.7 Print locations grouped by category
+        from collections import defaultdict
+        categories = defaultdict(list)
+        for loc in location_names:
+            cat = loc.get("category", "Others") or "Others"
+            categories[cat].append(loc["name"])
+        print("\n📍 Grouped by Category:")
+        for cat in ["Tourist Attractions", "Dining & Drinking", "Entertainment",
+                     "Museums & Exhibitions", "Transit Hubs", "Religious Sites", "Others"]:
+            items = categories.get(cat, [])
+            if items:
+                print(f"\n   🏷️ {cat}:")
+                for name in items:
+                    print(f"      • {name}")
+
         # 4. Plan route
         from backend.services.route_planner import plan_route
         route = plan_route(locations)
@@ -186,70 +231,6 @@ class AgentOrchestrator:
             "source_type": source_type,
             "session_id": session.session_id,
         }
-
-    async def _entity_linking(self, locations: list[dict], inferred_region: str | None) -> list[dict]:
-        """
-        Entity Linking — disambiguate potentially ambiguous location names.
-
-        Uses an LLM call to resolve common ambiguities:
-        - "Louvre" -> "Louvre Museum, Paris"
-        - "Luxembourg" -> "Luxembourg Gardens, Paris"
-        - "Tuileries" -> "Jardin des Tuileries, Paris"
-        - "Le Marais" -> "Le Marais, Paris 3rd/4th"
-
-        This runs AFTER the extraction pipeline (which identifies names)
-        but BEFORE geocoding (which maps names to coordinates).
-        """
-        import asyncio
-        import json
-
-        from backend.services.llm_client import call_llm
-
-        names = [loc["name"] for loc in locations]
-
-        entity_linking_prompt = f"""You are a precise geographic entity linker.
-Given a list of place names and the inferred geographic region,
-disambiguate each name so that a geocoding API can find the correct location.
-
-Inferred region: {inferred_region or 'Unknown'}
-
-Location names:
-{json.dumps(names, ensure_ascii=False, indent=2)}
-
-Rules:
-1. If a name is ambiguous, add clarifying context in parentheses.
-2. For well-known landmarks in the inferred region, make the name specific.
-3. Examples of good disambiguation:
-   - "ROM" → "Royal Ontario Museum, Toronto"
-   - "AGO" → "Art Gallery of Ontario, Toronto"
-   - "CN Tower" → "CN Tower, Toronto"
-   - "Luxembourg" → "Luxembourg Gardens, Paris" (NOT the country)
-   - "Louvre" → "Louvre Museum, Paris"
-   - "MOCA" → "Museum of Contemporary Art Toronto"
-4. If a name is already clear, keep it unchanged.
-5. Output ONLY a JSON array of strings, same order.
-"""
-
-        try:
-            result = await asyncio.to_thread(
-                call_llm,
-                messages=[{"role": "system", "content": entity_linking_prompt}],
-                temperature=0.1,
-                max_tokens=2048,
-            )
-
-            content = result.get("content", "[]")
-            disambiguated = json.loads(content)
-
-            if isinstance(disambiguated, list) and len(disambiguated) == len(locations):
-                for i, new_name in enumerate(disambiguated):
-                    if new_name and isinstance(new_name, str) and new_name != names[i]:
-                        locations[i]["name"] = new_name
-                        print(f"[EntityLinking] '{names[i]}' → '{new_name}'")
-        except Exception as e:
-            print(f"[EntityLinking] Failed: {e}")
-
-        return locations
 
     def _validate_coordinates(self, locations: list[dict], inferred_region: str | None = None) -> list[dict]:
         """
@@ -295,6 +276,105 @@ Rules:
                 })
 
         return validated
+
+    async def _entity_linking(self, location_names: list[dict], inferred_region: str | None = None) -> list[dict]:
+        """
+        Entity Linking — disambiguate ambiguous location names using LLM.
+
+        Rule 13 from the extraction prompt is moved here as a separate LLM call
+        because merging disambiguation into the extraction prompt confused the LLM
+        and caused it to miss entities. A dedicated call with a focused prompt
+        yields better recall.
+
+        For each location name, the LLM decides whether to:
+        - Append clarifying city/region in parentheses (e.g. "Chaoyang" → "Chaoyang, Beijing")
+        - Expand abbreviations to full names (e.g. "ROM" → "Royal Ontario Museum")
+        - Leave unambiguous names as-is
+
+        Returns the updated list with disambiguated names.
+        """
+        import json
+        import re
+
+        from backend.services.llm_client import call_llm
+
+        # Step 1: LLM-based disambiguation (abbreviations/aliases + generic term resolution)
+        names_list = "\n".join(
+            f"{i}. {loc['name']}" + (f"  (context: {loc.get('context', '')})" if loc.get('context') else "")
+            for i, loc in enumerate(location_names)
+        )
+
+        prompt = f"""You are a precise geographic entity linker. Given a list of location names from a travel post, disambiguate any ambiguous names.
+
+Rules:
+1. For abbreviations, expand to full name (e.g. "ROM" → "Royal Ontario Museum", "AGO" → "Art Gallery of Ontario", "MOCA" → "Museum of Contemporary Art", "GGB" → "Golden Gate Bridge")
+2. For ambiguous common names, append clarifying city/region in parentheses (e.g. "Chaoyang" → "Chaoyang, Beijing", "Luxembourg" → "Luxembourg Gardens, Paris" if context shows it's in Paris)
+3. For names that are already precise and unambiguous (e.g. "Eiffel Tower", "Tokyo Tower"), leave unchanged.
+4. Use the surrounding context to determine the correct entity.
+5. RESOLVE GENERIC TERMS: If a location name is a generic/category description (e.g. "monuments", "the tower", "the bridge", "the mall", "the palace", "the park", "the statue"), resolve it to the SPECIFIC geographic entity based on the inferred region context.
+
+   Examples:
+   - "monuments" in Washington DC → "Washington Monument"
+   - "the tower" in Paris → "Eiffel Tower"
+   - "the bridge" in San Francisco → "Golden Gate Bridge"
+   - "the mall" in Washington DC → "National Mall"
+   - "the palace" in London → "Buckingham Palace"
+   - Generic term without clear context → keep as-is
+
+6. If a name is already clear, keep it unchanged.
+
+{f"Region context: {inferred_region}" if inferred_region else ""}
+
+Location names:
+{names_list}
+
+Output ONLY a JSON object with this exact structure:
+{{"disambiguated": [
+  {{"index": 0, "original_name": "Louvre", "disambiguated_name": "Louvre Museum"}},
+  {{"index": 1, "original_name": "Eiffel Tower", "disambiguated_name": "Eiffel Tower"}}
+]}}"""
+
+        try:
+            result = await asyncio.to_thread(
+                call_llm,
+                messages=[{"role": "system", "content": prompt}],
+                temperature=0.2,
+                max_tokens=2048,
+            )
+
+            content = result.get("content", "{}")
+            parsed = json.loads(content)
+            disambiguated_list = parsed.get("disambiguated", [])
+
+            # Build lookup from index to disambiguated name
+            name_map = {}
+            for item in disambiguated_list:
+                idx = item.get("index")
+                disambiguated = item.get("disambiguated_name", "")
+                if idx is not None and disambiguated:
+                    name_map[idx] = disambiguated
+
+            # Apply disambiguation
+            updated = []
+            for i, loc in enumerate(location_names):
+                loc = dict(loc)  # Copy to avoid mutating original
+                if i in name_map:
+                    old_name = loc["name"]
+                    new_name = name_map[i]
+                    if new_name != old_name:
+                        print(f"[EntityLinking] '{old_name}' → '{new_name}'")
+                    loc["name"] = new_name
+                updated.append(loc)
+
+            changed_count = sum(1 for i in name_map if name_map[i] != location_names[i]["name"])
+            if changed_count > 0:
+                print(f"[EntityLinking] Disambiguated {changed_count}/{len(location_names)} names")
+
+            return updated
+
+        except Exception as e:
+            print(f"[EntityLinking] Failed: {e}")
+            return location_names
 
     async def chat(self, session_id: str, user_message: str) -> dict:
         """

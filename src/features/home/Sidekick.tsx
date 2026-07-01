@@ -29,6 +29,7 @@ interface SidekickProps {
   error: string | null;
   onDeleteLocation?: (index: number) => void;
   onSaveLocation?: (location: GeocodedLocation) => void;
+  onLocationPress?: (location: GeocodedLocation) => void;
   activeTab?: 'chat' | 'locations';
   onTabChange?: (tab: 'chat' | 'locations') => void;
 }
@@ -64,6 +65,7 @@ const Sidekick: React.FC<SidekickProps> = ({
   error,
   onDeleteLocation,
   onSaveLocation,
+  onLocationPress,
   activeTab: externalActiveTab,
   onTabChange,
 }) => {
@@ -246,59 +248,91 @@ const Sidekick: React.FC<SidekickProps> = ({
     </View>
   );
 
-  /** Location list view */
+  /** Location list view — grouped by category */
   const renderLocations = () => {
     const locations = parseResult?.locations ?? [];
+
+    // Group by category
+    const grouped: Record<string, GeocodedLocation[]> = {};
+    const categoryOrder = [
+      'Tourist Attractions', 'Dining & Drinking', 'Entertainment',
+      'Museums & Exhibitions', 'Transit Hubs', 'Religious Sites', 'Others',
+    ];
+
+    for (const loc of locations) {
+      const cat = loc.category || 'Others';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(loc);
+    }
+
+    const sentimentLabels: Record<string, { label: string; color: string }> = {
+      positive: { label: 'Recommended', color: '#34C759' },
+      neutral: { label: 'Neutral', color: '#007AFF' },
+      negative: { label: 'Not Recommended', color: '#FF3B30' },
+    };
+
+    const visibleCategories = categoryOrder.filter(c => grouped[c]?.length > 0);
+
+    if (visibleCategories.length === 0) {
+      return (
+        <View style={styles.centerContent}>
+          <Text style={styles.idleSubtitle}>No locations found</Text>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.locationsContainer}>
         <FlatList
-          data={locations}
-          keyExtractor={(_, index) => `loc-${index}`}
+          data={visibleCategories}
+          keyExtractor={item => item}
           contentContainerStyle={styles.locationsList}
           showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.centerContent}>
-              <Text style={styles.idleSubtitle}>No locations found</Text>
-            </View>
-          }
-          renderItem={({ item, index }) => (
-            <View style={styles.locationItem}>
-              <View style={styles.locationInfo}>
-                <Text style={styles.locationName}>
-                  {index + 1}. {item.name}
-                </Text>
-                <Text style={styles.locationAddress}>{item.full_address}</Text>
-                <Text style={styles.locationCoords}>
-                  {item.latitude.toFixed(4)}, {item.longitude.toFixed(4)}
-                </Text>
-              </View>
-              <View style={styles.locationActions}>
-                <TouchableOpacity
-                  style={styles.locationActionButton}
-                  onPress={() => {
-                    Alert.alert(
-                      'Delete Location',
-                      `Remove "${item.name}" from the list?`,
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Delete',
-                          style: 'destructive',
-                          onPress: () => onDeleteLocation?.(index),
-                        },
-                      ],
-                    );
-                  }}
-                >
-                  <Text style={styles.locationActionIcon}>🗑️</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.locationActionButton}
-                  onPress={() => onSaveLocation?.(item)}
-                >
-                  <Text style={styles.locationActionIcon}>⭐</Text>
-                </TouchableOpacity>
-              </View>
+          renderItem={({ item: category }) => (
+            <View style={styles.categoryGroup}>
+              <Text style={styles.categoryTitle}>🏷️ {category}</Text>
+              {grouped[category].map((loc, idx) => {
+                const sentiment = loc.sentiment ? sentimentLabels[loc.sentiment] : null;
+                return (
+                  <View key={idx} style={styles.locationItem}>
+                    <TouchableOpacity
+                      style={styles.locationInfoTouchable}
+                      onPress={() => onLocationPress?.(loc)}
+                    >
+                      <View style={styles.locationInfo}>
+                        <Text style={styles.locationName}>{loc.name}</Text>
+                        <Text style={styles.locationAddress}>{loc.full_address}</Text>
+                        {sentiment && (
+                          <View style={[styles.sentimentBadge, { backgroundColor: sentiment.color + '20' }]}>
+                            <Text style={[styles.sentimentText, { color: sentiment.color }]}>
+                              {sentiment.label}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                    <View style={styles.locationActions}>
+                      <TouchableOpacity
+                        style={styles.locationActionButton}
+                        onPress={() => {
+                          Alert.alert('Delete', `Remove "${loc.name}"?`, [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Delete', style: 'destructive', onPress: () => onDeleteLocation?.(idx) },
+                          ]);
+                        }}
+                      >
+                        <Text style={styles.locationActionIcon}>🗑️</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.locationActionButton}
+                        onPress={() => onSaveLocation?.(loc)}
+                      >
+                        <Text style={styles.locationActionIcon}>⭐</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           )}
         />
@@ -307,7 +341,8 @@ const Sidekick: React.FC<SidekickProps> = ({
   };
 
   // Use state for BottomSheet index (controlled prop in v4+)
-  const [sheetIndex, setSheetIndex] = useState(-1);
+  // TEMP: Start at 0 to verify BottomSheet renders
+  const [sheetIndex, setSheetIndex] = useState(0);
 
   // When content arrives, update the controlled index
   useEffect(() => {
@@ -331,11 +366,6 @@ const Sidekick: React.FC<SidekickProps> = ({
       {/* Show the sheet when we have a result, are loading, or have messages */}
       {(parseResult || isLoading || messages.length > 0) ? (
         <>
-          {/* Drag handle */}
-          <View style={styles.handleContainer}>
-            <View style={styles.handle} />
-          </View>
-
           {/* Save button */}
           {parseResult && sessionId && (
             <TouchableOpacity
@@ -620,6 +650,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 8,
   },
+  locationInfoTouchable: {
+    flex: 1,
+    marginRight: 8,
+    paddingVertical: 4,
+  },
   locationInfo: {
     flex: 1,
     marginRight: 8,
@@ -659,6 +694,27 @@ const styles = StyleSheet.create({
   },
   locationActionIcon: {
     fontSize: 16,
+  },
+  categoryGroup: {
+    marginBottom: 16,
+  },
+  categoryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  sentimentBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  sentimentText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
 });
 

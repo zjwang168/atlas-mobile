@@ -24,8 +24,12 @@ For each location, classify its hierarchy level:
 Output ONLY a JSON object with this exact structure:
 {{
   "entities": [
-    {{"name": "Golden Gate Bridge", "hierarchy_level": 0, "context": "San Francisco"}},
-    {{"name": "California", "hierarchy_level": 3, "context": null}}
+    {{"name": "Golden Gate Bridge", "hierarchy_level": 0, "context": "San Francisco",
+      "description": "Iconic suspension bridge with stunning bay views.",
+      "sentiment": "positive",
+      "category": "Tourist Attractions"}},
+    {{"name": "California", "hierarchy_level": 3, "context": null,
+      "description": null, "sentiment": null, "category": null}}
   ],
   "inferred_region": "San Francisco Bay Area",
   "is_multi_region": false,
@@ -48,6 +52,18 @@ Rules:
    geographic locations. But do include the neighborhood/area they are in.
 9. When in doubt, prefer to INCLUDE the location. The post-processing pipeline will
    handle noise filtering automatically.
+10. For each entity, add a "description" field — a one-sentence summary extracted from
+     the text. This should capture how the place is described in the post (e.g.
+     "right next to the centre", "worth a visit", "beautiful park with gardens").
+     Keep it concise, under 20 words. Use the original text's sentiment and style.
+     If no description can be inferred, set it to null.
+11. For each entity, add a "sentiment" field. Classify the post's sentiment toward
+     this location as one of: "positive" (强烈推荐/喜欢), "neutral" (一般/还可以),
+     "negative" (不推荐/不喜欢). Base this on how the text describes it.
+     If sentiment cannot be determined, set it to null.
+12. For each entity, add a "category" field. Choose exactly one from:
+     "Tourist Attractions", "Dining & Drinking", "Entertainment",
+     "Museums & Exhibitions", "Transit Hubs", "Religious Sites", "Others"
 
 Text:
 {text}
@@ -105,7 +121,7 @@ class ExtractionPipeline:
                 {
                     "role": "system",
                     "content": HIERARCHICAL_EXTRACTION_PROMPT.format(
-                        text=text[:8000]
+                        text=text[:16000]
                     ),
                 },
             ],

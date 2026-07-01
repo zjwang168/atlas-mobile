@@ -16,8 +16,8 @@ const API_BASE_URL: string =
   (Constants.expoConfig?.extra?.apiBaseUrl as string) ||
   'http://localhost:8000';
 
-/** Request timeout in milliseconds (30s — LLM calls can be slow) */
-const REQUEST_TIMEOUT_MS = 30_000;
+/** Request timeout in milliseconds (120s — extraction + geocoding pipeline can take 20-40s) */
+const REQUEST_TIMEOUT_MS = 120_000;
 
 /**
  * Fetch with timeout helper
