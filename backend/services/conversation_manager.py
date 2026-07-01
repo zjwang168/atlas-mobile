@@ -159,7 +159,50 @@ class ConversationManager:
             return session.get_recent_context(max_messages)
         return []
 
-    # ---- Long-term Persistence ----
+    # ---- Long-term Memory ----
+
+    async def add_memory(self, session_id: str, key: str, value: str, category: str = "preference") -> bool:
+        """Store a memory item (user preference, visited place, etc.).
+
+        If the session exists in memory, also cache it there.
+        If not, still persist directly to Supabase.
+        """
+        session = self.get_session(session_id)
+        if session:
+            # Store in session memory
+            if not hasattr(session, 'memories'):
+                session.memories = {}
+            session.memories[key] = {"value": value, "category": category}
+
+        # Persist to Supabase if available (works even without in-memory session)
+        supabase = self._get_supabase()
+        if supabase:
+            try:
+                await supabase.save_memory(session_id, key, value, category)
+                return True
+            except Exception as e:
+                print(f"[ConversationManager] Failed to save memory: {e}")
+                return False
+        return False
+
+    async def get_memories(self, session_id: str) -> dict:
+        """Get all memories for a session."""
+        session = self.get_session(session_id)
+        if session and hasattr(session, 'memories'):
+            return session.memories
+        return {}
+
+    async def get_all_memories(self, user_id: str = None) -> list:
+        """Get all long-term memories from Supabase."""
+        supabase = self._get_supabase()
+        if supabase:
+            try:
+                return await supabase.list_memories(user_id)
+            except Exception:
+                return []
+        return []
+
+    # ---- Long-term Persistence (Conversations) ----
 
     async def save_conversation(self, session_id: str) -> Optional[str]:
         """Save session to Supabase. Returns conversation_id."""

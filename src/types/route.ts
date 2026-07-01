@@ -109,3 +109,14 @@ export interface MapUpdate {
   action: 'add_pin' | 'remove_pin' | 'reorder_route' | 'optimize_route';
   params?: Record<string, unknown>;
 }
+
+/** A long-term memory item */
+export interface MemoryItem {
+  id: string;
+  user_id: string;
+  key: string;
+  value: string;
+  category: string;
+  created_at: string;
+  updated_at: string;
+}

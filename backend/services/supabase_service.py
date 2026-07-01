@@ -83,11 +83,28 @@ class SupabaseService:
             print(f"[SupabaseService] Failed to save conversation: {e}")
             raise
 
-        # Save messages
+        # Delete existing messages and locations before re-saving
+        try:
+            await asyncio.to_thread(
+                lambda: client.table("conversation_messages")
+                    .delete()
+                    .eq("conversation_id", conversation_id)
+                    .execute()
+            )
+            await asyncio.to_thread(
+                lambda: client.table("conversation_locations")
+                    .delete()
+                    .eq("conversation_id", conversation_id)
+                    .execute()
+            )
+        except Exception as e:
+            print(f"[SupabaseService] Cleanup error: {e}")
+
+        # Save new messages
         if session.messages:
             await self._save_messages(client, conversation_id, session.messages)
 
-        # Save locations
+        # Save new locations
         if session.locations:
             await self._save_locations(client, conversation_id, session.locations)
 
@@ -157,6 +174,9 @@ class SupabaseService:
                 "longitude": loc["longitude"],
                 "full_address": loc.get("full_address", ""),
                 "hierarchy_level": loc.get("hierarchy_level", 2),
+                "sentiment": loc.get("sentiment"),
+                "description": loc.get("description"),
+                "category": loc.get("category"),
             })
 
         return session
@@ -251,6 +271,9 @@ class SupabaseService:
                 "full_address": loc.get("full_address", ""),
                 "hierarchy_level": loc.get("hierarchy_level", 2),
                 "is_active": True,
+                "sentiment": loc.get("sentiment"),
+                "description": loc.get("description"),
+                "category": loc.get("category"),
                 "created_at": datetime.utcnow().isoformat(),
             })
 
@@ -258,3 +281,61 @@ class SupabaseService:
             await asyncio.to_thread(
                 lambda: client.table("conversation_locations").upsert(records).execute()
             )
+
+    # ---- Long-term Memory Operations ----
+
+    async def save_memory(self, session_id: str, key: str, value: str, category: str = "preference") -> bool:
+        """Save a memory item - delete existing with same key first, then insert."""
+        client = self._get_client()
+        if not client:
+            return False
+
+        import asyncio
+        import uuid
+
+        try:
+            # Delete existing memory with same key
+            await asyncio.to_thread(
+                lambda: client.table("long_term_memory")
+                    .delete()
+                    .eq("key", key)
+                    .execute()
+            )
+            # Insert new — note: session_id column may not exist in the table,
+            # so we omit it and pass session_id as part of the value metadata
+            memory_record = {
+                "id": str(uuid.uuid4()),
+                "key": key,
+                "value": value,
+                "category": category,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            await asyncio.to_thread(
+                lambda: client.table("long_term_memory").insert(memory_record).execute()
+            )
+            return True
+        except Exception as e:
+            print(f"[SupabaseService] save_memory error: {e}")
+            return False
+
+    async def list_memories(self, user_id: str = None) -> list:
+        """List all long-term memories, optionally filtered by user_id."""
+        client = self._get_client()
+        if not client:
+            return []
+
+        import asyncio
+
+        try:
+            query = client.table("long_term_memory").select("*")
+
+            if user_id:
+                query = query.eq("user_id", user_id)
+
+            query = query.order("updated_at", desc=True).limit(100)
+
+            result = await asyncio.to_thread(lambda: query.execute())
+            return result.data or []
+        except Exception as e:
+            print(f"[SupabaseService] list_memories error: {e}")
+            return []

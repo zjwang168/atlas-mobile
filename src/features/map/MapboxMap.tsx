@@ -48,6 +48,11 @@ interface MapboxMapProps {
 
   /** Optional re-ordered markers to display along the route (overrides `markers` when set) */
   routeMarkers?: MapMarker[];
+
+  /** Externally controlled selected marker ID (for list→map linkage) */
+  selectedMarkerId?: string | null;
+  /** Callback when selected marker changes (for map→list linkage) */
+  onSelectedMarkerChange?: (id: string | null) => void;
 }
 
 // ---- Helpers ----
@@ -75,9 +80,20 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
   style,
   onMarkerPress,
   routeMarkers,
+  selectedMarkerId: controlledSelectedId,
+  onSelectedMarkerChange,
 }) => {
   // Use routeMarkers if provided, otherwise fall back to the regular markers
   const displayMarkers = routeMarkers ?? markers;
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+
+  // Use controlled value if provided, otherwise use internal state
+  const isControlled = controlledSelectedId !== undefined;
+  const selectedMarkerId = isControlled ? controlledSelectedId : internalSelectedId;
+  const setSelectedMarkerId = (id: string | null) => {
+    if (!isControlled) setInternalSelectedId(id);
+    onSelectedMarkerChange?.(id);
+  };
   // Sort markers so negative sentiment renders last (on top)
   // MapboxGL renders later elements on top of earlier ones.
   const sortedMarkers = [...displayMarkers].sort((a, b) => {
@@ -152,6 +168,7 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
         compassEnabled={true}
         logoEnabled={false}
         attributionEnabled={true}
+        onPress={() => setSelectedMarkerId(null)}
       >
         {/* Camera controller for programmatic navigation */}
         <MapboxGL.Camera
@@ -170,8 +187,13 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
           >
             <View
               style={styles.markerContainer}
-              onTouchEnd={() => onMarkerPress?.(marker)}
+              onTouchEnd={() => {
+                const newId = marker.id === selectedMarkerId ? null : marker.id;
+                setSelectedMarkerId(newId);
+                onMarkerPress?.(marker);
+              }}
             >
+              {/* The marker dot */}
               <View style={[
                 styles.marker,
                 { backgroundColor: getMarkerColor(marker.sentiment) }

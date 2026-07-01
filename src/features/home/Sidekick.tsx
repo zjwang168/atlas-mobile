@@ -13,7 +13,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { saveSession } from '../../services/apiService';
 import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
 
 // ---- Types ----
@@ -32,6 +31,8 @@ interface SidekickProps {
   onLocationPress?: (location: GeocodedLocation) => void;
   activeTab?: 'chat' | 'locations';
   onTabChange?: (tab: 'chat' | 'locations') => void;
+  /** Index of the selected location for list highlight + auto-scroll */
+  selectedLocationIndex?: number;
 }
 
 // ---- Helpers ----
@@ -68,11 +69,12 @@ const Sidekick: React.FC<SidekickProps> = ({
   onLocationPress,
   activeTab: externalActiveTab,
   onTabChange,
+  selectedLocationIndex,
 }) => {
   const sheetRef = useRef<BottomSheet>(null);
+  const locationListRef = useRef<FlatList<any>>(null);
   const snapPoints = useMemo(() => ['40%', '100%'], []);
   const [chatInput, setChatInput] = React.useState('');
-  const [saving, setSaving] = React.useState(false);
   const [internalActiveTab, setInternalActiveTab] = useState<'chat' | 'locations'>('chat');
 
   const activeTab = externalActiveTab ?? internalActiveTab;
@@ -126,19 +128,6 @@ const Sidekick: React.FC<SidekickProps> = ({
       onSendMessage(text);
     }
   }, [canSendChat, chatInput, onChat, onSendMessage, parseResult]);
-
-  /** Save the current session to Supabase */
-  const handleSaveSession = useCallback(async () => {
-    if (!sessionId) return;
-    setSaving(true);
-    try {
-      await saveSession(sessionId);
-    } catch (err) {
-      console.error('Failed to save session:', err);
-    } finally {
-      setSaving(false);
-    }
-  }, [sessionId]);
 
   /** Render a single message bubble */
   const renderMessage = useCallback(
@@ -248,7 +237,7 @@ const Sidekick: React.FC<SidekickProps> = ({
     </View>
   );
 
-  /** Location list view — grouped by category */
+  /** Location list view — grouped by category with flat index for highlight + auto-scroll */
   const renderLocations = () => {
     const locations = parseResult?.locations ?? [];
 
@@ -281,64 +270,145 @@ const Sidekick: React.FC<SidekickProps> = ({
       );
     }
 
+    // Build flat items: category headers + location items with global index
+    type FlatItem =
+      | { kind: 'header'; category: string }
+      | { kind: 'location'; location: GeocodedLocation; globalIdx: number };
+
+    const flatItems: FlatItem[] = [];
+    let globalIdx = 0;
+    for (const cat of visibleCategories) {
+      flatItems.push({ kind: 'header', category: cat });
+      for (const loc of grouped[cat]) {
+        flatItems.push({ kind: 'location', location: loc, globalIdx });
+        globalIdx++;
+      }
+    }
+
     return (
       <View style={styles.locationsContainer}>
         <FlatList
-          data={visibleCategories}
-          keyExtractor={item => item}
+          ref={locationListRef}
+          data={flatItems}
+          keyExtractor={(item, i) =>
+            item.kind === 'header' ? `hdr-${item.category}` : `loc-${item.globalIdx}`
+          }
           contentContainerStyle={styles.locationsList}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item: category }) => (
-            <View style={styles.categoryGroup}>
-              <Text style={styles.categoryTitle}>🏷️ {category}</Text>
-              {grouped[category].map((loc, idx) => {
-                const sentiment = loc.sentiment ? sentimentLabels[loc.sentiment] : null;
-                return (
-                  <View key={idx} style={styles.locationItem}>
-                    <TouchableOpacity
-                      style={styles.locationInfoTouchable}
-                      onPress={() => onLocationPress?.(loc)}
-                    >
-                      <View style={styles.locationInfo}>
-                        <Text style={styles.locationName}>{loc.name}</Text>
-                        <Text style={styles.locationAddress}>{loc.full_address}</Text>
-                        {sentiment && (
-                          <View style={[styles.sentimentBadge, { backgroundColor: sentiment.color + '20' }]}>
-                            <Text style={[styles.sentimentText, { color: sentiment.color }]}>
-                              {sentiment.label}
-                            </Text>
-                          </View>
-                        )}
+          onScrollToIndexFailed={(info) => {
+            // Fallback: estimate offset when item isn't measured yet
+            locationListRef.current?.scrollToOffset({
+              offset: info.averageItemLength * info.index,
+              animated: true,
+            });
+          }}
+          renderItem={({ item }) => {
+            if (item.kind === 'header') {
+              return <Text style={styles.categoryTitle}>🏷️ {item.category}</Text>;
+            }
+
+            const loc = item.location;
+            const isSelected = selectedLocationIndex === item.globalIdx;
+            const sentiment = loc.sentiment ? sentimentLabels[loc.sentiment] : null;
+
+            return (
+              <View style={[styles.locationItem, isSelected && styles.locationItemSelected]}>
+                <TouchableOpacity
+                  style={styles.locationInfoTouchable}
+                  onPress={() => onLocationPress?.(loc)}
+                >
+                  <View style={styles.locationInfo}>
+                    <Text style={styles.locationName}>{loc.name}</Text>
+                    <Text style={styles.locationAddress}>{loc.full_address}</Text>
+                    {sentiment && (
+                      <View style={[styles.sentimentBadge, { backgroundColor: sentiment.color + '20' }]}>
+                        <Text style={[styles.sentimentText, { color: sentiment.color }]}>
+                          {sentiment.label}
+                        </Text>
                       </View>
-                    </TouchableOpacity>
-                    <View style={styles.locationActions}>
-                      <TouchableOpacity
-                        style={styles.locationActionButton}
-                        onPress={() => {
-                          Alert.alert('Delete', `Remove "${loc.name}"?`, [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Delete', style: 'destructive', onPress: () => onDeleteLocation?.(idx) },
-                          ]);
-                        }}
-                      >
-                        <Text style={styles.locationActionIcon}>🗑️</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.locationActionButton}
-                        onPress={() => onSaveLocation?.(loc)}
-                      >
-                        <Text style={styles.locationActionIcon}>⭐</Text>
-                      </TouchableOpacity>
-                    </View>
+                    )}
                   </View>
-                );
-              })}
-            </View>
-          )}
+                </TouchableOpacity>
+                <View style={styles.locationActions}>
+                  <TouchableOpacity
+                    style={styles.locationActionButton}
+                    onPress={() => {
+                      Alert.alert('Delete', `Remove "${loc.name}"?`, [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Delete', style: 'destructive', onPress: () => onDeleteLocation?.(item.globalIdx) },
+                      ]);
+                    }}
+                  >
+                    <Text style={styles.locationActionIcon}>🗑️</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.locationActionButton}
+                    onPress={() => onSaveLocation?.(loc)}
+                  >
+                    <Text style={styles.locationActionIcon}>⭐</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          }}
         />
       </View>
     );
   };
+
+  /** Scroll to the selected location in the list without expanding the sheet */
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Clear any pending scroll
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+
+    if (selectedLocationIndex !== undefined && selectedLocationIndex >= 0) {
+      // Compute the flat array index (accounting for category headers)
+      const locations = parseResult?.locations ?? [];
+      const categoryOrder = [
+        'Tourist Attractions', 'Dining & Drinking', 'Entertainment',
+        'Museums & Exhibitions', 'Transit Hubs', 'Religious Sites', 'Others',
+      ];
+      const grouped: Record<string, GeocodedLocation[]> = {};
+      for (const loc of locations) {
+        const cat = loc.category || 'Others';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(loc);
+      }
+      const visibleCategories = categoryOrder.filter(c => grouped[c]?.length > 0);
+
+      let flatIndex = 0;
+      let found = false;
+      let globalIdx = 0;
+      for (const cat of visibleCategories) {
+        flatIndex++; // skip the category header
+        for (const _loc of grouped[cat]) {
+          if (globalIdx === selectedLocationIndex) {
+            found = true;
+            break;
+          }
+          globalIdx++;
+          flatIndex++;
+        }
+        if (found) break;
+      }
+
+      if (found && locationListRef.current) {
+        // Small delay to let the layout settle after tab switch
+        scrollTimeoutRef.current = setTimeout(() => {
+          locationListRef.current?.scrollToIndex({
+            index: flatIndex,
+            animated: true,
+            viewPosition: 0, // 0 = top of list
+          });
+        }, 300);
+      }
+    }
+
+    return () => {
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    };
+  }, [selectedLocationIndex, parseResult]);
 
   // Use state for BottomSheet index (controlled prop in v4+)
   // TEMP: Start at 0 to verify BottomSheet renders
@@ -366,19 +436,6 @@ const Sidekick: React.FC<SidekickProps> = ({
       {/* Show the sheet when we have a result, are loading, or have messages */}
       {(parseResult || isLoading || messages.length > 0) ? (
         <>
-          {/* Save button */}
-          {parseResult && sessionId && (
-            <TouchableOpacity
-              style={styles.saveButton}
-              onPress={handleSaveSession}
-              disabled={saving}
-            >
-              <Text style={styles.saveButtonText}>
-                {saving ? 'Saving...' : '💾 Save'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
           {/* Error banner */}
           {error && (
             <View style={styles.errorBanner}>
@@ -589,22 +646,6 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
 
-  /* Save button */
-  saveButton: {
-    alignSelf: 'flex-end',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#007AFF',
-    borderRadius: 6,
-    marginRight: 12,
-    marginTop: 4,
-  },
-  saveButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-
   /* Tab bar */
   tabBar: {
     flexDirection: 'row',
@@ -649,6 +690,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9F9FB',
     borderRadius: 12,
     marginBottom: 8,
+  },
+  locationItemSelected: {
+    borderWidth: 2,
+    borderColor: '#007AFF',
+    backgroundColor: '#E8F3FF',
   },
   locationInfoTouchable: {
     flex: 1,
@@ -716,6 +762,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+
 });
 
 export default Sidekick;

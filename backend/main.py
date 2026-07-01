@@ -106,6 +106,13 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class MemoryRequest(BaseModel):
+    session_id: str
+    key: str
+    value: str
+    category: str = "preference"
+
+
 class SessionResponse(BaseModel):
     session_id: str
     title: str = ""
@@ -252,6 +259,20 @@ async def delete_conversation(conversation_id: str) -> dict:
         return {"deleted": success}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/memories")
+async def get_memories():
+    """Get long-term memories."""
+    memories = await conversation_manager.get_all_memories()
+    return {"memories": memories}
+
+
+@app.post("/memories")
+async def add_memory(req: MemoryRequest):
+    """Add a memory item."""
+    success = await conversation_manager.add_memory(req.session_id, req.key, req.value, req.category)
+    return {"success": success}
 
 
 @app.get("/health")

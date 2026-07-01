@@ -77,20 +77,22 @@ class AgentOrchestrator:
         # 2.5 Entity Linking — disambiguate ambiguous location names
         location_names = await self._entity_linking(location_names, extraction.get("inferred_region"))
 
-        # 2.6 Geocode the inferred_region to get a proximity bias point + city center
+        # 2.6 Geocode the inferred_region to get a proximity bias point
         proximity = None
         city_center = None
         inferred_region = extraction.get("inferred_region")
         if inferred_region:
             try:
-                from backend.services.geocoder import geocode
-                region_geo = await geocode(inferred_region)
+                from backend.services.geocoder import _geocode_geoapify
+                region_geo = await _geocode_geoapify(inferred_region)
                 if region_geo:
                     proximity = (region_geo["longitude"], region_geo["latitude"])
                     city_center = proximity
                     print(f"[AgentOrchestrator] Using proximity bias: {proximity} for '{inferred_region}'")
             except Exception:
-                pass  # If geocoding the region fails, proceed without proximity
+                # If geocoding the region fails, proceed without proximity bias.
+                # The coordinate validation step will handle outlier filtering.
+                print(f"[AgentOrchestrator] Could not geocode region '{inferred_region}', proceeding without proximity bias")
 
         # 2.8 Deduplicate location names before geocoding
         seen_names_in_query = set()
@@ -188,30 +190,46 @@ class AgentOrchestrator:
         locations = validated
         session.locations = locations
 
-        # 3.6 Print location descriptions with sentiment
-        print(f"\n📍 Location Details:")
+        # 3.6 Force city/country level locations (hierarchy_level >= 2) to "Others" category
+        for loc in locations:
+            if loc.get("hierarchy_level", 2) >= 2:
+                loc["category"] = "Others"
+
+        # 3.7 Print location details with sentiment
+        print(f"\n{'='*60}")
+        print(f"  LOCATION DETAILS")
+        print(f"{'='*60}")
         for loc in location_names:
             desc = loc.get("description", "")
             sentiment = loc.get("sentiment", "")
-            sentiment_icon = {"positive": "👍", "neutral": "➖", "negative": "👎"}.get(sentiment, "❓")
-            desc_part = f" — {desc}" if desc else ""
-            sent_part = f" [{sentiment_icon} {sentiment}]" if sentiment else ""
-            print(f"   • {loc['name']}{desc_part}{sent_part}")
+            category = loc.get("category", "")
+            sentiment_icon = {"positive": "👍", "neutral": "➖", "negative": "👎"}.get(sentiment, "?")
+            parts = [f"  {loc['name']}"]
+            if sentiment:
+                parts.append(f"[{sentiment_icon} {sentiment}]")
+            if category:
+                parts.append(f"({category})")
+            if desc:
+                parts.append(f"\n     {desc}")
+            print(" ".join(parts))
 
-        # 3.7 Print locations grouped by category
-        from collections import defaultdict
-        categories = defaultdict(list)
-        for loc in location_names:
-            cat = loc.get("category", "Others") or "Others"
-            categories[cat].append(loc["name"])
-        print("\n📍 Grouped by Category:")
-        for cat in ["Tourist Attractions", "Dining & Drinking", "Entertainment",
-                     "Museums & Exhibitions", "Transit Hubs", "Religious Sites", "Others"]:
-            items = categories.get(cat, [])
-            if items:
-                print(f"\n   🏷️ {cat}:")
-                for name in items:
-                    print(f"      • {name}")
+        if session.removed_hierarchy:
+            print(f"\n{'─'*40}")
+            print(f"  REMOVED HIERARCHY")
+            for rh in session.removed_hierarchy:
+                name = rh.get('name', rh) if isinstance(rh, dict) else rh
+                reason = rh.get('reason', '') if isinstance(rh, dict) else ''
+                print(f"  • {name}: {reason[:60]}")
+
+        if session.removed_noise:
+            print(f"\n{'─'*40}")
+            print(f"  REMOVED AS NOISE")
+            for rn in session.removed_noise:
+                name = rn.get('name', rn) if isinstance(rn, dict) else rn
+                reason = rn.get('reason', '') if isinstance(rn, dict) else ''
+                print(f"  • {name}: {reason[:60]}")
+
+        print(f"{'='*60}\n")
 
         # 4. Plan route
         from backend.services.route_planner import plan_route
@@ -220,6 +238,13 @@ class AgentOrchestrator:
 
         # 5. Save session
         session.add_message("system", f"Extracted {len(locations)} locations from the provided URL.")
+
+        # 6. Auto-save to Supabase + update memory
+        try:
+            await conversation_manager.save_conversation(session.session_id)
+            await self._update_memory(session)
+        except Exception:
+            pass
 
         return {
             "title": title,
@@ -256,8 +281,10 @@ class AgentOrchestrator:
             d = haversine(median_lat, median_lng, loc["latitude"], loc["longitude"])
             distances.append(d)
 
-        # Only remove extreme outliers > 500km (cross-country errors)
-        threshold = 500.0
+        # Dynamic threshold: use median distance as baseline
+        sorted_dists = sorted(distances)
+        median_dist = sorted_dists[len(sorted_dists) // 2]
+        threshold = max(200.0, min(2000.0, median_dist * 8))
 
         validated = []
         removed_noise = []
@@ -311,7 +338,22 @@ Rules:
 2. For ambiguous common names, append clarifying city/region in parentheses (e.g. "Chaoyang" → "Chaoyang, Beijing", "Luxembourg" → "Luxembourg Gardens, Paris" if context shows it's in Paris)
 3. For names that are already precise and unambiguous (e.g. "Eiffel Tower", "Tokyo Tower"), leave unchanged.
 4. Use the surrounding context to determine the correct entity.
-5. RESOLVE GENERIC TERMS: If a location name is a generic/category description (e.g. "monuments", "the tower", "the bridge", "the mall", "the palace", "the park", "the statue"), resolve it to the SPECIFIC geographic entity based on the inferred region context.
+5. For ALL locations, append geographic context to ensure correct geocoding.
+   If a location name is ambiguous (multiple places share the same name),
+   add the appropriate region/province/state to distinguish it.
+   
+   Examples of correct disambiguation (the LLM should infer this pattern):
+   - "Suzhou" in the context of Jiangsu/Shanghai area → "Suzhou, Jiangsu"
+   - "Suzhou" in the context of Anhui area → "Suzhou, Anhui"
+   - "Cambridge" in the context of UK → "Cambridge, UK"
+   - "Cambridge" in the context of US → "Cambridge, Massachusetts"
+   - "Portland" in the context of US West Coast → "Portland, Oregon"
+   - "Portland" in the context of US East Coast → "Portland, Maine"
+   - "Springfield" → always add state context
+   
+   Use the inferred region AND the post content to determine the correct context.
+   If the name is already unambiguous, keep it unchanged.
+6. RESOLVE GENERIC TERMS: If a location name is a generic/category description (e.g. "monuments", "the tower", "the bridge", "the mall", "the palace", "the park", "the statue"), resolve it to the SPECIFIC geographic entity based on the inferred region context.
 
    Examples:
    - "monuments" in Washington DC → "Washington Monument"
@@ -321,7 +363,7 @@ Rules:
    - "the palace" in London → "Buckingham Palace"
    - Generic term without clear context → keep as-is
 
-6. If a name is already clear, keep it unchanged.
+7. If a name is already clear, keep it unchanged.
 
 {f"Region context: {inferred_region}" if inferred_region else ""}
 
@@ -580,6 +622,99 @@ Always explain what you're doing before calling a tool."""
                         session.route = plan_route(session.locations)
                     else:
                         session.route = None
+
+
+    async def _update_memory(self, session: Session):
+        """Auto-update long-term memory."""
+        import asyncio
+        import json
+        import re
+
+        from backend.services.llm_client import call_llm
+
+        # Build memory prompt from current session
+        memory_prompt = f"""Analyze this travel conversation and extract user interests/preferences as
+        concise memory items. Output a JSON array of objects: {{"key": str, "value": str, "category": str}}.
+        
+        Categories: preference, visited_place, interest, disliked, plan
+        
+        Conversation:
+        Title: {session.title[:100] if session.title else 'N/A'}
+        Source: {session.source_url or 'N/A'}
+        Locations discussed: {[loc.get("name", "") for loc in (session.locations or [])[:15]]}
+        
+        Rules:
+        - Key should be a short label (e.g. "cuisine_preference", "travel_style")
+        - Value should be descriptive (e.g. "User prefers street food over fine dining")
+        - Only include items that are clearly indicated, don't fabricate
+        
+        JSON:"""
+
+        raw_content = "[]"
+        try:
+            result = await asyncio.to_thread(
+                call_llm,
+                messages=[{"role": "system", "content": memory_prompt}],
+                temperature=0.3,
+                max_tokens=1024,
+            )
+            raw_content = result.get("content", "[]")
+
+            # ---- Robust JSON extraction ----
+            # Strip markdown code fences: ```json ... ``` or ``` ... ```
+            cleaned = raw_content.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
+                cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+                cleaned = cleaned.strip()
+
+            memories = json.loads(cleaned)
+
+            # Validate we got a list; unwrap if LLM wrapped in an object
+            if not isinstance(memories, list):
+                print(f"[Memory] LLM returned non-list ({type(memories).__name__}), attempting unwrap")
+                if isinstance(memories, dict):
+                    # Try common wrapper keys
+                    for key in ("memories", "items", "data", "results"):
+                        val = memories.get(key)
+                        if isinstance(val, list):
+                            memories = val
+                            break
+                    else:
+                        # Fallback: take first list value found
+                        for val in memories.values():
+                            if isinstance(val, list):
+                                memories = val
+                                break
+                        else:
+                            memories = []
+                else:
+                    memories = []
+
+            print(f"[Memory] Extracted {len(memories)} memory item(s) from session {session.session_id[:8]}")
+
+            # Save new memories via conversation_manager (handles Supabase persist)
+            if session.session_id and memories:
+                saved_count = 0
+                for mem in memories[:10]:
+                    success = await conversation_manager.add_memory(
+                        session.session_id,
+                        mem.get("key", ""),
+                        mem.get("value", ""),
+                        mem.get("category", "preference"),
+                    )
+                    if success:
+                        saved_count += 1
+
+                print(f"[Memory] Saved {saved_count}/{min(len(memories), 10)} items to Supabase")
+            else:
+                print(f"[Memory] No memories to save (session_id={bool(session.session_id)}, memories={bool(memories)})")
+
+        except json.JSONDecodeError as e:
+            print(f"[Memory] JSON parse error: {e}")
+            print(f"[Memory] Raw LLM content (first 500 chars): {raw_content[:500]}")
+        except Exception as e:
+            print(f"[Memory] Update failed: {e}")
 
 
 # Module-level singleton

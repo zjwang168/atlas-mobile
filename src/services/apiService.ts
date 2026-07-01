@@ -4,7 +4,8 @@ import {
   ChatResponse,
   Conversation,
   ConversationDetail,
-  ParseResult,
+  MemoryItem,
+  ParseResult
 } from '../types/route';
 
 /**
@@ -122,6 +123,49 @@ export async function saveSession(sessionId: string): Promise<{ conversation_id:
 
   if (!response.ok) {
     throw new Error(`Failed to save session (${response.status})`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get all long-term memories.
+ */
+export async function getMemories(): Promise<{ memories: MemoryItem[] }> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/memories`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch memories (${response.status})`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Add a long-term memory item.
+ */
+export async function addMemory(
+  sessionId: string,
+  key: string,
+  value: string,
+  category: string = 'preference',
+): Promise<{ success: boolean }> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/memories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      key,
+      value,
+      category,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to add memory (${response.status})`);
   }
 
   return response.json();
