@@ -106,6 +106,80 @@ graph TD
 
 ---
 
+## Data Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant App as React Native App
+    participant Backend as FastAPI Backend
+    participant Source as Web Source
+    participant LLM as DeepSeek V4 Flash
+    participant Geo as Geocoder (5-Layer)
+
+    Note over User,Geo: === User Triggers Extraction ===
+    
+    User->>App: Paste URL
+    User->>App: Click Send
+    
+    App->>App: Sidekick shows loading
+    App->>Backend: POST /parse_link {url}
+    
+    Note over Backend: === 1. Cache Check ===
+    alt Cache Hit
+        Backend-->>App: Return cached result
+    else Cache Miss
+        Note over Backend,Source: === 2. Scrape Content ===
+        Backend->>Source: Fetch URL content
+        Source-->>Backend: Title + body + comments
+        
+        Note over Backend,LLM: === 3. LLM Extraction ===
+        Backend->>LLM: Extract geographic entities
+        Note right of LLM: Prompt: Hierarchical extraction<br/>+ noise filtering
+        LLM-->>Backend: {entities, inferred_region}
+        
+        Note over Backend,LLM: === 4. Entity Linking ===
+        Backend->>LLM: Disambiguate names
+        Note right of LLM: ROM -> Royal Ontario Museum<br/>monuments -> Washington Monument
+        LLM-->>Backend: {disambiguated names}
+        
+        Note over Backend,Geo: === 5. Geocoding ===
+        Backend->>Geo: Layer 1: Geoapify
+        alt POI found
+            Geo-->>Backend: Exact coordinates
+        else Not found
+            Geo->>Geo: Layer 2: LocationIQ
+            alt POI found
+                Geo-->>Backend: Exact coordinates
+            else Not found
+                Geo->>Geo: Layer 3-5: Mapbox/Nominatim/Photon
+                Geo-->>Backend: Best available coords
+            end
+        end
+        
+        Note over Backend: === 6. Route Planning ===
+        Backend->>Backend: TSP + 2-opt optimization
+        Backend->>Backend: Haversine distance
+        
+        Note over Backend: === 7. Cache & Return ===
+        Backend->>Backend: cache.set(url, result)
+        Backend-->>App: ParseResult (locations + route)
+    end
+    
+    Note over App: === 8. Render Results ===
+    App->>App: Sidekick: locations by category
+    App->>App: Map: colored markers + sentiment
+    
+    Note over User,Geo: === 9. Follow-up Chat ===
+    User->>App: "Optimize this route"
+    App->>Backend: POST /chat {session_id, message}
+    Backend->>LLM: Agent tool-calling loop
+    LLM-->>Backend: Tool calls + response
+    Backend-->>App: Updated locations + route
+```
+
+---
+
 ## Features
 
 ### Multi-Agent AI Pipeline
