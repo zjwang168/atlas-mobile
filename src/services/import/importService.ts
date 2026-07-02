@@ -1,11 +1,12 @@
 /**
  * Import / link-parsing service.
  *
- * This is the single seam between the UI and the link parser. Today it returns
- * a mocked result after a short delay so the Analyzing → Save flow can be built
- * and demoed end-to-end. When the native parser is ready, replace the body of
- * `parseLink` with the real call — the UI contract stays the same.
+ * This is the single seam between the UI and the link parser. It now calls the
+ * real FastAPI backend (/parse_link) via apiService and adapts the response to
+ * the UI contract below. The UI contract is unchanged from the mocked version.
  */
+
+import { parseLink as apiParseLink } from '../api/apiService';
 
 export type ParsedPlace = {
   id: string;
@@ -30,36 +31,56 @@ export type ParseResult = {
   places: ParsedPlace[];
 };
 
-const EATER_BLURB =
-  'From Eater: "René Redzepi\'s legendary spot redefines Nordic cuisine with foraged ingredients and seasonal menus."';
+/** Shape of one location item returned by the backend. */
+type BackendLocation = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  full_address?: string;
+  description?: string | null;
+  category?: string | null;
+};
+
+/** Fields of the backend /parse_link response that we consume. */
+type BackendParseResponse = {
+  title: string;
+  locations: BackendLocation[];
+  inferred_region?: string | null;
+};
+
+/** Median center of the extracted places — robust to a stray bad geocode. */
+function medianCenter(places: BackendLocation[]): [number, number] {
+  if (places.length === 0) return [0, 0];
+  const mid = (values: number[]) => {
+    const s = [...values].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+  return [mid(places.map((p) => p.longitude)), mid(places.map((p) => p.latitude))];
+}
 
 /**
- * Parse pasted text or a URL into places.
+ * Parse a pasted URL into places by calling the backend parser.
  *
- * @param input  Raw text or link the user pasted.
- * @returns      Extracted places. Currently mocked.
+ * @param input  Link the user pasted.
+ * @returns      Extracted places in the UI contract.
  */
 export async function parseLink(input: string): Promise<ParseResult> {
-  // TODO(native): replace with teammate's native parser, e.g.
-  //   return NativeImportModule.parse(input)
-  await new Promise((resolve) => setTimeout(resolve, 2200));
+  const backend = (await apiParseLink(input.trim())) as unknown as BackendParseResponse;
+
+  const places: ParsedPlace[] = (backend.locations ?? []).map((loc, index) => ({
+    id: String(index + 1),
+    name: loc.name,
+    subtitle: loc.description || loc.full_address || '',
+    type: loc.category || 'Place',
+    latitude: loc.latitude,
+    longitude: loc.longitude,
+  }));
 
   return {
-    sourceTitle: 'I thought Wuhan was just breakfast… oh how wrong I was',
-    centerCoordinate: [-122.3321, 47.6062],
-    region: 'Seattle',
-    // Names match entries in mock-data/mockPlaceDetails so tapping a row opens a
-    // populated PlaceDetail. Swap these for real parsed places once the native
-    // parser is wired in.
-    places: [
-      { id: '1', name: 'Noma Restaurant', subtitle: EATER_BLURB, type: 'Restaurant', latitude: 47.6101, longitude: -122.3421 },
-      { id: '2', name: 'Hidden Sushi', subtitle: EATER_BLURB, type: 'Restaurant', latitude: 47.615, longitude: -122.332 },
-      { id: '3', name: 'Sakura Ramen', subtitle: EATER_BLURB, type: 'Ramen', latitude: 47.6205, longitude: -122.325 },
-      { id: '4', name: 'Coffee Corner', subtitle: EATER_BLURB, type: 'Cafe', latitude: 47.6062, longitude: -122.336 },
-      { id: '5', name: 'The Long Name Gastropub & Provisions', subtitle: EATER_BLURB, type: 'Gastropub', latitude: 47.599, longitude: -122.327 },
-      { id: '6', name: 'Noma Restaurant', subtitle: EATER_BLURB, type: 'Restaurant', latitude: 47.5995, longitude: -122.324 },
-      { id: '7', name: 'Hidden Sushi', subtitle: EATER_BLURB, type: 'Restaurant', latitude: 47.601, longitude: -122.34 },
-      { id: '8', name: 'Sakura Ramen', subtitle: EATER_BLURB, type: 'Ramen', latitude: 47.5985, longitude: -122.3235 },
-    ],
+    sourceTitle: backend.title || 'Imported link',
+    centerCoordinate: medianCenter(backend.locations ?? []),
+    region: backend.inferred_region ?? undefined,
+    places,
   };
 }
