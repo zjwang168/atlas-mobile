@@ -126,13 +126,15 @@ class ExtractionPipeline:
                 },
             ],
             temperature=0.2,
-            max_tokens=2048,
+            max_tokens=8192,
         )
 
         content = result.get("content", "{}")
         try:
             parsed = json.loads(content)
+
         except json.JSONDecodeError:
+            print(f"[extraction] Stage1 JSON parse failed, content length={len(content)}, tail={content[-80:]!r}")
             return {
                 "entities": [],
                 "inferred_region": None,
