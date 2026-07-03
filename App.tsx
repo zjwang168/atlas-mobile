@@ -11,6 +11,7 @@ import ImportScreen from './src/features/import-places/import-screen/ImportScree
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
 import { parseLink, type ParseResult } from './src/services/import/importService';
+import { savePlaces } from '@/services/place/placeService';
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';
 
@@ -105,10 +106,20 @@ export default function App() {
         <SaveScreen
           result={parseResult}
           onClose={() => setOverlay('none')}
-          onSave={(ids) => {
-            console.log('Save places to general list:', ids);
+
+          onSave={async (ids) => {
+            try {
+              const selected = parseResult.places.filter((p) => ids.includes(p.id));
+              const saved = await savePlaces(selected, {
+                region: parseResult.region,
+              });
+              console.log(`Saved ${saved.length} places to Supabase`);
+            } catch (e) {
+              console.error('Save failed:', e);
+            }
             setOverlay('none');
           }}
+
           onAddToPlan={(ids) => {
             console.log('Add to plan:', ids);
             setOverlay('none');
