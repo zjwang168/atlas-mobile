@@ -1,12 +1,14 @@
 /**
  * Import / link-parsing service.
  *
- * This is the single seam between the UI and the link parser. It now calls the
- * real FastAPI backend (/parse_link) via apiService and adapts the response to
- * the UI contract below. The UI contract is unchanged from the mocked version.
+ * This is the single seam between the UI and the parser backend. It calls the
+ * real FastAPI backend via apiService and adapts responses to the UI contract
+ * below. parseInput() auto-detects whether the pasted content is a URL
+ * (scrape + parse via /parse_link) or plain text (parse directly via
+ * /parse_text — covers Xiaohongshu, WeChat, copied notes).
  */
 
-import { parseLink as apiParseLink } from '../api/apiService';
+import { parseLink as apiParseLink, parseText as apiParseText } from '../api/apiService';
 
 export type ParsedPlace = {
   id: string;
@@ -20,7 +22,7 @@ export type ParsedPlace = {
 };
 
 export type ParseResult = {
-  /** Caption/title extracted from the source link, shown in the top pill. */
+  /** Caption/title extracted from the source, shown in the top pill. */
   sourceTitle: string;
   /** Optional thumbnail of the source link. */
   sourceThumbnail?: string;
@@ -41,12 +43,17 @@ type BackendLocation = {
   category?: string | null;
 };
 
-/** Fields of the backend /parse_link response that we consume. */
+/** Fields of the backend parse response that we consume. */
 type BackendParseResponse = {
   title: string;
   locations: BackendLocation[];
   inferred_region?: string | null;
 };
+
+/** True for strings that look like a pasteable URL. */
+function looksLikeUrl(value: string): boolean {
+  return /^(https?:\/\/|www\.)\S+$/i.test(value.trim());
+}
 
 /** Median center of the extracted places — robust to a stray bad geocode. */
 function medianCenter(places: BackendLocation[]): [number, number] {
@@ -59,15 +66,8 @@ function medianCenter(places: BackendLocation[]): [number, number] {
   return [mid(places.map((p) => p.longitude)), mid(places.map((p) => p.latitude))];
 }
 
-/**
- * Parse a pasted URL into places by calling the backend parser.
- *
- * @param input  Link the user pasted.
- * @returns      Extracted places in the UI contract.
- */
-export async function parseLink(input: string): Promise<ParseResult> {
-  const backend = (await apiParseLink(input.trim())) as unknown as BackendParseResponse;
-
+/** Adapt the backend response to the UI contract. */
+function adaptResponse(backend: BackendParseResponse): ParseResult {
   const places: ParsedPlace[] = (backend.locations ?? []).map((loc, index) => ({
     id: String(index + 1),
     name: loc.name,
@@ -78,9 +78,33 @@ export async function parseLink(input: string): Promise<ParseResult> {
   }));
 
   return {
-    sourceTitle: backend.title || 'Imported link',
+    sourceTitle: backend.title || 'Imported content',
     centerCoordinate: medianCenter(backend.locations ?? []),
     region: backend.inferred_region ?? undefined,
     places,
   };
+}
+
+/**
+ * Parse a pasted URL into places by calling the backend parser.
+ */
+export async function parseLink(input: string): Promise<ParseResult> {
+  const backend = (await apiParseLink(input.trim())) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+/**
+ * Parse pasted plain text (travel notes, Xiaohongshu content, etc.).
+ */
+export async function parseText(input: string): Promise<ParseResult> {
+  const backend = (await apiParseText(input.trim())) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+/**
+ * Parse anything the user pastes: URLs are scraped server-side; everything
+ * else is treated as raw text and parsed directly.
+ */
+export async function parseInput(input: string): Promise<ParseResult> {
+  return looksLikeUrl(input) ? parseLink(input) : parseText(input);
 }

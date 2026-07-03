@@ -61,6 +61,14 @@ class AgentOrchestrator:
         title = scrape_result.get("title", "")
         session.title = title
 
+        return await self._process_content(content, source_type, session)
+
+    async def _process_content(self, content: str, source_type: str, session: Session) -> dict:
+        """Shared pipeline: extraction -> entity linking -> geocoding -> route.
+
+        Used by both run_pipeline (URL input) and run_pipeline_from_text
+        (user-pasted text). Everything below is source-agnostic.
+        """
         # 2. Extract locations with hierarchy
         from backend.services.extraction_pipeline import ExtractionPipeline
         extraction = await ExtractionPipeline.extract(content, source_type)
@@ -247,7 +255,7 @@ class AgentOrchestrator:
             pass
 
         return {
-            "title": title,
+            "title": session.title,
             "locations": locations,
             "route": route,
             "removed_noise": session.removed_noise,
@@ -256,6 +264,20 @@ class AgentOrchestrator:
             "source_type": source_type,
             "session_id": session.session_id,
         }
+
+    async def run_pipeline_from_text(self, text: str, session: Session) -> dict:
+        """Run the extraction pipeline on user-pasted text (no scraping).
+
+        Covers sources we cannot scrape - Xiaohongshu notes, WeChat articles,
+        text a friend sent - the user copies the content and pastes it in.
+        """
+        session.source_url = None
+        session.source_type = "text"
+        # Derive a short title from the first non-empty line of the text
+        first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "Pasted text")
+        session.title = first_line[:80]
+
+        return await self._process_content(text, "generic", session)
 
     def _validate_coordinates(self, locations: list[dict], inferred_region: str | None = None) -> list[dict]:
         """

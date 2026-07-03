@@ -54,6 +54,10 @@ class ParseRequest(BaseModel):
     url: str
 
 
+class ParseTextRequest(BaseModel):
+    text: str
+
+
 class LocationItem(BaseModel):
     name: str
     latitude: float
@@ -193,6 +197,52 @@ async def parse_link(req: ParseRequest) -> ParseResponse:
 
 
 # --- Chat & Conversation Endpoints ---
+
+
+@app.post("/parse_text", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_text(req: ParseTextRequest) -> ParseResponse:
+    """Parse user-pasted text, extract locations via LLM, geocode, plan a route.
+
+    Same pipeline as /parse_link but skips scraping — for sources we can't
+    scrape (Xiaohongshu, WeChat articles, copied text). No caching: pasted
+    text has no stable key.
+    """
+    text = (req.text or "").strip()
+    if len(text) < 20:
+        raise HTTPException(status_code=400, detail="Text too short to analyze.")
+
+    session = conversation_manager.create_session()
+
+    try:
+        result = await agent_orchestrator.run_pipeline_from_text(text, session)
+
+        response_data = {
+            "title": result["title"],
+            "locations": result["locations"],
+            "route": result["route"],
+            "removed_noise": result.get("removed_noise", []),
+            "session_id": result.get("session_id", session.session_id),
+            "removed_hierarchy": result.get("removed_hierarchy", []),
+            "inferred_region": result.get("inferred_region"),
+            "source_type": result.get("source_type"),
+        }
+
+        locs = result.get("locations", [])
+        print(f"\n{'='*50}")
+        print(f"📋 TEXT ({len(text)} chars): {result['title'][:60]}")
+        print(f"📍 Locations ({len(locs)}):")
+        for i, loc in enumerate(locs):
+            print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
+
+        return ParseResponse(**response_data)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 
 @app.post("/chat")

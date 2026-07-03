@@ -10,7 +10,7 @@ import HomeScreen from './src/features/home/HomeScreen';
 import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
-import { parseLink, type ParseResult } from './src/services/import/importService';
+import { parseInput, type ParseResult } from './src/services/import/importService';
 import { savePlaces } from '@/services/place/placeService';
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';
@@ -78,7 +78,7 @@ export default function App() {
   useEffect(() => {
     if (overlay !== 'analyzing') return;
     let cancelled = false;
-    parseLink(importText)
+    parseInput(importText)
       .then((result) => {
         if (!cancelled) {
           setParseResult(result);
