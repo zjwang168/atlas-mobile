@@ -1,16 +1,24 @@
-# OurAtlas — AI-Powered Travel Itinerary Extractor
+# OurAtlas - AI-Powered Travel Location Extractor
 
-Automatically extract travel locations from Reddit posts and web URLs, plan optimal routes, and visualize them on a map.
+OurAtlas extracts real-world places from Reddit posts, pasted text, web pages, screenshots, and images, then geocodes them and visualizes the result on a map.
 
-Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **DeepSeek V4 Flash LLM** + **Mapbox**.
+Built with **React Native (Expo SDK 56)** + **FastAPI** + **DeepSeek** + **Qwen 3.5 Flash** + **Gemini 3.5 Flash** + **GLM-OCR** + **Mapbox**.
 
-> **Expo SDK v56**: This project targets the latest Expo SDK. Always consult the [official Expo v56 docs](https://docs.expo.dev/versions/v56.0.0/) before making build/config changes.
+> **Expo SDK v56**: This project targets Expo SDK 56. Consult the [official Expo v56 docs](https://docs.expo.dev/versions/v56.0.0/) before making build or config changes.
 
 ---
 
-## Demo
+## Overview
 
-[Demonstration Video](./demo.mp4)
+The app centers on a single home screen with a map, a bottom-sheet side panel, and an import flow that can ingest several source types:
+
+- URL parsing for Reddit and general webpages
+- Smart text parsing for pasted itineraries, notes, and prompts
+- Smart text with live web search
+- Image Scan for uploaded screenshots or images
+- Any Links for vision-based webpage capture followed by OCR
+
+Each import mode eventually produces the same output shape: a title, a list of geocoded locations, a route, and metadata about removed noise or hierarchy.
 
 ---
 
@@ -18,96 +26,99 @@ Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **DeepSeek V4
 
 ```mermaid
 graph TD
-    User[User Pastes URL] --> SearchBar[SearchBar<br/>Clipboard Detection]
-    SearchBar --> API[POST /parse_link]
+    User[User] --> Home[HomeScreen]
+    Home --> Import[ImportScreen]
+    Import --> Backend[FastAPI import endpoints]
 
-    subgraph "Supervisor Agent (agent_orchestrator.py)"
-        Scraper[Scraper Agent<br/>web_scraper.py]
-        Extraction[Extraction Agent<br/>extraction_pipeline.py]
-        EntityLink[Entity Linking Agent<br/>_entity_linking]
-        Geocoding[Geocoding Agent<br/>geocoder.py]
-        Route[Route Planning<br/>route_planner.py]
-        Memory[Memory Agent<br/>_update_memory]
-
-        Scraper --> Extraction
-        Extraction --> EntityLink
-        EntityLink --> Geocoding
-        Geocoding --> Route
-        Route --> Memory
+    subgraph Backend Pipelines
+        Link[Link pipeline<br/>/parse_link]
+        Text[Smart Text pipeline<br/>/parse_text]
+        WebText[Smart Text web search<br/>Qwen -> DeepSeek]
+        Image[Image Scan pipeline<br/>/scan_images_base64]
+        Any[Any Links pipeline<br/>/scan_url]
+        Discover[Atlas discovery<br/>/atlas_ai/discover]
+        Chat[Conversation / chat pipeline<br/>/chat]
     end
 
-    API --> Supervisor
+    Backend --> Link
+    Backend --> Text
+    Backend --> WebText
+    Backend --> Image
+    Backend --> Any
+    Backend --> Discover
+    Backend --> Chat
 
-    subgraph "Geocoding Fallback Chain"
-        G1[Google Maps<br/>$200/mo free]
-        G2[Geoapify<br/>3k/day free]
-        G3[LocationIQ<br/>5k/day free]
-        G4[Nominatim<br/>1 req/s]
-        G5[Photon<br/>No key needed]
-
-        G1 --> G2 --> G3 --> G4 --> G5
-    end
-
-    Geocoding --> G1
-
-    Route --> Response[ParseResult JSON]
-    Response --> Frontend
-
-    subgraph "Frontend (React Native)"
-        Map[Mapbox Map<br/>Color-coded markers]
-        Sidekick[Sidekick BottomSheet<br/>Chat + Locations + Memory]
-        History[Conversation History<br/>Supabase persistence]
-    end
-
-    Frontend --> Map
-    Frontend --> Sidekick
-    Frontend --> History
+    Link --> Extract[DeepSeek extraction + hierarchy filtering]
+    Text --> Extract
+    WebText --> Qwen[Qwen natural-language answer]
+    Qwen --> Extract
+    Image --> OCR[GLM-OCR]
+    OCR --> Extract
+    Any --> Gemini[Gemini Computer Use screenshots]
+    Gemini --> OCR
+    Extract --> Geo[Geocoding fallback chain]
+    Geo --> Route[Route planning]
+    Route --> Save[SaveScreen]
+    Route --> History[Conversation history / Supabase]
 ```
+
+The current backend uses several specialized paths rather than one monolithic parser:
+
+- `parse_link` handles normal URL parsing and route generation.
+- `parse_text` handles pasted text and optionally enables live web search.
+- `scan_images_base64` and `scan_images` turn images into OCR text and then into places.
+- `scan_url` uses Gemini Computer Use to capture a webpage as screenshots, OCRs those screenshots with GLM-OCR, and then reuses the Image Scan parsing path.
+- `atlas_ai/discover` researches exact addresses and geocodes them directly.
 
 ---
 
 ## Architecture Overview
 
+```text
+┌────────────────────────────────────────────────────────────┐
+│ React Native App (Expo)                                     │
+│                                                            │
+│  HomeScreen                                                │
+│   ├─ MapboxMap                                             │
+│   ├─ Search / clipboard entry                              │
+│   ├─ Sidekick bottom sheet                                 │
+│   └─ Import flow                                            │
+│      ├─ ImportScreen                                        │
+│      ├─ AnalyzingScreen                                     │
+│      └─ SaveScreen                                          │
+│                                                            │
+│  Import modes                                               │
+│   ├─ Smart Text                                             │
+│   ├─ Image Scan                                             │
+│   ├─ Reddit Links                                           │
+│   └─ Any Links                                              │
+└──────────────────────────────┬─────────────────────────────┘
+                               │ HTTP
+┌──────────────────────────────┴─────────────────────────────┐
+│ FastAPI Backend                                             │
+│                                                            │
+│  Import services                                            │
+│   ├─ agent_orchestrator.py                                 │
+│   ├─ smart_text_service.py                                 │
+│   ├─ image_scanner.py                                      │
+│   ├─ gemini_computer_use.py                                │
+│   ├─ glm_ocr.py                                            │
+│   ├─ web_search_router.py                                  │
+│   ├─ content_classifier.py                                 │
+│   └─ atlas_ai_discovery.py                                 │
+│                                                            │
+│  Core services                                              │
+│   ├─ extraction_pipeline.py                                │
+│   ├─ geocoder.py                                           │
+│   ├─ route_planner.py                                      │
+│   ├─ conversation_manager.py                               │
+│   ├─ supabase_service.py                                   │
+│   ├─ cache.py                                              │
+│   └─ llm_client.py                                         │
+└────────────────────────────────────────────────────────────┘
 ```
-┌─────────────────────────────────────────────────────┐
-│              React Native App (Expo)                 │
-│                                                      │
-│  ┌───────────────────────────────────────────────┐  │
-│  │  HomeScreen                                    │  │
-│  │  ┌─────────┐  ┌──────────┐  ┌──────────────┐ │  │
-│  │  │SearchBar│  │MapboxMap │  │   Sidekick    │ │  │
-│  │  │         │  │Green     │  │ Chat          │ │  │
-│  │  │         │  │Blue Red  │  │ Location      │ │  │
-│  │  │         │  │ Markers  │  │ Locations     │ │  │
-│  │  │         │  │Click to  │  │ by Category   │ │  │
-│  │  │         │  │highlight │  │               │ │  │
-│  │  │         │  │list item │  │ Memory Tab    │ │  │
-│  │  └─────────┘  └──────────┘  └──────────────┘ │  │
-│  └───────────────────────────────────────────────┘  │
-│                        │                            │
-│              HTTP POST /parse_link                   │
-│                        │                            │
-└────────────────────────┼────────────────────────────┘
-                         │
-┌────────────────────────┼────────────────────────────┐
-│              FastAPI Backend (Python)                │
-│                                                      │
-│  Supervisor Agent Orchestrator                       │
-│  ┌───────────────────────────────────────────────┐  │
-│  │ 1. Scraper Agent  (Reddit/Web)               │  │
-│  │ 2. Extraction Agent (LLM + Hierarchy Filter) │  │
-│  │ 3. Entity Linking Agent (LLM Disambiguation) │  │
-│  │ 4. Geocoding Agent (5-layer fallback)        │  │
-│  │ 5. Route Planning (TSP + 2-opt)              │  │
-│  │ 6. Conversation Manager (Memory - Supabase)  │  │
-│  └───────────────────────────────────────────────┘  │
-│                                                      │
-│  API Endpoints:                                      │
-│  POST /parse_link  POST /chat  GET /sessions         │
-│  POST /sessions/{id}/save  GET /conversations        │
-│  GET /memories  POST /memories                       │
-└──────────────────────────────────────────────────────┘
-```
+
+The app keeps the import flow visually simple while the backend chooses the best pipeline based on input type and mode.
 
 ---
 
@@ -118,145 +129,242 @@ sequenceDiagram
     actor User
     participant App as React Native App
     participant Backend as FastAPI Backend
-    participant Source as Web Source
-    participant LLM as DeepSeek V4 Flash
-    participant Geo as Geocoder (5-Layer)
+    participant Source as Source content
+    participant DeepSeek as DeepSeek
+    participant Qwen as Qwen 3.5 Flash
+    participant Gemini as Gemini 3.5 Flash
+    participant OCR as GLM-OCR
+    participant Geo as Geocoder
     participant DB as Supabase
 
-    Note over User,Geo: === User Triggers Extraction ===
-    
-    User->>App: Paste URL
-    User->>App: Click Send
-    
-    App->>App: Sidekick shows loading
-    App->>Backend: POST /parse_link {url}
-    
-    Note over Backend: === 1. Cache Check ===
-    alt Cache Hit
-        Backend-->>App: Return cached result
-    else Cache Miss
-        Note over Backend,Source: === 2. Scrape Content ===
-        Backend->>Source: Fetch URL content
-        Source-->>Backend: Title + body + comments
-        
-        Note over Backend,LLM: === 3. LLM Extraction ===
-        Backend->>LLM: Extract geographic entities
-        Note right of LLM: Prompt: Hierarchical extraction<br/>+ noise filtering
-        LLM-->>Backend: {entities, inferred_region}
-        
-        Note over Backend,LLM: === 4. Entity Linking ===
-        Backend->>LLM: Disambiguate names
-        Note right of LLM: ROM -> Royal Ontario Museum<br/>monuments -> Washington Monument<br/>Suzhou -> Suzhou, Jiangsu/Anhui
-        LLM-->>Backend: {disambiguated names}
-        
-        Note over Backend,Geo: === 5. Geocoding ===
-        Backend->>Geo: Layer 1: Google Maps
-        alt POI found
-            Geo-->>Backend: Exact coordinates
-        else Not found
-            Geo->>Geo: Layer 2: Geoapify
-            alt POI found
-                Geo-->>Backend: Exact coordinates
-            else Not found
-                Geo->>Geo: Layer 3-5: LocationIQ/Nominatim/Photon
-                Geo-->>Backend: Best available coords
-            end
+    User->>App: Submit URL / text / images
+    App->>Backend: POST /parse_link | /parse_text | /scan_images_base64 | /scan_url
+
+    alt URL parsing
+        Backend->>Source: Fetch content
+        Source-->>Backend: HTML / text
+        Backend->>DeepSeek: Extract locations + hierarchy
+        DeepSeek-->>Backend: structured places
+    else Smart Text
+        alt web_search=false
+            Backend->>DeepSeek: Extract places from pasted text
+            DeepSeek-->>Backend: structured places
+        else web_search=true
+            Backend->>Qwen: Produce live web-backed natural language answer
+            Qwen-->>Backend: answer text
+            Backend->>DeepSeek: Re-extract places from answer text
+            DeepSeek-->>Backend: structured places
         end
-        
-        Note over Backend: === 6. Route Planning ===
-        Backend->>Backend: TSP + 2-opt optimization
-        Backend->>Backend: Haversine distance
-        
-        Note over Backend: === 7. Auto-Save & Memory ===
-        Backend->>DB: Save conversation (messages + locations)
-        Backend->>LLM: Extract memory items from session
-        LLM-->>Backend: {key, value, category}[]
-        Backend->>DB: Save long-term memory items
-        
-        Note over Backend: === 8. Cache & Return ===
-        Backend->>Backend: cache.set(url, result)
-        Backend-->>App: ParseResult (locations + route)
+    else Image Scan
+        Backend->>OCR: OCR uploaded images
+        OCR-->>Backend: extracted text
+        Backend->>DeepSeek: Deduplicate, filter hierarchy, geocode-ready places
+        DeepSeek-->>Backend: structured places
+    else Any Links
+        Backend->>Gemini: Capture webpage screenshots
+        Gemini-->>Backend: screenshots
+        Backend->>OCR: OCR screenshots
+        OCR-->>Backend: extracted text
+        Backend->>DeepSeek: Same pipeline as Image Scan
+        DeepSeek-->>Backend: structured places
     end
-    
-    Note over App: === 9. Render Results ===
-    App->>App: Sidekick: locations by category
-    App->>App: Map: colored markers + sentiment
-    
-    Note over User,Geo: === 10. Follow-up Chat ===
-    User->>App: "Optimize this route"
-    App->>Backend: POST /chat {session_id, message}
-    Backend->>LLM: Agent tool-calling loop
-    LLM-->>Backend: Tool calls + response
-    Backend-->>App: Updated locations + route
+
+    Backend->>Geo: Geocode place names
+    Geo-->>Backend: coordinates
+    Backend->>Backend: Route planning
+    Backend->>DB: Save conversation / memory
+    Backend-->>App: ParseResult
+```
+
+The important current behavior is:
+
+- Smart Text and Smart Text web search now share a consistent cleanup path.
+- Any Links is intentionally vision-first and runs through screenshots and OCR before place extraction.
+- Image Scan and Any Links converge on the same OCR-driven parsing logic before geocoding.
+- Geocoding happens after dedupe and hierarchy cleanup, not before.
+
+---
+
+## Multi-Agent AI Pipeline
+
+| Component | Responsibility | Implementation |
+|---|---|---|
+| Supervisor | Orchestrates imports, chat, session state, and persistence | `agent_orchestrator.py`, `conversation_manager.py` |
+| URL Scraper | Reads webpage / Reddit source content | `web_scraper.py`, Reddit JSON fetchers |
+| Smart Text | Parses freeform text into places | `smart_text_service.py` + DeepSeek |
+| Smart Text Web | Generates live-web natural language, then re-parses it into structured places | Qwen + DeepSeek |
+| Image Scan | OCRs images, classifies text, and routes to extraction / discovery | `image_scanner.py` + `glm_ocr.py` + `content_classifier.py` |
+| Any Links | Captures screenshots from webpages with Gemini Computer Use, then OCRs them | `gemini_computer_use.py` + `glm_ocr.py` |
+| Extraction | Produces place candidates and removes noise / hierarchy residues | `extraction_pipeline.py` |
+| Entity Linking | Disambiguates place names and adds geographic context when needed | `agent_orchestrator.py` |
+| Geocoding | Converts place names to coordinates with fallback coverage | `geocoder.py` |
+| Route Planning | Orders locations into a visitable route | `route_planner.py` |
+| Memory | Saves long-term preferences and interests | `conversation_manager.py` + Supabase |
+| Chat | Handles follow-up map refinement | `agent_orchestrator.py` chat loop |
+
+### Smart Text
+
+- DeepSeek returns structured JSON for places.
+- The backend then applies raw dedupe, hierarchy filtering, and geocoding.
+- `use_web_search=false` keeps the flow fully text-based.
+
+### Smart Text with Web Search
+
+- Qwen first produces a natural-language answer using live web evidence.
+- That answer is then treated as normal smart text.
+- DeepSeek performs the same extraction, dedupe, hierarchy cleanup, and geocoding as the non-web path.
+
+### Image Scan
+
+- Uploaded images are OCRed with GLM-OCR.
+- OCR text is classified so address-heavy text can be routed correctly.
+- The parsing path then produces structured places, geocodes them, and renders the Save screen.
+
+### Any Links
+
+- Gemini Computer Use opens the webpage and collects screenshots with a capped top-to-bottom pass.
+- Screenshots are saved locally for debugging and then OCRed with GLM-OCR.
+- The OCR text then goes through the same place parsing path as Image Scan.
+
+---
+
+## Import Pipelines
+
+### 1. URL parse
+
+`POST /parse_link` handles normal webpage parsing:
+
+- Cache lookup
+- Source fetching
+- LLM extraction
+- Entity linking
+- Geocoding
+- Route planning
+- Conversation and memory persistence
+
+### 2. Smart Text
+
+`POST /parse_text` supports pasted travel notes or prompts.
+
+- `web_search=false`: DeepSeek parses the text directly.
+- `web_search=true`: Qwen answers first, then DeepSeek re-parses the answer.
+
+### 3. Image Scan
+
+`POST /scan_images_base64` and `POST /scan_images` support image-based import.
+
+- OCR with GLM-OCR
+- Route based on content type
+- Structured place extraction
+- Geocoding and route planning
+
+### 4. Any Links
+
+`POST /scan_url` supports vision-based webpage parsing.
+
+- Gemini Computer Use captures screenshots
+- GLM-OCR reads the screenshots
+- The same Image Scan extraction path is reused downstream
+
+### 5. Atlas Discovery
+
+`POST /atlas_ai/discover` is for queries that need direct place research and exact addresses.
+
+---
+
+## Map And UI
+
+- Home screen: map + sidekick + search bar
+- Import screen: Smart Text, Image Scan, Reddit Links, Any Links
+- Analyzing screen: shared waiting state for all import flows
+- Save screen: review, deselect, save, or add to plan
+
+The current import UX keeps the user in the waiting state immediately after submission, especially for Image Scan and Any Links, so the app does not fall back to the home screen while work is in flight.
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/parse_link` | Parse a URL into locations and route data |
+| POST | `/parse_text` | Parse pasted text, with optional `web_search` |
+| POST | `/scan_images_base64` | Parse base64 image payloads |
+| POST | `/scan_images` | Parse uploaded image files |
+| POST | `/scan_url` | Capture webpage screenshots, OCR them, and parse them |
+| GET | `/parse_progress/{request_id}` | Read live progress events |
+| POST | `/atlas_ai/discover` | Research exact addresses and geocode them |
+| POST | `/chat` | Continue a map/session conversation |
+| GET | `/sessions` | List active sessions |
+| POST | `/sessions` | Create a session |
+| POST | `/sessions/{id}/save` | Persist session to Supabase |
+| GET | `/conversations` | List saved conversations |
+| GET | `/conversations/{id}` | Load one conversation |
+| DELETE | `/conversations/{id}` | Delete a conversation |
+| GET | `/memories` | List long-term memories |
+| POST | `/memories` | Add a memory item |
+| GET | `/health` | Health check |
+
+---
+
+## Project Structure
+
+```text
+atlas-mobile/
+├── App.tsx
+├── backend/
+│   ├── main.py
+│   └── services/
+│       ├── agent_orchestrator.py
+│       ├── atlas_ai_discovery.py
+│       ├── cache.py
+│       ├── content_classifier.py
+│       ├── conversation_manager.py
+│       ├── extraction_pipeline.py
+│       ├── geocoder.py
+│       ├── gemini_computer_use.py
+│       ├── glm_ocr.py
+│       ├── image_scanner.py
+│       ├── llm_client.py
+│       ├── progress.py
+│       ├── route_planner.py
+│       ├── smart_text_service.py
+│       ├── supabase_service.py
+│       ├── web_search_router.py
+│       └── ...
+├── src/
+│   ├── features/
+│   │   ├── home/
+│   │   ├── import-places/
+│   │   ├── map/
+│   │   ├── my-places/
+│   │   ├── my-plan/
+│   │   └── place-detail/
+│   ├── services/
+│   │   ├── api/
+│   │   ├── import/
+│   │   └── place/
+│   ├── types/
+│   └── utils/
+├── docs/
+└── .env
 ```
 
 ---
 
-## Features
+## Tech Stack
 
-### Multi-Agent AI Pipeline
-
-| Agent | Responsibility | Technology |
-|-------|---------------|------------|
-| **Supervisor** | Orchestrates all agents, manages session context | DeepSeek V4 Flash |
-| **Scraper** | Fetches content from Reddit/any webpage | Reddit JSON API + trafilatura |
-| **Extraction** | Extracts geographic entities with hierarchy filtering | DeepSeek + Rule Engine |
-| **Entity Linking** | Disambiguates names (ROM→Royal Ontario Museum, Suzhou→Suzhou, Jiangsu) | DeepSeek + Category Rules |
-| **Geocoding** | Converts place names to coordinates | 5-layer fallback chain |
-| **Route Planning** | Computes shortest path | TSP + 2-opt |
-| **Memory** | Auto-extracts user preferences/interests from session | DeepSeek + Supabase |
-| **Conversation** | Follow-up chat with tool calling | Agent Loop |
-
-### Smart Geocoding
-
-| Layer | Service | Free Tier | Coverage |
-|-------|---------|-----------|----------|
-| 1 | Google Maps | $200/mo free credit | Best global POI |
-| 2 | Geoapify | 3,000 req/day | Best POI |
-| 3 | LocationIQ | 5,000 req/day | Excellent |
-| 4 | Nominatim | 1 req/s | OSM data |
-| 5 | Photon | Unlimited | OSM data |
-
-### Map Visualization
-
-- **Color-coded markers**: Green Recommended / Blue Neutral / Red Not Recommended
-- **Category grouping**: Tourist Attractions, Dining, Museums, etc.
-- **Smart clustering**: Centers on densest area, ignores outlier coordinates
-- **Location descriptions**: One-sentence summary from Reddit comments
-- **Marker–List linkage**: Tap a map marker → Sidekick switches to Locations tab & highlights the item
-- **Map re-focus**: Loading a saved conversation resets map center/zoom to fit restored locations
-
-### Conversational AI
-
-- Follow-up chat after extraction to refine, add, or remove locations
-- Tool-calling loop for dynamic map/route operations
-- Session memory across conversations (in-memory + Supabase)
-
-### Long-Term Memory
-
-- **Auto-extraction**: After each `parse_link` or chat, the LLM analyzes the session and saves user preferences/interests to Supabase
-- **Memory tab**: View all saved memories in the Sidekick bottom sheet
-- **Manual add**: Users can add custom memory items (e.g. "cuisine_preference: loves street food")
-- **Categories**: preference, visited_place, interest, disliked, plan
-- **Persistence**: Memories survive server restarts (stored in Supabase `long_term_memory` table)
-
-### Save Conversation Persistence
-
-- Auto-save sessions to Supabase after each successful `parse_link`
-- Load past conversations with full message history
-- Multi-device access via cloud storage
-- Supabase RLS policies configured for anonymous read/write
-
----
-
-## Performance Metrics
-
-| Metric | Paris Dataset | Toronto Dataset | Washington DC |
-|--------|--------------|----------------|---------------|
-| Recall | ~44% | ~95% | ~85% |
-| Precision | ~91% | ~95% | ~90% |
-| Geocoding Accuracy | ~80% | ~75% | ~70% |
-| End-to-end time | ~15-25s | ~15-25s | ~15-25s |
+| Layer | Stack |
+|---|---|
+| Mobile | React Native + Expo SDK 56 |
+| Backend | FastAPI (Python) |
+| Primary LLM | DeepSeek |
+| Web search answer model | Qwen 3.5 Flash |
+| Vision browser model | Gemini 3.5 Flash |
+| OCR | GLM-OCR |
+| Maps | Mapbox |
+| Persistence | Supabase |
+| Geocoding | Google Maps / Geoapify / LocationIQ / Nominatim / Photon |
 
 ---
 
@@ -264,230 +372,72 @@ sequenceDiagram
 
 ### Prerequisites
 
-- **Python 3.10+**
-- **Node.js 18+**
-- **Xcode 16+** (iOS Simulator)
-- **CocoaPods** >= 1.16
-- **Mapbox, Geoapify, LocationIQ, Google Maps API keys** (in `.env`)
+- Python 3.10+
+- Node.js 18+
+- Xcode 16+ for iOS development
+- CocoaPods
+- API keys for the services configured in `.env`
 
-### Installation & Setup
+### Installation
 
 ```bash
-# 1. Install backend dependencies
 cd backend
 pip install -r requirements.txt
 cd ..
-
-# 2. Install frontend dependencies
 npm install
-
-# 3. Configure .env
-# Copy from .env.example and fill in your API keys
 cp .env.example .env
 ```
 
-> **Note**: The project uses `@rnmapbox/maps@10.3.1` (Mapbox v11). A Mapbox public access token (`pk.`) is required in `.env` under `MAPBOX_ACCESS_TOKEN`.
+### Start the app
 
-### Start the App
+Backend:
 
-**Terminal 1 — Backend:**
 ```bash
-cd /path/to/atlas-mobile
-uvicorn backend.main:app --reload --port 8000
+uvicorn backend.main:app --reload --reload-dir backend --port 8000
 ```
 
-**Terminal 2 — Frontend:**
+Frontend:
+
 ```bash
-cd /path/to/atlas-mobile
 npx expo run:ios
 ```
 
-For subsequent runs after the initial build:
+For subsequent runs:
+
 ```bash
 npx expo start --dev-client
 ```
 
-### Usage
+### Typical usage
 
-1. Copy a Reddit post URL (or any travel webpage)
-2. Tap the search bar — clipboard is auto-detected
-3. Tap **Paste** — Press send button
-4. Wait **15-25 seconds** for AI processing
-5. Sidekick appears with extracted locations
-6. Explore: Chat, Locations by Category, Color-coded map markers, Memory tab
-
-> **Tip**: Press `r` in the terminal to reload the JS bundle. Press `d` to open the developer menu on device/simulator.
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/parse_link` | Parse URL → extract locations → plan route |
-| POST | `/chat` | Continue conversation with AI agent |
-| GET | `/sessions` | List active sessions |
-| POST | `/sessions/{id}/save` | Persist session to Supabase |
-| GET | `/conversations` | List saved conversations |
-| GET | `/conversations/{id}` | Load full conversation |
-| DELETE | `/conversations/{id}` | Delete conversation |
-| **GET** | **`/memories`** | **List all long-term memories** |
-| **POST** | **`/memories`** | **Add a memory item (key/value/category)** |
-| GET | `/health` | Health check |
-
----
-
-## Project Structure
-
-```
-atlas-mobile/
-├── app.config.js              # Expo configuration (plugins, env vars)
-├── App.tsx                    # Root component with error boundary
-├── backend/                   # FastAPI parse/fetch backend
-│   ├── main.py                # FastAPI app entry point
-│   ├── requirements.txt       # Python dependencies
-│   └── services/
-│       ├── agent_orchestrator.py  # Supervisor Agent (pipeline + chat loop + memory update)
-│       ├── web_scraper.py         # Multi-source scraper (Reddit + generic)
-│       ├── extraction_pipeline.py # Hierarchical extraction (LLM + rules)
-│       ├── geocoder.py            # 5-layer geocoding fallback chain (Google Maps→Geoapify→...)
-│       ├── route_planner.py       # TSP + 2-opt route optimizer
-│       ├── llm_client.py          # DeepSeek V4 Flash client
-│       ├── tool_definitions.py    # Tool schemas + registry
-│       ├── conversation_manager.py# Three-tier memory system
-│       ├── supabase_service.py    # Supabase persistence (conversations + memories)
-│       ├── reddit_fetcher.py      # Reddit JSON API fetcher
-│       └── cache.py               # In-memory TTL cache
-├── src/
-│   ├── features/
-│   │   ├── home/
-│   │   │   ├── HomeScreen.tsx  # Main screen (map + search + sidekick)
-│   │   │   ├── SearchBar.tsx   # Search bar with clipboard detection
-│   │   │   └── Sidekick.tsx    # Bottom-sheet panel with chat + locations + memory
-│   │   ├── map/
-│   │   │   └── MapboxMap.tsx   # Mapbox map with markers + route + marker selection
-│   │   ├── collections/        # Saved collections
-│   │   ├── import/             # Import screens
-│   │   └── place/              # Place detail screens
-│   ├── services/
-│   │   ├── apiService.ts       # Backend API client (parse, chat, sessions, memories)
-│   │   ├── aiService.ts        # AI service helpers
-│   │   └── ...
-│   ├── types/
-│   │   ├── route.ts            # TypeScript types (incl. MemoryItem)
-│   │   └── ...
-│   └── utils/
-│       └── constants.ts        # API URL, map defaults
-├── .env                       # Local environment variables
-├── assets/                    # App icons & splash screen
-├── docs/                      # Documentation & schema
-│   ├── schema.sql             # Database schema
-│   ├── supabase-rls-policies.sql  # RLS policies for anon access
-│   └── erd.dbml               # Entity relationship diagram
-└── demo.mp4                   # Demo video
-```
-
----
-
-## Tech Stack
-
-| Component | Library |
-|-----------|---------|
-| Framework | React Native 0.85 + Expo SDK 56 |
-| Map SDK | `@rnmapbox/maps@10.3.1` (Mapbox v11) |
-| Navigation | `@react-navigation/native` v7 |
-| Gestures | `react-native-gesture-handler` |
-| Animations | `react-native-reanimated` |
-| Bottom Sheet | `@gorhom/bottom-sheet` |
-| Backend | FastAPI (Python 3.10+) |
-| LLM | DeepSeek V4 Flash |
-| Geocoding | Google Maps / Geoapify / LocationIQ / Nominatim / Photon |
-| Database | Supabase (PostgreSQL) |
-
----
-
-## Changelog
-
-### v2.1.0 — Long-Term Memory & Marker–List Linkage
-
-#### New Features
-
-| Change | Description |
-|--------|-------------|
-| **Long-Term Memory** | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) `_update_memory` auto-extracts user preferences/interests from each session using LLM, saves to Supabase `long_term_memory` table |
-| **Memory API** | [`GET /memories`](backend/main.py:264) and [`POST /memories`](backend/main.py:271) endpoints for listing/adding memory items |
-| **Memory Tab in Sidekick** | [`Sidekick.tsx`](src/features/home/Sidekick.tsx) new "Memory" tab with load/add UI for viewing and creating memory items |
-| **Marker–List Linkage** | [`MapboxMap.tsx`](src/features/map/MapboxMap.tsx) `selectedMarkerId`/`onSelectedMarkerChange` props — tapping a marker switches Sidekick to Locations tab and highlights the item |
-| **Map Re-focus on Load** | [`HomeScreen.tsx`](src/features/home/HomeScreen.tsx) `loadConversation` resets `customCenter`/`customZoom`/`selectedMarkerId` so restored locations fit the viewport |
-| **Auto-Save After Parse** | [`HomeScreen.tsx`](src/features/home/HomeScreen.tsx) calls `saveSession` automatically after successful `parse_link` |
-| **Auto-Save + Memory in Pipeline** | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) `run_pipeline` now auto-saves conversation and updates memory after extraction |
-
-#### Geocoding Improvements
-
-| Change | Detail |
-|--------|--------|
-| **Google Maps as Layer 1** | [`geocoder.py`](backend/services/geocoder.py) replaced Mapbox geocoding with Google Maps Geocoding API as the primary layer ($200/mo free credit, best global POI coverage) |
-| **Geoapify becomes Layer 2** | Shifted to second position in the fallback chain |
-| **Simplified confidence scoring** | Removed Mapbox-specific confidence computation; simplified to pass-through from upstream API |
-| **Dynamic outlier threshold** | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) `_validate_coordinates` uses dynamic threshold (median distance × 8, clamped to 200-2000km) instead of fixed 500km |
-
-#### Entity Linking Enhancements
-
-| Change | Detail |
-|--------|--------|
-| **Geographic context appending** | Entity Linking now appends region/province/state to ambiguous names (e.g. "Suzhou, Jiangsu" vs "Suzhou, Anhui", "Cambridge, UK" vs "Cambridge, Massachusetts") |
-| **Chinese location disambiguation** | Added examples for Chinese cities (Suzhou in Jiangsu vs Anhui) |
-| **Generic term resolution** | Resolves "monuments"→"Washington Monument", "the bridge"→"Golden Gate Bridge" etc. |
-
-#### Bug Fixes & Improvements
-
-| Fix | Detail |
-|-----|--------|
-| **Memory JSON parsing** | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) `_update_memory` f-string `{}` escaped to `{{}}` for JSON prompt; added robust markdown code fence stripping + unwrap logic |
-| **Supabase memory schema** | [`supabase_service.py`](backend/services/supabase_service.py) removed `session_id` column from insert (table doesn't have the column) |
-| **Memory without session** | [`conversation_manager.py`](backend/services/conversation_manager.py) `add_memory` now persists to Supabase even without an active in-memory session |
-| **Sidekick save button removed** | Save is now automatic after parse; removed manual save button from Sidekick |
-| **Supabase RLS policies** | Added [`docs/supabase-rls-policies.sql`](docs/supabase-rls-policies.sql) for anonymous read/write on all tables |
-| **Map center offset** | [`HomeScreen.tsx`](src/features/home/HomeScreen.tsx) applies latitude offset to prevent markers from being hidden behind the Sidekick bottom sheet |
+1. Paste a URL, image set, or travel note into Import Places
+2. Choose Smart Text, Image Scan, Reddit Links, or Any Links
+3. Wait for the analyzing screen
+4. Review extracted places in Save Screen
+5. Save selected places or add them to a plan
 
 ---
 
 ## Troubleshooting
 
-### `pod install` fails
-
-```bash
-cd ios && pod install --repo-update
-```
-
-### Build fails with stale cache errors
-
-```bash
-rm -rf node_modules/expo-modules-jsi/apple/.DerivedData
-rm -rf ~/Library/Developer/Xcode/DerivedData
-npx expo run:ios
-```
-
-### Map shows a blank or 64×64 area
-
-This indicates the Mapbox `MapView` couldn't measure its container. The component uses `useWindowDimensions` to set explicit dimensions — ensure the parent view has proper layout constraints.
-
 ### Backend not responding
 
-Ensure the backend is running on port 8000:
 ```bash
 curl http://localhost:8000/health
-# → {"status": "ok"}
 ```
 
----
+### Mapbox rendering issues
 
-## Production Build
+If the map appears blank or clipped, ensure the parent view has dimensions and the native dependencies were rebuilt after config changes.
 
-```bash
-npm install -g eas-cli
-eas build --platform ios
-```
+### OCR or vision parsing fails
+
+Check that the relevant environment variables are set:
+
+- `GLM_API_KEY`
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+- `GEMINI_COMPUTER_USE_MODEL`
+- `GEMINI_COMPUTER_USE_IMAGE_SIZE`
 
 ---
 

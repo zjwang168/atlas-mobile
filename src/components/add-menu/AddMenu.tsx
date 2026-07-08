@@ -8,7 +8,6 @@ type AddMenuProps = {
   visible: boolean;
   onClose: () => void;
   onImportPlaces: () => void;
-  onChatWithAI: () => void;
 };
 
 /**
@@ -16,7 +15,7 @@ type AddMenuProps = {
  * bottom-right corner to approximate the native pull-down feel. Rendered as an
  * RN overlay so it sits above the native tab controller.
  */
-export default function AddMenu({ visible, onClose, onImportPlaces, onChatWithAI }: AddMenuProps) {
+export default function AddMenu({ visible, onClose, onImportPlaces }: AddMenuProps) {
   const insets = useSafeAreaInsets();
   const anim = useRef(new Animated.Value(0)).current;
   const [mounted, setMounted] = useState(visible);
@@ -69,11 +68,6 @@ export default function AddMenu({ visible, onClose, onImportPlaces, onChatWithAI
             <Ionicons name="location-outline" size={22} color="#000" />
             <Text style={styles.rowText}>Import places</Text>
           </Pressable>
-          <View style={styles.divider} />
-          <Pressable style={styles.row} onPress={onChatWithAI}>
-            <Ionicons name="chatbubble-ellipses-outline" size={22} color="#000" />
-            <Text style={styles.rowText}>Chat with AI</Text>
-          </Pressable>
         </View>
       </Animated.View>
     </View>
@@ -84,7 +78,7 @@ const styles = StyleSheet.create({
   card: {
     position: 'absolute',
     right: 16,
-    width: 220,
+    width: 190,
     borderRadius: 24,
     overflow: 'hidden',
     transformOrigin: 'right bottom',
@@ -107,10 +101,5 @@ const styles = StyleSheet.create({
   rowText: {
     fontSize: 16,
     color: '#000',
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(0,0,0,0.12)',
-    marginHorizontal: 12,
   },
 });

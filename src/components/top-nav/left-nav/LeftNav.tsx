@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { BlurView } from 'expo-blur';
-import { TouchableOpacity } from 'react-native';
+import { TouchableOpacity, View } from 'react-native';
 
 type LeftNavProps = {
-  onPress?: () => void;
+  onSearchPress?: () => void;
+  onHistoryPress?: () => void;
 };
 
 const glassShadow = {
@@ -14,16 +15,42 @@ const glassShadow = {
   elevation: 6,
 } as const;
 
-export default function LeftNav({ onPress }: LeftNavProps) {
+const buttonStyle = {
+  borderRadius: 33,
+  overflow: 'hidden' as const,
+  ...glassShadow,
+};
+
+const blurStyle = {
+  padding: 10,
+  alignItems: 'center' as const,
+  justifyContent: 'center' as const,
+};
+
+export default function LeftNav({ onSearchPress, onHistoryPress }: LeftNavProps) {
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.8}
-      style={{ borderRadius: 33, overflow: 'hidden', ...glassShadow }}
-    >
-      <BlurView intensity={40} tint="light" style={{ padding: 10, alignItems: 'center', justifyContent: 'center' }}>
-        <Ionicons name="search" size={24} color="#000" />
-      </BlurView>
-    </TouchableOpacity>
+    <View className="flex-col items-center gap-2">
+      {/* 搜索按钮 */}
+      <TouchableOpacity
+        onPress={onSearchPress}
+        activeOpacity={0.8}
+        style={buttonStyle}
+      >
+        <BlurView intensity={40} tint="light" style={blurStyle}>
+          <Ionicons name="search" size={24} color="#000" />
+        </BlurView>
+      </TouchableOpacity>
+
+      {/* Chat History 按钮（新） */}
+      <TouchableOpacity
+        onPress={onHistoryPress}
+        activeOpacity={0.8}
+        style={buttonStyle}
+      >
+        <BlurView intensity={40} tint="light" style={blurStyle}>
+          <Ionicons name="chatbubbles" size={24} color="#000" />
+        </BlurView>
+      </TouchableOpacity>
+    </View>
   );
 }

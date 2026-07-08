@@ -5,6 +5,7 @@ Converts place names to geographic coordinates using a fallback chain of geocodi
 
 import asyncio
 import os
+import re
 import time
 import urllib.parse
 from typing import Optional
@@ -30,9 +31,15 @@ PHOTON_URL = "https://photon.komoot.io/api"
 
 # Rate limiter for LocationIQ (free tier: 1 req/s)
 _locationiq_last_call = 0.0
+_locationiq_lock = asyncio.Lock()
 
 # Rate limiter for Photon (free tier: conservative 1.2s between calls)
 _photon_last_call = 0.0
+_photon_lock = asyncio.Lock()
+
+# Rate limiter for Nominatim (1 req/s)
+_nominatim_last_call = 0.0
+_nominatim_lock = asyncio.Lock()
 
 # Country bounding boxes: (min_lat, max_lat, min_lng, max_lng)
 COUNTRY_BOUNDS: dict[str, tuple[float, float, float, float]] = {
@@ -245,11 +252,229 @@ COUNTRY_BOUNDS: dict[str, tuple[float, float, float, float]] = {
     "vanuatu": (-21.0, -13.0, 166.0, 172.0),
 }
 
+COUNTRY_ALIASES: dict[str, str] = {
+    "usa": "united states",
+    "us": "united states",
+    "uk": "united kingdom",
+}
+
+REGION_TO_COUNTRY: dict[str, str] = {
+    # United States — states and common abbreviations
+    "alabama": "united states", "al": "united states",
+    "alaska": "united states", "ak": "united states",
+    "arizona": "united states", "az": "united states",
+    "arkansas": "united states", "ar": "united states",
+    "california": "united states", "ca": "united states",
+    "colorado": "united states", "co": "united states",
+    "connecticut": "united states", "ct": "united states",
+    "delaware": "united states", "de": "united states",
+    "florida": "united states", "fl": "united states",
+    "georgia state": "united states",
+    "hawaii": "united states", "hi": "united states",
+    "idaho": "united states", "id": "united states",
+    "illinois": "united states", "il": "united states",
+    "indiana": "united states", "in": "united states",
+    "iowa": "united states", "ia": "united states",
+    "kansas": "united states", "ks": "united states",
+    "kentucky": "united states", "ky": "united states",
+    "louisiana": "united states", "la": "united states",
+    "maine": "united states", "me": "united states",
+    "maryland": "united states", "md": "united states",
+    "massachusetts": "united states", "ma": "united states",
+    "michigan": "united states", "mi": "united states",
+    "minnesota": "united states", "mn": "united states",
+    "mississippi": "united states", "ms": "united states",
+    "missouri": "united states", "mo": "united states",
+    "montana": "united states", "mt": "united states",
+    "nebraska": "united states", "ne": "united states",
+    "nevada": "united states", "nv": "united states",
+    "new hampshire": "united states", "nh": "united states",
+    "new jersey": "united states", "nj": "united states",
+    "new mexico": "united states", "nm": "united states",
+    "new york state": "united states",
+    "north carolina": "united states", "nc": "united states",
+    "north dakota": "united states", "nd": "united states",
+    "ohio": "united states", "oh": "united states",
+    "oklahoma": "united states", "ok": "united states",
+    "oregon": "united states", "or": "united states",
+    "pennsylvania": "united states", "pa": "united states",
+    "rhode island": "united states", "ri": "united states",
+    "south carolina": "united states", "sc": "united states",
+    "south dakota": "united states", "sd": "united states",
+    "tennessee": "united states", "tn": "united states",
+    "texas": "united states", "tx": "united states",
+    "utah": "united states", "ut": "united states",
+    "vermont": "united states", "vt": "united states",
+    "virginia": "united states", "va": "united states",
+    "washington state": "united states",
+    "west virginia": "united states", "wv": "united states",
+    "wisconsin": "united states", "wi": "united states",
+    "wyoming": "united states", "wy": "united states",
+    "district of columbia": "united states", "dc": "united states",
+    # Canada
+    "ontario": "canada", "on": "canada",
+    "quebec": "canada", "qc": "canada",
+    "british columbia": "canada", "bc": "canada",
+    "alberta": "canada", "ab": "canada",
+    "manitoba": "canada", "mb": "canada",
+    "saskatchewan": "canada", "sk": "canada",
+    "nova scotia": "canada", "ns": "canada",
+    "new brunswick": "canada", "nb": "canada",
+    "newfoundland and labrador": "canada", "nl": "canada",
+    "prince edward island": "canada", "pe": "canada",
+    # Australia
+    "new south wales": "australia", "nsw": "australia",
+    "victoria": "australia", "vic": "australia",
+    "queensland": "australia", "qld": "australia",
+    "western australia": "australia", "wa": "australia",
+    "south australia": "australia", "sa": "australia",
+    "tasmania": "australia", "tas": "australia",
+    # Mexico
+    "ciudad de mexico": "mexico", "cdmx": "mexico",
+}
+
+REGION_ABBREV_TO_NAME: dict[str, str] = {
+    # United States
+    "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas",
+    "ca": "california", "co": "colorado", "ct": "connecticut", "de": "delaware",
+    "fl": "florida", "ga": "georgia", "hi": "hawaii", "id": "idaho",
+    "il": "illinois", "ia": "iowa", "ks": "kansas", "ky": "kentucky",
+    "la": "louisiana", "md": "maryland", "ma": "massachusetts", "mi": "michigan",
+    "mn": "minnesota", "ms": "mississippi", "mo": "missouri", "mt": "montana",
+    "ne": "nebraska", "nv": "nevada", "nh": "new hampshire", "nj": "new jersey",
+    "nm": "new mexico", "ny": "new york", "nc": "north carolina", "nd": "north dakota",
+    "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania",
+    "ri": "rhode island", "sc": "south carolina", "sd": "south dakota",
+    "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont",
+    "va": "virginia", "wa": "washington", "wv": "west virginia", "wi": "wisconsin",
+    "wy": "wyoming", "dc": "district of columbia",
+    # Canada
+    "on": "ontario", "qc": "quebec", "bc": "british columbia", "ab": "alberta",
+    "mb": "manitoba", "sk": "saskatchewan", "ns": "nova scotia", "nb": "new brunswick",
+    "nl": "newfoundland and labrador", "pe": "prince edward island",
+    # Australia / Mexico
+    "nsw": "new south wales", "vic": "victoria", "qld": "queensland",
+    "tas": "tasmania", "cdmx": "ciudad de mexico",
+}
+
+CITY_TO_COUNTRY: dict[str, str] = {
+    "shanghai": "china", "beijing": "china", "shenzhen": "china",
+    "guangzhou": "china", "hong kong": "china", "taipei": "china",
+    "paris": "france", "lyon": "france", "marseille": "france",
+    "london": "united kingdom", "manchester": "united kingdom",
+    "edinburgh": "united kingdom",
+    "new york": "united states", "los angeles": "united states", "chicago": "united states",
+    "san francisco": "united states", "seattle": "united states",
+    "washington dc": "united states", "washington state": "united states",
+    "toronto": "canada", "vancouver": "canada",
+    "tokyo": "japan", "osaka": "japan", "seoul": "south korea",
+    "sydney": "australia", "melbourne": "australia",
+    "berlin": "germany", "munich": "germany", "rome": "italy",
+    "milan": "italy", "madrid": "spain", "barcelona": "spain",
+}
+
+# City → country code mapping for Geoapify filter (used in _geocode_geoapify)
+CITY_COUNTRY_MAP: dict[str, str] = {
+    # India
+    "mumbai": "in",
+    "delhi": "in",
+    "new delhi": "in",
+    "bangalore": "in",
+    "bengaluru": "in",
+    "hyderabad": "in",
+    "chennai": "in",
+    "kolkata": "in",
+    "pune": "in",
+    "jaipur": "in",
+    "ahmedabad": "in",
+    # United States
+    "new york": "us",
+    "los angeles": "us",
+    "chicago": "us",
+    "san francisco": "us",
+    "washington": "us",
+    "seattle": "us",
+    "boston": "us",
+    "miami": "us",
+    # Canada
+    "toronto": "ca",
+    "vancouver": "ca",
+    "montreal": "ca",
+    # France
+    "paris": "fr",
+    "lyon": "fr",
+    "marseille": "fr",
+    # United Kingdom
+    "london": "gb",
+    "manchester": "gb",
+    "edinburgh": "gb",
+    # Germany
+    "berlin": "de",
+    "munich": "de",
+    "hamburg": "de",
+    "frankfurt": "de",
+    # Italy
+    "rome": "it",
+    "milan": "it",
+    "venice": "it",
+    "florence": "it",
+    # Spain
+    "madrid": "es",
+    "barcelona": "es",
+    "seville": "es",
+    # Japan
+    "tokyo": "jp",
+    "osaka": "jp",
+    "kyoto": "jp",
+    # South Korea
+    "seoul": "kr",
+    "busan": "kr",
+    # China
+    "beijing": "cn",
+    "shanghai": "cn",
+    "shenzhen": "cn",
+    "guangzhou": "cn",
+    "hong kong": "cn",
+    # Australia
+    "sydney": "au",
+    "melbourne": "au",
+    "brisbane": "au",
+    # New Zealand
+    "auckland": "nz",
+    "wellington": "nz",
+    # Netherlands
+    "amsterdam": "nl",
+    "rotterdam": "nl",
+    # Switzerland
+    "zurich": "ch",
+    "geneva": "ch",
+    # Singapore
+    "singapore": "sg",
+    # Thailand
+    "bangkok": "th",
+    "phuket": "th",
+    # Vietnam
+    "hanoi": "vn",
+    "ho chi minh": "vn",
+    # United Arab Emirates
+    "dubai": "ae",
+    "abu dhabi": "ae",
+    # Turkey
+    "istanbul": "tr",
+    "ankara": "tr",
+    # Brazil
+    "rio de janeiro": "br",
+    "sao paulo": "br",
+    # Mexico
+    "mexico city": "mx",
+    "cancun": "mx",
+}
+
 
 def _check_coords_in_country(lat: float, lng: float, city_name: str | None,
                               result_address: str | None = None) -> bool:
     """Check if coordinates fall within the expected country's bounding box.
-    
+
     Uses both city_name (e.g. "Shanghai", "Shanghai, China") and
     result_address (the geocoded result's formatted address) to determine
     the expected country.
@@ -257,102 +482,182 @@ def _check_coords_in_country(lat: float, lng: float, city_name: str | None,
     if not city_name:
         return True
 
-    city_lower = city_name.lower()
-    
-    # Build a set of countries to check against
-    # From city_name: look for country names
-    # From result_address: look for country names in the geocoded result
-    candidate_texts = [city_lower]
-    if result_address:
-        candidate_texts.append(result_address.lower())
-    
-    checked_countries = set()
-    
-    for text in candidate_texts:
-        for country, (min_lat, max_lat, min_lng, max_lng) in COUNTRY_BOUNDS.items():
-            if country in checked_countries:
+    def _normalize_geo_text(value: str) -> str:
+        normalized = value.lower()
+        normalized = normalized.replace("&", " and ")
+        normalized = normalized.replace("/", " ")
+        normalized = re.sub(r"[^\w\s]", " ", normalized)
+        return f" {' '.join(normalized.split())} "
+
+    def _has_phrase(text: str, phrase: str) -> bool:
+        return f" {phrase} " in text
+
+    def _extract_expected_countries(*texts: str | None) -> list[str]:
+        raw_texts = [text for text in texts if text]
+        normalized_texts = [_normalize_geo_text(text) for text in raw_texts]
+        countries: list[str] = []
+        seen: set[str] = set()
+
+        alias_map: dict[str, str] = {
+            **{country: country for country in COUNTRY_BOUNDS.keys()},
+            **{alias: canonical for alias, canonical in COUNTRY_ALIASES.items()},
+        }
+
+        def _add_country(country_name: str) -> None:
+            normalized_country = COUNTRY_ALIASES.get(country_name, country_name)
+            if normalized_country in COUNTRY_BOUNDS and normalized_country not in seen:
+                seen.add(normalized_country)
+                countries.append(normalized_country)
+
+        # 1) Exact country phrase matching with phrase boundaries.
+        for phrase, canonical in sorted(alias_map.items(), key=lambda item: len(item[0]), reverse=True):
+            for text in normalized_texts:
+                if _has_phrase(text, phrase):
+                    _add_country(canonical)
+                    break
+
+        # 2) Administrative region → country mapping (full names only).
+        for phrase, canonical in sorted(REGION_TO_COUNTRY.items(), key=lambda item: len(item[0]), reverse=True):
+            if len(phrase) <= 3:
                 continue
-            if country in text:
-                checked_countries.add(country)
-                # Check if coordinates are within this country's bounding box
-                if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
-                    return True
-                # Special case: USA also matches "united states" or "america"
-                if country == "usa":
-                    for alt in ["united states", "america"]:
-                        if alt in text:
-                            if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
-                                return True
-                # Country found but coordinates outside it — reject
-                return False
-    
-    # No country found in any text — check if city_name matches a known city
-    # that is definitely in a specific country
-    city_country = {
-        "shanghai": "china", "beijing": "china", "shenzhen": "china",
-        "guangzhou": "china", "hong kong": "china", "taipei": "china",
-        "paris": "france", "lyon": "france", "marseille": "france",
-        "london": "united kingdom", "manchester": "united kingdom",
-        "edinburgh": "united kingdom",
-        "new york": "usa", "los angeles": "usa", "chicago": "usa",
-        "san francisco": "usa", "washington": "usa",
-        "toronto": "canada", "vancouver": "canada",
-        "tokyo": "japan", "osaka": "japan", "seoul": "south korea",
-        "sydney": "australia", "melbourne": "australia",
-        "berlin": "germany", "munich": "germany", "rome": "italy",
-        "milan": "italy", "madrid": "spain", "barcelona": "spain",
-    }
-    for city, country in city_country.items():
-        if city in city_lower:
+            for text in normalized_texts:
+                if _has_phrase(text, phrase):
+                    _add_country(canonical)
+                    break
+
+        # 2b) Region abbreviations only match standalone uppercase tokens from raw text.
+        upper_tokens: set[str] = set()
+        for text in raw_texts:
+            upper_tokens.update(token.lower() for token in re.findall(r"\b[A-Z]{2,3}\b", text))
+        for token in upper_tokens:
+            canonical = REGION_TO_COUNTRY.get(token)
+            if canonical:
+                _add_country(canonical)
+
+        # 3) Known city → country fallback.
+        for phrase, canonical in sorted(CITY_TO_COUNTRY.items(), key=lambda item: len(item[0]), reverse=True):
+            for text in normalized_texts:
+                if _has_phrase(text, phrase):
+                    _add_country(canonical)
+                    break
+
+        return countries
+
+    def _canonicalize_region(region_phrase: str) -> str:
+        region = region_phrase.strip().lower()
+        if region in REGION_ABBREV_TO_NAME:
+            return REGION_ABBREV_TO_NAME[region]
+        if region.endswith(" state"):
+            return region[:-6].strip()
+        return region
+
+    def _extract_regions(*texts: str | None) -> set[str]:
+        raw_texts = [text for text in texts if text]
+        normalized_texts = [_normalize_geo_text(text) for text in raw_texts]
+        regions: set[str] = set()
+
+        for phrase in sorted(REGION_TO_COUNTRY.keys(), key=len, reverse=True):
+            if len(phrase) <= 3:
+                continue
+            for text in normalized_texts:
+                if _has_phrase(text, phrase):
+                    regions.add(_canonicalize_region(phrase))
+                    break
+
+        upper_tokens: set[str] = set()
+        for text in raw_texts:
+            upper_tokens.update(token.lower() for token in re.findall(r"\b[A-Z]{2,4}\b", text))
+        for token in upper_tokens:
+            canonical = REGION_ABBREV_TO_NAME.get(token)
+            if canonical:
+                regions.add(canonical)
+
+        return regions
+
+    if city_name and result_address:
+        source_countries = set(_extract_expected_countries(city_name))
+        result_countries = set(_extract_expected_countries(result_address))
+        if source_countries and result_countries and source_countries.isdisjoint(result_countries):
+            return False
+
+        source_regions = _extract_regions(city_name)
+        result_regions = _extract_regions(result_address)
+        if source_regions and result_regions and source_regions.isdisjoint(result_regions):
+            return False
+
+    expected_countries = _extract_expected_countries(city_name)
+    if not expected_countries and result_address:
+        expected_countries = _extract_expected_countries(result_address)
+    if expected_countries:
+        for country in expected_countries:
             min_lat, max_lat, min_lng, max_lng = COUNTRY_BOUNDS[country]
             if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
                 return True
-            return False
+        return False
 
     return True  # Unknown location, don't filter
 
 
-async def _geocode_geoapify(location_name: str,
-                             city_name: str | None = None) -> dict | None:
+async def _geocode_geoapify(location_name: str, city_name: str | None = None) -> dict | None:
     """Geocode via Geoapify (free: 3,000 req/day)."""
     if not GEOAPIFY_KEY:
         return None
-    
+
     query = location_name
-    params = {
+    params: dict[str, str | int] = {
         "text": query,
         "apiKey": GEOAPIFY_KEY,
         "limit": 1,
         "lang": "en",
-        "filter": "countrycode:us,ca,fr,gb,de,it,es,jp,kr,cn,au,nz",  # Common travel countries
     }
-    
+
+    # Important:
+    # - For fuzzy POI lookups, `type=amenity` helps precision.
+    # - For exact street addresses, `type=amenity` is too restrictive and can
+    #   filter out valid building/address results entirely.
+    # - For region/country/city level names, `type=amenity` is also too
+    #   restrictive (a country is not an amenity). Skip it for short queries
+    #   that look like geographic names rather than POI names.
+    if not _is_precise_address_query(query) and len(query.split()) <= 3:
+        # Short queries (1-3 words) are likely city/country/region names,
+        # not specific POIs — don't restrict to amenity type.
+        pass
+    elif not _is_precise_address_query(query):
+        params["type"] = "amenity"
+
+    # Dynamic filter: if city_name is known, restrict to that country; otherwise no filter
+    city_lower = (city_name or "").lower()
+    if city_lower in CITY_COUNTRY_MAP:
+        params["filter"] = f"countrycode:{CITY_COUNTRY_MAP[city_lower]}"
+
     try:
         await asyncio.sleep(0.1)  # Be polite
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(GEOAPIFY_URL, params=params)
             response.raise_for_status()
             data = response.json()
-        
+
         features = data.get("features", [])
         if not features:
             return None
-        
+
         feat = features[0]
         props = feat.get("properties", {})
         coords = feat.get("geometry", {}).get("coordinates", [0, 0])
-        
+
         result_type = props.get("result_type", "")
+        formatted = props.get("formatted", location_name)
+        is_precise_match = _is_precise_address_query(query) and _address_tokens_match(query, formatted)
         is_poi = result_type in ("amenity", "building", "shop", "leisure", "tourism",
                                   "historic", "museum", "attraction")
-        
+
         return {
             "name": location_name,
             "latitude": coords[1],
             "longitude": coords[0],
-            "full_address": props.get("formatted", location_name),
-            "is_exact": is_poi,
-            "confidence": 0.8 if is_poi else 0.5,
+            "full_address": formatted,
+            "is_exact": is_poi or is_precise_match,
+            "confidence": 0.84 if is_precise_match else (0.8 if is_poi else 0.5),
             "source": "geoapify",
         }
     except Exception as e:
@@ -366,14 +671,7 @@ async def _geocode_locationiq(location_name: str,
     global _locationiq_last_call
     if not LOCATIONIQ_KEY:
         return None
-    
-    # Rate limit: LocationIQ free tier ~1.7 req/s (600ms between calls)
-    now = time.time()
-    since_last = now - _locationiq_last_call
-    if since_last < 0.6:
-        await asyncio.sleep(0.6 - since_last)
-    _locationiq_last_call = time.time()
-    
+
     query = location_name
     params = {
         "key": LOCATIONIQ_KEY,
@@ -381,29 +679,40 @@ async def _geocode_locationiq(location_name: str,
         "format": "json",
         "limit": 1,
     }
-    
+
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(LOCATIONIQ_URL, params=params)
-            response.raise_for_status()
-            data = response.json()
-        
+        async with _locationiq_lock:
+            # Rate limit: LocationIQ free tier ~1.7 req/s (600ms between calls)
+            now = time.time()
+            since_last = now - _locationiq_last_call
+            if since_last < 0.6:
+                await asyncio.sleep(0.6 - since_last)
+            _locationiq_last_call = time.time()
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(LOCATIONIQ_URL, params=params)
+
+        response.raise_for_status()
+        data = response.json()
+
         if not data:
             return None
-        
+
         result = data[0]
         osm_type = result.get("osm_type", "")
         category = result.get("category", "")
-        
+
+        display_name = result.get("display_name", location_name)
+        is_precise_match = _is_precise_address_query(query) and _address_tokens_match(query, display_name)
         is_poi = osm_type in ("node", "way") and category not in ("place", "boundary")
-        
+
         return {
             "name": location_name,
             "latitude": float(result["lat"]),
             "longitude": float(result["lon"]),
-            "full_address": result.get("display_name", location_name),
-            "is_exact": is_poi,
-            "confidence": 0.8 if is_poi else 0.5,
+            "full_address": display_name,
+            "is_exact": is_poi or is_precise_match,
+            "confidence": 0.82 if is_precise_match else (0.8 if is_poi else 0.5),
             "source": "locationiq",
         }
     except Exception as e:
@@ -414,6 +723,8 @@ async def _geocode_locationiq(location_name: str,
 async def _geocode_nominatim(location_name: str,
                               city_name: str | None = None) -> dict | None:
     """Geocode via Nominatim (OSM, best POI coverage, but rate-limited to ~1 req/s)."""
+    global _nominatim_last_call
+
     query = location_name
     params = {
         "q": query,
@@ -426,11 +737,19 @@ async def _geocode_nominatim(location_name: str,
     }
 
     try:
-        await asyncio.sleep(1.0)  # Respect rate limit: 1 req/s
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(NOMINATIM_URL, params=params, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        async with _nominatim_lock:
+            # Rate limit: 1 req/s
+            now = time.time()
+            since_last = now - _nominatim_last_call
+            if since_last < 1.0:
+                await asyncio.sleep(1.0 - since_last)
+            _nominatim_last_call = time.time()
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(NOMINATIM_URL, params=params, headers=headers)
+
+        response.raise_for_status()
+        data = response.json()
 
         if not data:
             return None
@@ -438,17 +757,17 @@ async def _geocode_nominatim(location_name: str,
         result = data[0]
         osm_type = result.get("osm_type", "")
         category = result.get("category", "")
-        result_type = result.get("type", "")
-
+        display_name = result.get("display_name", location_name)
+        is_precise_match = _is_precise_address_query(query) and _address_tokens_match(query, display_name)
         is_poi = osm_type in ("node", "way") and category not in ("place", "boundary")
 
         return {
             "name": location_name,
             "latitude": float(result["lat"]),
             "longitude": float(result["lon"]),
-            "full_address": result.get("display_name", location_name),
-            "is_exact": is_poi,
-            "confidence": 0.7 if is_poi else 0.4,
+            "full_address": display_name,
+            "is_exact": is_poi or is_precise_match,
+            "confidence": 0.78 if is_precise_match else (0.7 if is_poi else 0.4),
             "source": "nominatim",
         }
     except Exception as e:
@@ -461,13 +780,6 @@ async def _geocode_photon(location_name: str,
     """Geocode via Photon (OSM-based, complementary POI coverage, free)."""
     global _photon_last_call
 
-    # Rate limit: 1.2s between calls to avoid getting blocked
-    now = time.time()
-    since_last = now - _photon_last_call
-    if since_last < 1.2:
-        await asyncio.sleep(1.2 - since_last)
-    _photon_last_call = time.time()
-
     query = location_name
     params = {
         "q": query,
@@ -476,10 +788,26 @@ async def _geocode_photon(location_name: str,
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(PHOTON_URL, params=params)
-            response.raise_for_status()
-            data = response.json()
+        async with _photon_lock:
+            # Rate limit: 1.2s between calls to avoid getting blocked
+            now = time.time()
+            since_last = now - _photon_last_call
+            if since_last < 1.2:
+                await asyncio.sleep(1.2 - since_last)
+            _photon_last_call = time.time()
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    PHOTON_URL,
+                    params=params,
+                    headers={
+                        "User-Agent": "AtlasTravelApp/1.0 (geocoder@atlas.app)",
+                        "Accept": "application/json",
+                    },
+                )
+
+        response.raise_for_status()
+        data = response.json()
 
         features = data.get("features", [])
         if not features:
@@ -491,15 +819,17 @@ async def _geocode_photon(location_name: str,
 
         osm_type = props.get("osm_type", "")
         osm_key = props.get("osm_key", "")
+        full_address = props.get("name", location_name)
+        is_precise_match = _is_precise_address_query(query) and _address_tokens_match(query, full_address)
         is_poi = osm_type in ("N", "W") and osm_key not in ("place", "boundary")
 
         return {
             "name": location_name,
             "latitude": coords[1],
             "longitude": coords[0],
-            "full_address": props.get("name", location_name),
-            "is_exact": is_poi,
-            "confidence": 0.6 if is_poi else 0.3,
+            "full_address": full_address,
+            "is_exact": is_poi or is_precise_match,
+            "confidence": 0.72 if is_precise_match else (0.6 if is_poi else 0.3),
             "source": "photon",
         }
     except Exception as e:
@@ -510,67 +840,90 @@ async def _geocode_photon(location_name: str,
 async def _geocode_google(location_name: str,
                            city_name: str | None = None) -> dict | None:
     """Geocode via Google Maps Geocoding API.
-    
+
     Free tier: $200 monthly credit (~40,000 requests/month).
     Best POI coverage globally, especially for non-English locations.
     """
     if not GOOGLE_MAPS_KEY:
-        print(f"[GoogleMaps] Skipped: no API key configured")
+        print(f"[GoogleMaps] SKIPPED: No GOOGLE_MAPS_API_KEY configured")
         return None
-    
+
     query = location_name
     if city_name and city_name.lower() not in location_name.lower():
         query = f"{location_name}, {city_name}"
-    
+
+    print(f"[GoogleMaps] Calling for '{query}' (city_name={city_name})")
+
     params = {
         "address": query,
         "key": GOOGLE_MAPS_KEY,
         "language": "en",
     }
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(GOOGLE_MAPS_URL, params=params)
-            response.raise_for_status()
-            data = response.json()
-        
-        status = data.get("status")
-        if status != "OK":
-            error_msg = data.get("error_message", "no error message")
-            print(f"[GoogleMaps] Status: {status} for '{query}' — {error_msg}")
+
+    # Retry logic: up to 2 attempts on transient failures
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(GOOGLE_MAPS_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+            status = data.get("status")
+            if status != "OK":
+                error_msg = data.get("error_message", "no error message")
+                print(f"[GoogleMaps] Status: {status} for '{query}' — {error_msg}")
+                # OVER_QUERY_LIMIT / REQUEST_DENIED are not retryable
+                if status in ("OVER_QUERY_LIMIT", "REQUEST_DENIED", "INVALID_REQUEST"):
+                    return None
+                # Other errors (e.g. ZERO_RESULTS) — just return None
+                return None
+
+            if not data.get("results"):
+                print(f"[GoogleMaps] No results for '{query}'")
+                return None
+
+            result = data["results"][0]
+            location = result.get("geometry", {}).get("location", {})
+            types = result.get("types", [])
+
+            # POI-level types
+            poi_types = {"point_of_interest", "establishment", "premise",
+                          "subpremise", "park", "museum", "art_gallery",
+                          "tourist_attraction", "shopping_mall", "night_club",
+                          "restaurant", "bar", "cafe", "food", "church",
+                          "stadium", "parking", "transit_station", "train_station"}
+            is_poi = any(t in poi_types for t in types)
+
+            full_address = result.get("formatted_address", query)
+            is_precise_match = _is_precise_address_query(query) and _address_tokens_match(query, full_address)
+
+            lat = location["lat"]
+            lng = location["lng"]
+            result_type = types[0] if types else "unknown"
+            print(f"[GoogleMaps] OK: '{query}' → ({lat:.4f}, {lng:.4f}) [{result_type}]")
+
+            return {
+                "name": location_name,
+                "latitude": lat,
+                "longitude": lng,
+                "full_address": full_address,
+                "is_exact": is_poi or is_precise_match,
+                "confidence": 0.88 if is_precise_match else (0.85 if is_poi else 0.5),
+                "source": "google",
+            }
+        except httpx.TimeoutException:
+            print(f"[GoogleMaps] Timeout (attempt {attempt}/{max_retries}) for '{query}'")
+            if attempt < max_retries:
+                await asyncio.sleep(1.0 * attempt)  # Exponential backoff
+                continue
+            print(f"[GoogleMaps] All retries exhausted for '{query}'")
             return None
-        
-        if not data.get("results"):
-            print(f"[GoogleMaps] No results for '{query}'")
+        except Exception as e:
+            print(f"[GoogleMaps] Failed for '{query}': {e}")
             return None
-        
-        result = data["results"][0]
-        location = result.get("geometry", {}).get("location", {})
-        types = result.get("types", [])
-        
-        # POI-level types
-        poi_types = {"point_of_interest", "establishment", "premise",
-                      "subpremise", "park", "museum", "art_gallery",
-                      "tourist_attraction", "shopping_mall", "night_club",
-                      "restaurant", "bar", "cafe", "food", "church",
-                      "stadium", "parking", "transit_station", "train_station"}
-        is_poi = any(t in poi_types for t in types)
-        
-        # Parse address components
-        full_address = result.get("formatted_address", query)
-        
-        return {
-            "name": location_name,
-            "latitude": location["lat"],
-            "longitude": location["lng"],
-            "full_address": full_address,
-            "is_exact": is_poi,
-            "confidence": 0.85 if is_poi else 0.5,
-            "source": "google",
-        }
-    except Exception as e:
-        print(f"[GoogleMaps] Failed for '{query}': {e}")
-        return None
+
+    return None
 
 
 async def geocode(
@@ -581,14 +934,14 @@ async def geocode(
 ) -> dict | None:
     """
     Multi-layer geocoding with configurable fallback chain (5 layers).
-    
+
     Priority:
     1. Geoapify (free 3k req/day, fastest, best POI coverage)
     2. LocationIQ (free 5k req/day, fast)
     3. Nominatim (OSM, best POI coverage, but rate-limited ~1 req/s)
     4. Photon (OSM-based, complementary coverage, free)
     5. Google Maps (best for non-English/Asian locations, $200/mo free credit)
-    
+
     Returns None only if ALL geocoders fail.
     Never returns fake/default coordinates.
     """
@@ -597,77 +950,196 @@ async def geocode(
     if cached:
         return cached
 
+    precise_address_query = _is_precise_address_query(location_name)
+
+    def _accept_result(result: dict | None, source_name: str) -> dict | None:
+        if not result:
+            return None
+        coords_ok = _check_coords_in_country(
+            result["latitude"],
+            result["longitude"],
+            city_name,
+            result.get("full_address"),
+        )
+        if not coords_ok:
+            print(f"[Geocoder] {source_name} coord mismatch: '{location_name}' → ({result['latitude']:.4f}, {result['longitude']:.4f}) outside {city_name}")
+            return None
+
+        if result.get("is_exact"):
+            print(f"[Geocoder] {source_name} OK: '{location_name}' → ({result['latitude']:.4f}, {result['longitude']:.4f}) [EXACT]")
+            geo_cache.set(cache_key, result, ttl=86400)
+            return result
+
+        if precise_address_query and _address_tokens_match(location_name, result.get("full_address")):
+            print(f"[Geocoder] {source_name} OK: '{location_name}' → ({result['latitude']:.4f}, {result['longitude']:.4f}) [ADDRESS MATCH]")
+            result["is_exact"] = True
+            result["confidence"] = max(result.get("confidence", 0.5), 0.72)
+            geo_cache.set(cache_key, result, ttl=86400)
+            return result
+
+        # Accept non-exact results with reasonable confidence (covers non-English queries
+        # where free APIs return valid but non-exact results).
+        confidence = result.get("confidence", 0)
+        if confidence >= 0.5:
+            print(f"[Geocoder] {source_name} FUZZY: '{location_name}' → ({result['latitude']:.4f}, {result['longitude']:.4f}) (confidence={confidence})")
+            geo_cache.set(cache_key, result, ttl=3600)
+            return result
+
+        return None
+
     # Layer 1: Geoapify (fastest, best POI coverage)
     geoapify_result = await _geocode_geoapify(location_name, city_name=city_name)
-    if geoapify_result and geoapify_result.get("is_exact"):
-        if _check_coords_in_country(geoapify_result["latitude"], geoapify_result["longitude"], city_name):
-            print(f"[Geocoder] Geoapify OK: '{location_name}' → ({geoapify_result['latitude']:.4f}, {geoapify_result['longitude']:.4f}) [EXACT]")
-            geo_cache.set(cache_key, geoapify_result, ttl=86400)
-            return geoapify_result
-        else:
-            print(f"[Geocoder] Geoapify coord mismatch: '{location_name}' → ({geoapify_result['latitude']:.4f}, {geoapify_result['longitude']:.4f}) outside {city_name}")
+    accepted = _accept_result(geoapify_result, "Geoapify")
+    if accepted:
+        return accepted
 
     # Layer 2: LocationIQ (fast, free 5k req/day)
     liq_result = await _geocode_locationiq(location_name, city_name=city_name)
-    if liq_result and liq_result.get("is_exact"):
-        if _check_coords_in_country(liq_result["latitude"], liq_result["longitude"], city_name):
-            print(f"[Geocoder] LocationIQ OK: '{location_name}' → ({liq_result['latitude']:.4f}, {liq_result['longitude']:.4f}) [EXACT]")
-            geo_cache.set(cache_key, liq_result, ttl=86400)
-            return liq_result
-        else:
-            print(f"[Geocoder] LocationIQ coord mismatch: '{location_name}' → ({liq_result['latitude']:.4f}, {liq_result['longitude']:.4f}) outside {city_name}")
+    accepted = _accept_result(liq_result, "LocationIQ")
+    if accepted:
+        return accepted
 
     # Layer 3: Nominatim (slow, best POI coverage from OSM)
     nominatim_result = await _geocode_nominatim(location_name, city_name=city_name)
-    if nominatim_result and nominatim_result.get("is_exact"):
-        if _check_coords_in_country(nominatim_result["latitude"], nominatim_result["longitude"], city_name):
-            print(f"[Geocoder] Nominatim OK: '{location_name}' → ({nominatim_result['latitude']:.4f}, {nominatim_result['longitude']:.4f}) [EXACT]")
-            geo_cache.set(cache_key, nominatim_result, ttl=86400)
-            return nominatim_result
-        else:
-            print(f"[Geocoder] Nominatim coord mismatch: '{location_name}' → ({nominatim_result['latitude']:.4f}, {nominatim_result['longitude']:.4f}) outside {city_name}")
+    accepted = _accept_result(nominatim_result, "Nominatim")
+    if accepted:
+        return accepted
 
     # Layer 4: Photon (OSM-based, complementary coverage, free)
     photon_result = await _geocode_photon(location_name, city_name=city_name)
-    if photon_result and photon_result.get("is_exact"):
-        if _check_coords_in_country(photon_result["latitude"], photon_result["longitude"], city_name):
-            print(f"[Geocoder] Photon OK: '{location_name}' → ({photon_result['latitude']:.4f}, {photon_result['longitude']:.4f}) [EXACT]")
-            geo_cache.set(cache_key, photon_result, ttl=86400)
-            return photon_result
-        else:
-            print(f"[Geocoder] Photon coord mismatch: '{location_name}' → ({photon_result['latitude']:.4f}, {photon_result['longitude']:.4f}) outside {city_name}")
+    accepted = _accept_result(photon_result, "Photon")
+    if accepted:
+        return accepted
 
     # Layer 5: Google Maps (best for non-English/Asian locations, $200/mo free credit)
     google_result = await _geocode_google(location_name, city_name=city_name)
-    if google_result and google_result.get("is_exact"):
-        if _check_coords_in_country(google_result["latitude"], google_result["longitude"], city_name):
-            print(f"[Geocoder] Google OK: '{location_name}' → ({google_result['latitude']:.4f}, {google_result['longitude']:.4f}) [EXACT]")
-            geo_cache.set(cache_key, google_result, ttl=86400)
-            return google_result
-        else:
-            print(f"[Geocoder] Google coord mismatch: '{location_name}' → ({google_result['latitude']:.4f}, {google_result['longitude']:.4f}) outside {city_name}")
+    accepted = _accept_result(google_result, "Google")
+    if accepted:
+        return accepted
 
     # All geocoders failed — do NOT return any fallback
     return None
 
 
+def _is_precise_address_query(query: str) -> bool:
+    query = (query or "").strip()
+    if not query:
+        return False
+    has_number = any(ch.isdigit() for ch in query)
+    has_separator = "," in query
+    street_tokens = (" st", " street", " rd", " road", " ave", " avenue", " blvd",
+                     " boulevard", " dr", " drive", " ln", " lane", " way", " hwy")
+    lowered = f" {query.lower()} "
+    has_street = any(token in lowered for token in street_tokens)
+    return has_number and (has_separator or has_street)
+
+
+def _address_tokens_match(query: str, result_address: str | None) -> bool:
+    if not result_address:
+        return False
+    def _normalize_address_text(value: str) -> str:
+        lowered = f" {value.lower()} "
+        replacements = {
+            " plz ": " plaza ",
+            " ave ": " avenue ",
+            " av ": " avenue ",
+            " blvd ": " boulevard ",
+            " rd ": " road ",
+            " dr ": " drive ",
+            " ln ": " lane ",
+            " hwy ": " highway ",
+            " st ": " street ",
+            " ctr ": " center ",
+            " ct ": " court ",
+            " pkwy ": " parkway ",
+            " united states of america ": " united states ",
+            " usa ": " united states ",
+            " us ": " united states ",
+        }
+        for source, target in replacements.items():
+            lowered = lowered.replace(source, target)
+        return " ".join(lowered.split())
+
+    query_lower = _normalize_address_text(query)
+    result_lower = _normalize_address_text(result_address)
+
+    query_number = next(("".join(ch for ch in part if ch.isdigit()) for part in query.split() if any(ch.isdigit() for ch in part)), "")
+    if query_number and query_number not in result_lower:
+        return False
+
+    street_markers = ["street", "road", "avenue", "boulevard", "drive", "lane", "way", "highway", "plaza", "court", "parkway", "center"]
+    query_parts = [part.strip(",").lower() for part in query_lower.split()]
+    core_tokens = [
+        part for part in query_parts
+        if len(part) >= 4 and not any(ch.isdigit() for ch in part) and part not in street_markers
+    ]
+    if not core_tokens:
+        return True
+
+    overlap = sum(1 for token in core_tokens[:4] if token in result_lower)
+    return overlap >= max(1, min(2, len(core_tokens[:4])))
+
+
+async def geocode_address_first(
+    primary_query: str,
+    fallback_query: str | None = None,
+    proximity: Optional[tuple[float, float]] = None,
+    city_name: Optional[str] = None,
+    city_center: Optional[tuple[float, float]] = None,
+) -> dict | None:
+    primary_result = await geocode(
+        primary_query,
+        proximity=proximity,
+        city_name=city_name,
+        city_center=city_center,
+    )
+    if primary_result:
+        if not _is_precise_address_query(primary_query):
+            return primary_result
+        if _address_tokens_match(primary_query, primary_result.get("full_address")):
+            return primary_result
+        print(f"[Geocoder] Rejecting weak address match: '{primary_query}' → '{primary_result.get('full_address', '')}'")
+
+    if fallback_query and fallback_query.strip() and fallback_query.strip() != primary_query.strip():
+        return await geocode(
+            fallback_query,
+            proximity=proximity,
+            city_name=city_name,
+            city_center=city_center,
+        )
+    return primary_result
+
+
 async def batch_geocode(
-    location_names: list[str],
+    location_names: list[str | dict],
     proximity: Optional[tuple[float, float]] = None,
     city_name: Optional[str] = None,
     city_center: Optional[tuple[float, float]] = None,
 ) -> list[dict | None]:
 
-    async def _geocode_one(name: str) -> dict | None:
-        try:
-            return await geocode(
-                name, proximity=proximity,
-                city_name=city_name, city_center=city_center,
-            )
-        except Exception:
-            return None
+    sem = asyncio.Semaphore(5)
 
-    tasks = [_geocode_one(name) for name in location_names]
+    async def _geocode_one_sem(item: str | dict) -> dict | None:
+        async with sem:
+            try:
+                if isinstance(item, dict):
+                    primary_query = item.get("query") or item.get("name") or ""
+                    fallback_query = item.get("fallback_query")
+                    return await geocode_address_first(
+                        primary_query,
+                        fallback_query=fallback_query,
+                        proximity=proximity,
+                        city_name=city_name,
+                        city_center=city_center,
+                    )
+                return await geocode(
+                    item, proximity=proximity,
+                    city_name=city_name, city_center=city_center,
+                )
+            except Exception:
+                return None
+
+    tasks = [_geocode_one_sem(name) for name in location_names]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     return [r if isinstance(r, dict) else None for r in results]

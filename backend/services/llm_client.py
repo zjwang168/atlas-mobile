@@ -8,14 +8,66 @@ Uses the DeepSeek Chat API (compatible with OpenAI SDK format).
 """
 
 import json
+import logging
 import os
 import time
 from typing import Optional
 
 import httpx
 
+logger = logging.getLogger("atlas.llm")
+
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
+HUNYUAN_API_URL = "https://api.hunyuan.cloud.tencent.com/v1/chat/completions"
+# TokenHub is the OpenAI-compatible gateway for Tencent Hunyuan models.
+# Official docs route chat/completions through tokenhub.tencentmaas.com.
+HUNYUAN_TOKENHUB_API_URL = "https://tokenhub.tencentmaas.com/v1/chat/completions"
+HUNYUAN_DEFAULT_MODEL = os.environ.get("HUNYUAN_MODEL", "hy3-preview")
+HUNYUAN_REASONING_EFFORT = os.environ.get("HUNYUAN_REASONING_EFFORT", "low").strip() or "low"
+HUNYUAN_WEB_PROMPT = """You are using Tencent Hunyuan in live-web mode.
+
+Rules:
+1. Prefer up-to-date, web-backed information over static model memory.
+2. If the task involves facts about current events, people, places, venues,
+   events, weddings, openings, closures, or other changeable real-world facts,
+   use live web search / enhancement to verify the answer.
+3. Do not answer from memory when live verification is available.
+4. If you cannot verify something from the web, say so clearly instead of guessing.
+"""
+QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+QWEN_RESPONSES_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
+QWEN_DEFAULT_MODEL = os.environ.get("QWEN_MODEL", "qwen3.5-flash")
+QWEN_WEB_PROMPT = """You are using Qwen in live-web mode.
+
+Rules:
+1. Prefer up-to-date, web-backed information over static model memory.
+2. If the task involves facts about current events, people, places, venues,
+   events, weddings, openings, closures, or other changeable real-world facts,
+   use live web search to verify the answer.
+3. Do not answer from memory when live verification is available.
+4. If you cannot verify something from the web, say so clearly instead of guessing.
+5. Prefer the newest and most recent sources. If multiple sources disagree,
+   trust the most recent sources over older ones.
+6. When the task depends on a real-world factual claim, consult multiple
+   distinct sources rather than relying on a single result.
+"""
+
+# Module-level variable to expose the most recent LLM call's token usage.
+# Useful when the LLM call is wrapped inside another function (e.g. ExtractionPipeline)
+# and the caller cannot access the return value directly.
+_last_llm_usage: dict = {"input_tokens": 0, "output_tokens": 0, "duration_s": 0.0}
+
+_LOG_TRUNCATE_CHARS = 4000
+
+
+def get_last_llm_usage() -> dict:
+    """Return the token usage of the most recent call_llm() invocation.
+
+    Returns:
+        dict with keys: input_tokens, output_tokens, duration_s
+    """
+    return dict(_last_llm_usage)
 
 # Retrieve API key from environment (not hardcoded in source)
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -46,6 +98,7 @@ def _build_tools_prompt(tools: list[dict]) -> str:
     Returns:
         Formatted string describing available tools and their usage.
     """
+    
     parts = ["\n\nYou have access to the following tools:"]
     for t in tools:
         parts.append(f"\n### {t['name']}")
@@ -56,6 +109,31 @@ def _build_tools_prompt(tools: list[dict]) -> str:
     parts.append('When you have the final answer, respond with:')
     parts.append('{"type": "final_answer", "content": "..."}')
     return "\n".join(parts)
+
+
+def _truncate_for_log(value: str, limit: int = _LOG_TRUNCATE_CHARS) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + f"... <truncated {len(value) - limit} chars>"
+
+
+def _serialize_messages_for_log(messages: list[dict]) -> str:
+    sanitized = []
+    for msg in messages:
+        sanitized.append(
+            {
+                "role": msg.get("role"),
+                "content": _truncate_for_log(str(msg.get("content", ""))),
+            }
+        )
+    return json.dumps(sanitized, ensure_ascii=False)
+
+
+def _serialize_extra_body_for_log(extra_body: Optional[dict]) -> str:
+    if not extra_body:
+        return "{}"
+    safe = dict(extra_body)
+    return json.dumps(safe, ensure_ascii=False)
 
 
 def parse_llm_response(response_text: str) -> dict:
@@ -153,6 +231,8 @@ def call_llm(
     api_key: Optional[str] = None,
     model: str = DEFAULT_MODEL,
     max_retries: int = 2,
+    provider: str = "deepseek",
+    extra_body: Optional[dict] = None,
 ) -> dict:
     """Core LLM call with optional tool definitions and retry logic.
 
@@ -175,12 +255,25 @@ def call_llm(
         ValueError: if API key is missing or all retries fail.
         httpx.HTTPError: if the API call fails after all retries.
     """
-    key = api_key or API_KEY
+    provider = provider.lower().strip()
+    if provider == "hunyuan":
+        key = api_key or os.environ.get("HUNYUAN_API_KEY", "")
+        api_url = os.environ.get("HUNYUAN_API_URL", HUNYUAN_TOKENHUB_API_URL).strip() or HUNYUAN_TOKENHUB_API_URL
+        model = model or HUNYUAN_DEFAULT_MODEL
+        missing_key_msg = "Tencent Hunyuan API key is missing. Set HUNYUAN_API_KEY environment variable."
+    elif provider == "qwen":
+        key = api_key or os.environ.get("QWEN_API_KEY", "")
+        api_url = os.environ.get("QWEN_API_URL", QWEN_RESPONSES_API_URL).strip() or QWEN_RESPONSES_API_URL
+        model = model or QWEN_DEFAULT_MODEL
+        missing_key_msg = "Qwen API key is missing. Set QWEN_API_KEY environment variable."
+    else:
+        key = api_key or API_KEY
+        api_url = DEEPSEEK_API_URL
+        model = model or DEFAULT_MODEL
+        missing_key_msg = "DeepSeek API key is missing. Set DEEPSEEK_API_KEY environment variable."
+
     if not key:
-        raise ValueError(
-            "DeepSeek API key is missing. "
-            "Set DEEPSEEK_API_KEY environment variable."
-        )
+        raise ValueError(missing_key_msg)
 
     # Build messages with optional tool definitions appended to system prompt
     if tools:
@@ -197,12 +290,54 @@ def call_llm(
     else:
         enriched_messages = messages
 
-    payload = {
-        "model": model,
-        "messages": enriched_messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
+    # Web-search providers should behave like live-web calls, not memory-only calls.
+    if provider in {"hunyuan", "qwen"}:
+        web_prompt = HUNYUAN_WEB_PROMPT if provider == "hunyuan" else QWEN_WEB_PROMPT
+        system_prompt_added = False
+        for idx, msg in enumerate(enriched_messages):
+            if msg["role"] == "system":
+                enriched_messages[idx] = {
+                    "role": "system",
+                    "content": msg["content"] + "\n\n" + web_prompt,
+                }
+                system_prompt_added = True
+                break
+        if not system_prompt_added:
+            enriched_messages = [{"role": "system", "content": web_prompt}] + enriched_messages
+
+    if provider == "qwen":
+        payload = {
+            "model": model,
+            "input": enriched_messages,
+            "tools": [{"type": "web_search"}],
+            "temperature": temperature,
+            "reasoning": {"effort": HUNYUAN_REASONING_EFFORT},
+        }
+        if extra_body:
+            payload.update(extra_body)
+    else:
+        payload = {
+            "model": model,
+            "messages": enriched_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if extra_body:
+            payload.update(extra_body)
+        if provider == "hunyuan" and "enable_enhancement" not in payload:
+            payload["enable_enhancement"] = True
+        if provider == "hunyuan" and "reasoning_effort" not in payload:
+            payload["reasoning_effort"] = HUNYUAN_REASONING_EFFORT
+
+    logger.info(
+        "LLM call input | provider=%s | model=%s | temperature=%.2f | max_tokens=%s | messages=%s | extra_body=%s",
+        provider,
+        model,
+        temperature,
+        max_tokens,
+        _serialize_messages_for_log(enriched_messages),
+        _serialize_extra_body_for_log(extra_body),
+    )
 
     headers = {
         "Authorization": f"Bearer {key}",
@@ -210,36 +345,93 @@ def call_llm(
     }
 
     last_error = None
+    call_start = time.time()
 
     for attempt in range(1 + max_retries):
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(
-                    DEEPSEEK_API_URL, json=payload, headers=headers
+                    api_url, json=payload, headers=headers
                 )
                 response.raise_for_status()
                 data = response.json()
+            content = (
+                _extract_responses_output_text(data)
+                if provider == "qwen"
+                else data["choices"][0]["message"]["content"]
+            )
+            # ── Capture token usage from API response ──────────────
+            duration_s = time.time() - call_start
+            usage_raw = data.get("usage", {})
+            input_tokens = usage_raw.get("prompt_tokens", 0) if usage_raw else 0
+            output_tokens = usage_raw.get("completion_tokens", 0) if usage_raw else 0
 
-            try:
-                content = data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError) as exc:
+            usage_info = {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "duration_s": round(duration_s, 3),
+            }
+
+            # Update module-level tracker (for wrapped calls like extraction_pipeline)
+            global _last_llm_usage
+            _last_llm_usage = dict(usage_info)
+
+            logger.info(
+                "LLM call succeeded | model=%s | in=%s | out=%s | dur=%.2fs",
+                model, input_tokens, output_tokens, duration_s,
+            )
+            logger.info(
+                "LLM call output | provider=%s | model=%s | content=%s",
+                provider,
+                model,
+                _truncate_for_log(str(content)),
+            )
+
+            # Parse and return the response with usage attached
+            parsed = parse_llm_response(content)
+            parsed["usage"] = usage_info
+            return parsed
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401 and provider in {"hunyuan", "qwen"}:
+                key_name = "HUNYUAN_API_KEY" if provider == "hunyuan" else "QWEN_API_KEY"
+                url_hint = HUNYUAN_TOKENHUB_API_URL if provider == "hunyuan" else QWEN_API_URL
                 raise ValueError(
-                    "Unexpected DeepSeek API response structure"
+                    f"{provider.capitalize()} authorization failed (401). "
+                    f"Please verify {key_name} and the API URL; web-search requests should use {url_hint}."
                 ) from exc
-
-            # Parse and return the response
-            return parse_llm_response(content)
-
+            last_error = exc
         except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
             last_error = exc
-            if attempt < max_retries:
-                time.sleep(1.0 * (attempt + 1))  # Exponential-ish backoff
-                continue
+            logger.warning(
+                "LLM call failed | provider=%s | model=%s | attempt=%s/%s | error=%s",
+                provider,
+                model,
+                attempt + 1,
+                max_retries + 1,
+                exc,
+            )
+        if attempt < max_retries:
+            time.sleep(1.0 * (attempt + 1))  # Exponential-ish backoff
+            continue
 
     raise ValueError(
         f"LLM call failed after {max_retries + 1} attempts. "
         f"Last error: {last_error}"
     )
+
+
+def _extract_responses_output_text(data: dict) -> str:
+    output = data.get("output", [])
+    parts: list[str] = []
+    for item in output:
+        if item.get("type") != "message":
+            continue
+        for content_part in item.get("content", []):
+            if content_part.get("type") == "output_text":
+                parts.append(content_part.get("text", ""))
+    if parts:
+        return "".join(parts)
+    return data.get("output_text", "") or data.get("text", "") or ""
 
 
 def extract_locations(

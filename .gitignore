@@ -52,6 +52,7 @@ docs/.obsidian
 # Python
 __pycache__/
 *.pyc
+backend/.cache/
 
 # media
 *.mp4

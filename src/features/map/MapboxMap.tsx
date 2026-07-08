@@ -17,6 +17,13 @@ export interface MapMarker {
   description?: string;
 }
 
+export type MapPadding = {
+  paddingTop: number;
+  paddingBottom: number;
+  paddingLeft: number;
+  paddingRight: number;
+};
+
 interface MapboxMapProps {
   markers: MapMarker[];
   centerCoordinate?: [number, number];
@@ -25,6 +32,9 @@ interface MapboxMapProps {
   onMarkerPress?: (marker: MapMarker) => void;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
   routeMarkers?: MapMarker[];
+  /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
+  padding?: MapPadding;
+  selectedMarkerId?: string | null;
 }
 
 const MapboxMap: React.FC<MapboxMapProps> = ({
@@ -35,6 +45,8 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
   onMarkerPress,
   routeGeoJSON,
   routeMarkers,
+  padding,
+  selectedMarkerId,
 }) => {
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
@@ -60,16 +72,28 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
 
   const prevCenterRef = useRef(centerCoordinate);
   const prevZoomRef = useRef(zoomLevel);
+  const prevPaddingRef = useRef(padding);
   useEffect(() => {
     const [lng, lat] = centerCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;
     const centerChanged = lng !== prevLng || lat !== prevLat;
     const zoomChanged = zoomLevel !== prevZoomRef.current;
-    if (!centerChanged && !zoomChanged) return;
+    const paddingChanged =
+      padding?.paddingBottom !== prevPaddingRef.current?.paddingBottom ||
+      padding?.paddingTop !== prevPaddingRef.current?.paddingTop ||
+      padding?.paddingLeft !== prevPaddingRef.current?.paddingLeft ||
+      padding?.paddingRight !== prevPaddingRef.current?.paddingRight;
+    if (!centerChanged && !zoomChanged && !paddingChanged) return;
     prevCenterRef.current = centerCoordinate;
     prevZoomRef.current = zoomLevel;
-    cameraRef.current?.setCamera({ centerCoordinate, zoomLevel, animationDuration: 500 });
-  }, [centerCoordinate, zoomLevel]);
+    prevPaddingRef.current = padding;
+    cameraRef.current?.setCamera({
+      centerCoordinate,
+      zoomLevel,
+      animationDuration: 500,
+      padding,
+    });
+  }, [centerCoordinate, zoomLevel, padding]);
 
   if (error) {
     return (
@@ -127,7 +151,10 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
             coordinate={[marker.longitude, marker.latitude]}
           >
             <View style={styles.markerContainer} onTouchEnd={() => onMarkerPress?.(marker)}>
-              <View style={styles.marker} />
+              <View style={[
+                styles.marker,
+                selectedMarkerId === marker.id && styles.markerSelected,
+              ]} />
             </View>
           </MapboxGL.MarkerView>
         ))}
@@ -161,6 +188,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+  },
+  markerSelected: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#12C170',
+    borderWidth: 4,
   },
   errorIcon: {
     fontSize: 48,

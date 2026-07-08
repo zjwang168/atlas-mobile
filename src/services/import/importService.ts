@@ -8,7 +8,13 @@
  * /parse_text — covers Xiaohongshu, WeChat, copied notes).
  */
 
-import { parseLink as apiParseLink, parseText as apiParseText } from '../api/apiService';
+import {
+  discoverAtlasPlaces as apiDiscoverAtlasPlaces,
+  parseLink as apiParseLink,
+  parseText as apiParseText,
+  scanUrl as apiScanUrl,
+  type ParseProgress,
+} from '../api/apiService';
 
 export type ParsedPlace = {
   id: string;
@@ -19,6 +25,7 @@ export type ParsedPlace = {
   longitude: number;
   /** Optional thumbnail for the place row. */
   imageUri?: string;
+  sentiment?: 'positive' | 'neutral' | 'negative' | null;
 };
 
 export type ParseResult = {
@@ -41,6 +48,7 @@ type BackendLocation = {
   full_address?: string;
   description?: string | null;
   category?: string | null;
+  sentiment?: 'positive' | 'neutral' | 'negative' | null;
 };
 
 /** Fields of the backend parse response that we consume. */
@@ -71,10 +79,11 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
   const places: ParsedPlace[] = (backend.locations ?? []).map((loc, index) => ({
     id: String(index + 1),
     name: loc.name,
-    subtitle: loc.description || loc.full_address || '',
+    subtitle: shouldShowAddress(loc) ? (loc.full_address || loc.description || '') : (loc.description || ''),
     type: loc.category || 'Place',
     latitude: loc.latitude,
     longitude: loc.longitude,
+    sentiment: loc.sentiment ?? null,
   }));
 
   return {
@@ -85,19 +94,49 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
   };
 }
 
+function normalizeLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
+}
+
+function looksLikeAddress(value: string): boolean {
+  return /\d/.test(value) && /\b(st|street|rd|road|ave|avenue|blvd|boulevard|dr|drive|ln|lane|way|pkwy|parkway|hwy|highway|ct|court|pl|place|sq|square)\b/i.test(value);
+}
+
+export function shouldShowAddress(loc: BackendLocation): boolean {
+  const name = normalizeLabel(loc.name || '');
+  const address = normalizeLabel(loc.full_address || '');
+  if (!address) return false;
+  if (!name) return true;
+  if (looksLikeAddress(loc.name || '')) return true;
+  return false;
+}
+
+export function formatParsedPlaceSubtitle(loc: BackendLocation): string {
+  return shouldShowAddress(loc) ? (loc.full_address || loc.description || '') : (loc.description || '');
+}
+
 /**
  * Parse a pasted URL into places by calling the backend parser.
  */
-export async function parseLink(input: string): Promise<ParseResult> {
-  const backend = (await apiParseLink(input.trim())) as unknown as BackendParseResponse;
+export type ParseProgressHandler = (progress: ParseProgress) => void;
+
+export async function parseLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseLink(input.trim(), onProgress)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 
 /**
  * Parse pasted plain text (travel notes, Xiaohongshu content, etc.).
  */
-export async function parseText(input: string): Promise<ParseResult> {
-  const backend = (await apiParseText(input.trim())) as unknown as BackendParseResponse;
+export async function parseText(
+  input: string,
+  options?: { webSearch?: boolean },
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseText(input.trim(), options?.webSearch ?? false, onProgress)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 
@@ -105,6 +144,25 @@ export async function parseText(input: string): Promise<ParseResult> {
  * Parse anything the user pastes: URLs are scraped server-side; everything
  * else is treated as raw text and parsed directly.
  */
-export async function parseInput(input: string): Promise<ParseResult> {
-  return looksLikeUrl(input) ? parseLink(input) : parseText(input);
+export async function parseInput(
+  input: string,
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  return looksLikeUrl(input) ? parseLink(input, onProgress) : parseText(input, undefined, onProgress);
+}
+
+export async function discoverFromAtlasQuery(
+  input: string,
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  const backend = (await apiDiscoverAtlasPlaces(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function scanAnyLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  const backend = (await apiScanUrl(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
 }
