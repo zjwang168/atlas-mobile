@@ -97,8 +97,8 @@ flowchart TB
         PT[parse_text]
         SI[scan_images]
         SU[scan_url]
-        AD[atlas_ai/discover]
-        CHAT[/chat]
+        AD[atlas_ai.discover]
+        CHAT[chat]
     end
 
     subgraph Pipeline["🧠 AI Pipeline"]
