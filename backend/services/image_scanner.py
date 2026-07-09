@@ -31,7 +31,7 @@ async def scan_images(images: list[bytes]) -> dict:
 async def scan_text(text: str) -> dict:
     """Scan OCR or pasted text through the same routing logic."""
     if not text or not text.strip():
-        raise ValueError("No text could be extracted from the provided images.")
+        raise ValueError("No Place Information that can be extracted")
 
     print(f"[ImageScanner] OCR complete: {len(text)} chars extracted")
 

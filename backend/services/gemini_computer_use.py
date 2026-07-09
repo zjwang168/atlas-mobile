@@ -305,7 +305,7 @@ async def extract_web_text(url: str, max_turns: int = 6) -> WebExtractResult:
                 text=final_extract.text,
                 url=final_extract.url,
                 success=bool(final_extract.text.strip()),
-                error=None if final_extract.text.strip() else "No useful content extracted",
+                error=None if final_extract.text.strip() else "No Place Information that can be extracted",
             )
         except Exception as e:
             try:

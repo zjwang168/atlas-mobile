@@ -70,11 +70,11 @@ User question:
 {query}
 """
 
+NO_PLACE_INFO = "No Place Information that can be extracted"
+
 async def analyze_smart_text(query: str, use_web_search: bool = False) -> dict:
     """Analyze a smart-text query into geocoded places."""
     text = (query or "").strip()
-    if len(text) < 3:
-        raise ValueError("Text too short to analyze.")
 
     if _looks_address_heavy(text):
         try:
@@ -108,8 +108,8 @@ async def analyze_smart_text(query: str, use_web_search: bool = False) -> dict:
         print("\n[SmartText][Qwen] user_input:", text)
         print("[SmartText][Qwen] prompt:", prompt)
         print("[SmartText][Qwen] llm_message:", qwen_message)
-        if not qwen_message or "No Place Information that can be extracted" in qwen_message:
-            raise ValueError("No Place Information that can be extracted")
+        if not qwen_message or NO_PLACE_INFO in qwen_message:
+            raise ValueError(NO_PLACE_INFO)
         extraction_input = qwen_message
     else:
         extraction_input = text
@@ -117,14 +117,14 @@ async def analyze_smart_text(query: str, use_web_search: bool = False) -> dict:
     print("\n[SmartText] extraction_input:", extraction_input)
     parsed = await _extract_places_from_text(extraction_input)
     if not parsed.get("places"):
-        raise ValueError("No Place Information that can be extracted")
+        raise ValueError(NO_PLACE_INFO)
 
     title = parsed.get("title") or text[:80]
     inferred_region = parsed.get("inferred_region")
     places = parsed.get("places", [])
     geocoded = await _geocode_places(places, inferred_region)
     if not geocoded:
-        raise ValueError("No Place Information that can be extracted")
+        raise ValueError(NO_PLACE_INFO)
 
     print("[SmartText] final_resolved_addresses:", json.dumps([
         {
@@ -176,6 +176,8 @@ async def _extract_places_from_text(text: str) -> dict:
 
     raw_places = parsed.get("places", [])
     deduped = _dedupe_places(raw_places)
+    if not deduped and raw_places:
+        deduped = _normalize_raw_places(raw_places)
     print(
         "[SmartText] place_counts:",
         json.dumps(
@@ -191,7 +193,7 @@ async def _extract_places_from_text(text: str) -> dict:
     return {
         "title": parsed.get("title"),
         "inferred_region": parsed.get("inferred_region"),
-        "places": filtered["locations"],
+        "places": filtered["locations"] or deduped,
         "removed_noise": parsed.get("removed_noise", []),
         "removed_hierarchy": filtered["removed_hierarchy"],
     }
@@ -320,6 +322,24 @@ def _dedupe_places(places: list[dict]) -> list[dict]:
             "context": context or None,
         })
     return deduped
+
+
+def _normalize_raw_places(places: list[dict]) -> list[dict]:
+    """Best-effort normalization for raw LLM output."""
+    normalized: list[dict] = []
+    for place in places:
+        if not isinstance(place, dict):
+            continue
+        name = _clean_place_text(place.get("name"))
+        if not name:
+            continue
+        normalized.append({
+            **place,
+            "name": name,
+            "context": _clean_place_text(place.get("context")) or None,
+            "description": _clean_place_text(place.get("description")) or None,
+        })
+    return normalized
 
 
 def _clean_place_text(value: object) -> str:

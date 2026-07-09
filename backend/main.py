@@ -51,6 +51,7 @@ from backend.services.gemini_computer_use import extract_web_screenshots, extrac
 from backend.services.glm_ocr import ocr_images
 from backend.services.image_scanner import scan_text
 from backend.services.smart_text_service import analyze_smart_text
+NO_PLACE_INFO = "No Place Information that can be extracted"
 
 app = FastAPI(
     title="OurAtlas Parse & Fetch API",
@@ -193,7 +194,7 @@ async def scrape_url(req: ScrapeUrlRequest):
 
         scraped = await extract_web_text(url)
         if not scraped.success or not scraped.text.strip():
-            raise ValueError(scraped.error or "Failed to extract readable text from this page.")
+            raise ValueError(NO_PLACE_INFO)
 
         progress.mark(req.request_id, "source_fetched", "Source fetched.", {
             "title": scraped.title or url,
@@ -247,7 +248,7 @@ async def scan_url(req: ScanUrlRequest):
 
         ocr_text = await ocr_images(shot_result.screenshots)
         if not ocr_text.strip():
-            raise ValueError("No text could be extracted from the page screenshots.")
+            raise ValueError(NO_PLACE_INFO)
 
         progress.mark(req.request_id, "entity_linking_done", "Location fetched.", {
             "location_count": 1,
@@ -355,8 +356,6 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
     text has no stable key.
     """
     text = (req.text or "").strip()
-    if len(text) < 20:
-        raise HTTPException(status_code=400, detail="Text too short to analyze.")
 
     session = conversation_manager.create_session()
 
@@ -434,7 +433,7 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
     """Use DeepSeek to research exact addresses, then geocode those addresses."""
     query = (req.query or "").strip()
     if len(query) < 6:
-      raise HTTPException(status_code=400, detail="Query too short.")
+        raise HTTPException(status_code=400, detail=NO_PLACE_INFO)
 
     try:
         progress.start(req.request_id, "Researching places from your request.") if req.request_id else None
