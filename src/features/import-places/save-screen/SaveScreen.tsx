@@ -1,11 +1,13 @@
-import MaskedView from '@react-native-masked-view/masked-view';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { BlurView } from 'expo-blur';
 import { GlassView } from 'expo-glass-effect';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   Image,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,10 +19,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import TopBlurFade from '../../../components/ui/top-blur-fade';
+import { type ParseResult } from '../../../services/import/importService';
+import { typography } from '../../../theme/typography';
+import { useHome } from '../../home/HomeContext';
 import MapboxMap, { type MapMarker } from '../../map/MapboxMap';
 import PlaceDetail from '../../place-detail/PlaceDetail';
-import type { ParseResult } from '../../../services/import/importService';
-import { typography } from '../../../theme/typography';
 
 const COLOR = {
   primary: '#12C170',
@@ -55,11 +58,37 @@ type SaveScreenProps = {
 export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: SaveScreenProps) {
   const insets = useSafeAreaInsets();
   const { height: screenH } = useWindowDimensions();
+  const { savedPlaces } = useHome();
+
+  // 名称归一化 + 坐标阈值去重
+  const normalizeName = useCallback((s: string) =>
+    s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' '),
+  []);
+  const COORD_THRESHOLD = 0.001; // ~100m
+  const isPlaceSaved = useCallback(
+    (place: { name: string; latitude: number; longitude: number }) => {
+      const name = normalizeName(place.name);
+      return savedPlaces.some((s) => {
+        const savedName = normalizeName(s.name);
+        const nameMatch = name.includes(savedName) || savedName.includes(name);
+        const coordMatch =
+          Math.abs(s.latitude - place.latitude) < COORD_THRESHOLD &&
+          Math.abs(s.longitude - place.longitude) < COORD_THRESHOLD;
+        return nameMatch || coordMatch;
+      });
+    },
+    [savedPlaces, normalizeName],
+  );
 
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(result.places.map((p) => [p.id, true]))
+    Object.fromEntries(
+      result.places
+        .filter((p) => !isPlaceSaved(p))
+        .map((p) => [p.id, true])
+    )
   );
   const [detailName, setDetailName] = useState<string | null>(null);
+  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(result.places[0]?.id ?? null);
 
   const selectedIds = useMemo(
     () => result.places.filter((p) => selected[p.id]).map((p) => p.id),
@@ -79,12 +108,65 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
     [result.places]
   );
 
-  const toggleOne = (id: string) => setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleOne = (id: string) => {
+    const place = result.places.find((p) => p.id === id);
+    if (place && isPlaceSaved(place)) return;
+    setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
   const toggleAll = () =>
     setSelected(Object.fromEntries(result.places.map((p) => [p.id, !allSelected])));
 
   // Match the home ContentPanel "default" snap geometry.
   const panelHeight = screenH * 0.55;
+  const minPanelHeight = screenH * 0.34;
+  const maxPanelHeight = screenH * 0.82;
+  const animatedPanelHeight = useRef(new Animated.Value(panelHeight)).current;
+  const currentPanelHeight = useRef(panelHeight);
+  const startPanelHeight = useRef(panelHeight);
+  const selectedPlace = result.places.find((place) => place.id === selectedPlaceId);
+  const mapCenter = selectedPlace
+    ? [selectedPlace.longitude, selectedPlace.latitude] as [number, number]
+    : result.centerCoordinate;
+
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (selectedPlaceId && result.places.length > 0) {
+      const idx = result.places.findIndex((p) => p.id === selectedPlaceId);
+      if (idx >= 0) {
+        scrollRef.current?.scrollTo({ y: idx * 76, animated: true });
+      }
+    }
+  }, [selectedPlaceId, result.places]);
+
+  const mapZoom = selectedPlaceId ? 15 : 12;
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          startPanelHeight.current = currentPanelHeight.current;
+        },
+        onPanResponderMove: (_, gesture) => {
+          const nextHeight = Math.max(
+            minPanelHeight,
+            Math.min(maxPanelHeight, startPanelHeight.current - gesture.dy),
+          );
+          currentPanelHeight.current = nextHeight;
+          animatedPanelHeight.setValue(nextHeight);
+        },
+        onPanResponderRelease: () => {},
+      }),
+    [animatedPanelHeight, maxPanelHeight, minPanelHeight],
+  );
+
+  const sentimentLabel = (sentiment?: string | null) => {
+    if (sentiment === 'positive') return 'Recommended';
+    if (sentiment === 'negative') return 'Not recommended';
+    return 'Neutral';
+  };
 
   return (
     <View style={styles.container}>
@@ -92,8 +174,12 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
       <MapboxMap
         style={StyleSheet.absoluteFill}
         markers={markers}
-        centerCoordinate={result.centerCoordinate}
-        zoomLevel={12}
+        centerCoordinate={mapCenter}
+        zoomLevel={mapZoom}
+        selectedMarkerId={selectedPlaceId}
+        onMarkerPress={(marker) => {
+          setSelectedPlaceId(marker.id);
+        }}
       />
 
       {/* Top map blur fade — same as the home screen. */}
@@ -121,7 +207,10 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
       </View>
 
       {/* Floating results panel — matches home ContentPanel. */}
-      <View style={[styles.panel, { height: panelHeight }]}>
+      <Animated.View style={[styles.panel, { height: animatedPanelHeight }]}>
+        <View style={styles.dragHandleWrap} {...panResponder.panHandlers}>
+          <View style={styles.dragHandle} />
+        </View>
         <View style={styles.header}>
           <Text style={styles.title}>Save places</Text>
           <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.7}>
@@ -139,6 +228,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
         </View>
 
         <ScrollView
+          ref={scrollRef}
           style={styles.list}
           contentContainerStyle={{ paddingBottom: 150 }}
           showsVerticalScrollIndicator={false}
@@ -146,8 +236,12 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
           {result.places.map((place, i) => (
             <Pressable
               key={place.id}
-              style={[styles.row, i > 0 && styles.rowDivider]}
-              onPress={() => setDetailName(place.name)}
+              style={[
+                styles.row,
+                i > 0 && styles.rowDivider,
+                selectedPlaceId === place.id && styles.rowActive,
+              ]}
+              onPress={() => setSelectedPlaceId(place.id)}
             >
               <View style={styles.rowThumb}>
                 <View style={styles.rowThumbClip}>
@@ -165,16 +259,29 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
                 <Text style={styles.rowSubtitle} numberOfLines={2}>
                   {place.subtitle}
                 </Text>
+                <View style={[
+                  styles.sentimentChip,
+                  place.sentiment === 'positive' && styles.sentimentPositive,
+                  place.sentiment === 'negative' && styles.sentimentNegative,
+                ]}>
+                  <Text style={styles.sentimentText}>{sentimentLabel(place.sentiment)}</Text>
+                </View>
               </View>
-              {/* Checkbox is its own tap target — does NOT open the detail. */}
-              <TouchableOpacity
-                onPress={() => toggleOne(place.id)}
-                hitSlop={10}
-                activeOpacity={0.7}
-                style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
-              >
-                {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
-              </TouchableOpacity>
+              {/* Checkbox: 已保存 → 绿色勾且不可操作；未保存 → 可选中的圆圈勾 */}
+              {isPlaceSaved(place) ? (
+                <View style={[styles.check, { backgroundColor: '#E9FBF1', borderColor: '#12C170' }]}>
+                  <Ionicons name="checkmark" size={16} color="#12C170" />
+                </View>
+              ) : (
+                <TouchableOpacity
+                  onPress={() => toggleOne(place.id)}
+                  hitSlop={10}
+                  activeOpacity={0.7}
+                  style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
+                >
+                  {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+                </TouchableOpacity>
+              )}
             </Pressable>
           ))}
         </ScrollView>
@@ -202,7 +309,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
             style={StyleSheet.absoluteFill}
           />
         </MaskedView>
-      </View>
+      </Animated.View>
 
       {/* Action bar — custom buttons (exact 52h, equal halves). The frosted
           material is the native iOS 26 Liquid Glass via GlassView; the green CTA
@@ -210,7 +317,10 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
       <View style={[styles.actionBar, { bottom: Math.max(insets.bottom, 20) }]} pointerEvents="box-none">
         {/* Add to plan — liquid-glass capsule */}
         <View style={styles.btnShadow}>
-          <Pressable style={styles.btnGlassClip} onPress={() => onAddToPlan(selectedIds)}>
+          <Pressable
+            style={styles.btnGlassClip}
+            onPress={() => onAddToPlan(selectedIds)}
+          >
             <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" isInteractive />
             <Text style={styles.btnLabelDark}>Add to plan</Text>
           </Pressable>
@@ -287,12 +397,24 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 48,
     borderBottomRightRadius: 48,
     overflow: 'hidden',
-    paddingTop: 16,
+    paddingTop: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 12,
+  },
+  dragHandleWrap: {
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 9,
+  },
+  dragHandle: {
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#C7C7CC',
   },
   header: {
     flexDirection: 'row',
@@ -324,6 +446,7 @@ const styles = StyleSheet.create({
   // List — rows top-aligned; image 56/16 with soft shadow
   list: { flex: 1, paddingHorizontal: 16 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 },
+  rowActive: { backgroundColor: '#F2FBF6', borderRadius: 18, paddingHorizontal: 8 },
   rowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLOR.divider },
   rowThumb: {
     width: 56,
@@ -347,6 +470,24 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, gap: 4 },
   rowName: { ...typography.h3, color: COLOR.textPrimary, letterSpacing: -0.17 },
   rowSubtitle: { ...typography.bodySmall, color: COLOR.textSecondary, letterSpacing: -0.14 },
+  sentimentChip: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: '#F2F2F7',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  sentimentPositive: {
+    backgroundColor: '#E9FBF1',
+  },
+  sentimentNegative: {
+    backgroundColor: '#FDECEC',
+  },
+  sentimentText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLOR.textPrimary,
+  },
   check: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: COLOR.primary },
   checkOff: { borderWidth: 1.5, borderColor: '#D7D7DC' },

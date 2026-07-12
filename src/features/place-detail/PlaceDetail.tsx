@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button';
+import { Text } from '@/components/ui/text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
 import {
@@ -6,31 +8,38 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
-import { Button } from '@/components/ui/button';
-import { Text } from '@/components/ui/text';
 
 import { findPlaceDetail } from '../../../mock-data/mockPlaceDetails';
-import { PlaceDetail as PlaceDetailType } from '../../types/place';
 import ContentPanel from '../../components/content-panel/ContentPanel';
-import PlaceOverviewSection from './place-detail-sections/PlaceOverviewSection';
+import { PlaceDetail as PlaceDetailType } from '../../types/place';
 import PlaceInfoSection from './place-detail-sections/PlaceInfoSection';
+import PlaceOverviewSection from './place-detail-sections/PlaceOverviewSection';
 
 type PlaceDetailProps = {
   placeName: string | null;
   onDismiss: () => void;
+  onBack?: () => void;
   onEdit: (place: PlaceDetailType) => void;
 };
 
-export default function PlaceDetail({ placeName, onDismiss, onEdit: _onEdit }: PlaceDetailProps) {
+export default function PlaceDetail({ placeName, onDismiss, onBack, onEdit: _onEdit }: PlaceDetailProps) {
   const [place, setPlace] = useState<PlaceDetailType | null>(null);
   const [isVisible, setIsVisible] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     if (placeName) {
+      setNotFound(false);
       const next = findPlaceDetail(placeName);
-      if (next) setPlace(next);
+      if (next) {
+        setPlace(next);
+      } else {
+        setPlace(null);
+        setNotFound(true);
+      }
       setIsVisible(true);
     } else {
+      setNotFound(false);
       setIsVisible(false);
     }
   }, [placeName]);
@@ -52,12 +61,35 @@ export default function PlaceDetail({ placeName, onDismiss, onEdit: _onEdit }: P
       }
     >
       {({ reportScrollY, bottomInset }) => {
-        if (!place) return null;
+        if (!place) {
+          if (notFound) {
+            return (
+              <View className="flex-1 items-center justify-center px-8">
+                <Ionicons name="search-outline" size={48} color="#999" />
+                <Text className="mt-4 text-lg font-medium text-foreground">
+                  Place not found
+                </Text>
+                <Text className="mt-2 text-center text-sm text-text-tertiary">
+                  We couldn't find details for "{placeName}". It may have been removed or the link may be outdated.
+                </Text>
+                <Button
+                  className="mt-6"
+                  variant="outline"
+                  onPress={onDismiss}
+                >
+                  <Text>Go back</Text>
+                </Button>
+              </View>
+            );
+          }
+          return null;
+        }
         return (
           <>
             <PlaceHeader
               place={place}
               onDismiss={onDismiss}
+              onBack={onBack}
             />
             <ScrollView
               bounces
@@ -79,18 +111,38 @@ export default function PlaceDetail({ placeName, onDismiss, onEdit: _onEdit }: P
 function PlaceHeader({
   place,
   onDismiss,
+  onBack,
 }: {
   place: PlaceDetailType;
   onDismiss: () => void;
+  onBack?: () => void;
 }) {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
 
   return (
     <View className="flex-row items-center px-4 pb-2 pt-1">
-      <Text className="flex-1 text-2xl font-medium text-foreground" numberOfLines={1}>
-        {place.name}
+      {/* Left: back button */}
+      {onBack ? (
+        <Button
+          accessibilityLabel="Go back"
+          onPress={onBack}
+          size="icon"
+          variant="ghost"
+          className="h-12 w-12 rounded-full bg-background"
+        >
+          <Ionicons name="arrow-back" size={24} color={foreground} />
+        </Button>
+      ) : (
+        <View className="h-12 w-12" />
+      )}
+
+      {/* Center: place name title */}
+      <Text className="flex-1 text-center text-lg font-semibold text-foreground" numberOfLines={1}>
+        Place Details
       </Text>
+
+      {/* Right: close button */}
       <Button
         accessibilityLabel="Dismiss place details"
         onPress={onDismiss}

@@ -13,7 +13,6 @@ const MAPBOX_ACCESS_TOKEN =
 export default {
   expo: {
     name: 'atlas-mobile',
-    plugins: ["expo-font"],
     slug: 'atlas-mobile',
     version: '1.0.0',
     orientation: 'portrait',
@@ -37,6 +36,7 @@ export default {
       favicon: './assets/favicon.png',
     },
     plugins: [
+      'expo-font',
       [
         '@rnmapbox/maps',
         {

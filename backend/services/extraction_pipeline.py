@@ -14,6 +14,8 @@ import json
 #       The single {text} placeholder is the only interpolation point.
 HIERARCHICAL_EXTRACTION_PROMPT = """You are a precise geographic entity extractor. Given the text below, extract ALL geographic locations mentioned.
 
+IMPORTANT: The input text may be in any language. You MUST output ALL names, descriptions, and other fields in ENGLISH only. Translate everything to English.
+
 For each location, classify its hierarchy level:
 - 0 = Point of Interest / Landmark / Specific venue (e.g., "Golden Gate Bridge", "Joe's Restaurant", "Shibuya Crossing")
 - 1 = District / Neighborhood (e.g., "Chinatown", "Greenwich Village", "Harajuku")
@@ -25,10 +27,12 @@ Output ONLY a JSON object with this exact structure:
 {{
   "entities": [
     {{"name": "Golden Gate Bridge", "hierarchy_level": 0, "context": "San Francisco",
+      "address": null,
       "description": "Iconic suspension bridge with stunning bay views.",
       "sentiment": "positive",
       "category": "Tourist Attractions"}},
     {{"name": "California", "hierarchy_level": 3, "context": null,
+      "address": null,
       "description": null, "sentiment": null, "category": null}}
   ],
   "inferred_region": "San Francisco Bay Area",
@@ -47,23 +51,27 @@ Rules:
 7. Include neighborhoods (e.g. "Chinatown", "North Beach", "Gastown"),
    districts, landmarks, parks, bridges, squares, streets, mountains, beaches,
    and well-known public spaces. These ARE valid geographic locations.
-8. Do NOT extract individual business names (specific restaurants, bars, cafes, shops)
-   like "Pourhouse", "Go Fish", "Six Acres", "Joe's Pizza". These are not map-searchable
-   geographic locations. But do include the neighborhood/area they are in.
+8. Do NOT extract throwaway business mentions that are only incidental. However, DO extract
+   a named venue if it is clearly the destination itself, a filming location, a landmark-like
+   place people would intentionally visit, or if the text provides a specific street address.
+   In those cases it is map-searchable and should be kept.
 9. When in doubt, prefer to INCLUDE the location. The post-processing pipeline will
    handle noise filtering automatically.
 10. For each entity, add a "description" field — a one-sentence summary extracted from
-     the text. This should capture how the place is described in the post (e.g.
-     "right next to the centre", "worth a visit", "beautiful park with gardens").
+     the text. This should capture how the place is described in the post.
      Keep it concise, under 20 words. Use the original text's sentiment and style.
      If no description can be inferred, set it to null.
+     IMPORTANT: Description MUST be in ENGLISH even if the input is in another language.
 11. For each entity, add a "sentiment" field. Classify the post's sentiment toward
-     this location as one of: "positive" (强烈推荐/喜欢), "neutral" (一般/还可以),
-     "negative" (不推荐/不喜欢). Base this on how the text describes it.
+     this location as one of: "positive" (highly recommended/favorable), "neutral" (average/okay),
+     "negative" (not recommended/unfavorable). Base this on how the text describes it.
      If sentiment cannot be determined, set it to null.
 12. For each entity, add a "category" field. Choose exactly one from:
      "Tourist Attractions", "Dining & Drinking", "Entertainment",
      "Museums & Exhibitions", "Transit Hubs", "Religious Sites", "Others"
+13. If the text contains a specific street address, full mailing address, or precise venue
+    address for an entity, copy it into the "address" field exactly as written (translated to English).
+    Otherwise set "address" to null. Prefer exact addresses over vague area descriptions.
 
 Text:
 {text}
@@ -269,7 +277,7 @@ class ExtractionPipeline:
                     loc_name in (poi.get("context", "") or "").lower()
                     for poi in level0
                 )
-                if has_poi_in_city and len(level0) >= 2:
+                if has_poi_in_city:
                     removed.append(
                         {
                             "name": loc["name"],

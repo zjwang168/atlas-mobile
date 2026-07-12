@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { View } from 'react-native';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { SegmentedControl } from '@expo/ui/community/segmented-control';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
+import { useHome } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Place } from '@/types/place';
+import { SegmentedControl } from '@expo/ui/community/segmented-control';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useState } from 'react';
+import { View } from 'react-native';
 import AllPlaces from './all-places/AllPlaces';
 import Atlas from './atlas/Atlas';
 
@@ -35,6 +36,8 @@ export default function MyPlaces({
   compact = false,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
+  const { savedPlaces, refreshSavedPlaces, selectedPlaceId } = useHome();
+  const savedCount = savedPlaces.length;
 
   // Native iOS UISegmentedControl (via @expo/ui). Rendered inside the scroll
   // content so it scrolls away rather than staying pinned.
@@ -109,7 +112,9 @@ export default function MyPlaces({
         paddingBottom: 12,
       }}
     >
-      <Text style={[typography.display, { color: '#09090b' }]}>My places</Text>
+      <Text style={[typography.display, { color: '#09090b' }]}>
+        My places{savedCount > 0 ? ` (${savedCount})` : ''}
+      </Text>
       <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
         <PressableScale
           onPress={onSharePress}
@@ -161,6 +166,7 @@ export default function MyPlaces({
           onScroll={onScroll}
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
+          selectedPlaceId={selectedPlaceId}
         />
       ) : (
         <View style={{ flex: 1 }}>

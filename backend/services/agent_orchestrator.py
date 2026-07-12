@@ -17,6 +17,8 @@ import time
 from typing import Optional
 
 from backend.services.conversation_manager import Session, conversation_manager
+from backend.services.content_classifier import classify_location_content
+from backend.services.performance_logger import PipelineMetrics, record_metrics
 from backend.services.tool_definitions import TOOLS, registry
 
 
@@ -39,19 +41,51 @@ class AgentOrchestrator:
         from backend.services.tool_definitions import init_registry
         init_registry()  # Ensure all tools are registered
 
-    async def run_pipeline(self, url: str, session: Session) -> dict:
+    async def run_pipeline(self, url: str, session: Session, request_id: str | None = None) -> dict:
         """
         Run the complete extraction pipeline for a URL.
 
         This is a deterministic pipeline (not an agent loop) for speed and reliability.
         Returns the extracted locations, route, and metadata.
+
+        Results are cached in-memory (LRU, max 100 entries). Subsequent requests
+        for the same URL return instantly from cache.
         """
+        from backend.services.cache import get_cached_result, set_cached_result
+        from backend.services.llm_client import get_last_llm_usage
+
+        # ── Initialize performance metrics ──────────────────────────────
+        metrics = PipelineMetrics()
+        metrics.run_id = f"run_{int(time.time() * 1000)}"
+        metrics.source_url = url
+        metrics.t_request = time.time()
+
+        # 0. Check cache — return immediately on hit
+        cached = get_cached_result(url)
+        if cached is not None:
+            print(f"[AgentOrchestrator] Cache HIT for URL: {url[:80]}")
+            metrics.t_parse_done = time.time()
+            metrics.t_geocode_done = time.time()
+            metrics.t_response = time.time()
+            record_metrics(metrics)
+
+            # Restore session fields from cached result
+            session.source_url = url
+            session.source_type = cached.get("source_type")
+            session.title = cached.get("title", "")
+            session.locations = cached.get("locations", [])
+            session.route = cached.get("route")
+            session.inferred_region = cached.get("inferred_region")
+            session.removed_noise = cached.get("removed_noise", [])
+            session.removed_hierarchy = cached.get("removed_hierarchy", [])
+            return cached
+
+        from backend.services import progress
         from backend.services.web_scraper import WebScraper
 
-        # 1. Classify and scrape
-        source_type = WebScraper.classify_source(url)
+        # 1. Scrape and classify
         session.source_url = url
-        session.source_type = source_type
+        session.source_type = "scrape"
 
         scrape_result = await WebScraper.scrape(url)
         if not scrape_result.get("success"):
@@ -60,18 +94,99 @@ class AgentOrchestrator:
         content = scrape_result.get("content", "")
         title = scrape_result.get("title", "")
         session.title = title
+        progress.mark(request_id, "source_fetched", "Source fetched.", {
+            "title": title,
+            "characters": len(content),
+            "source_type": scrape_result.get("source_type", "generic"),
+            "provider": scrape_result.get("provider"),
+        })
 
-        return await self._process_content(content, source_type, session)
+        result = await self._process_content(
+            content,
+            scrape_result.get("source_type", "generic"),
+            session,
+            metrics,
+            request_id=request_id,
+            title=title,
+        )
 
-    async def _process_content(self, content: str, source_type: str, session: Session) -> dict:
+        # Store successful result in cache
+        set_cached_result(url, result)
+        print(f"[AgentOrchestrator] Cached result for URL: {url[:80]}")
+
+        # ── Finalize and record metrics ─────────────────────────────────
+        metrics.t_response = time.time()
+        record_metrics(metrics)
+
+        return result
+
+    async def _process_content(self, content: str, source_type: str, session: Session,
+                               metrics: Optional[PipelineMetrics] = None,
+                               request_id: str | None = None,
+                               title: str | None = None) -> dict:
         """Shared pipeline: extraction -> entity linking -> geocoding -> route.
 
         Used by both run_pipeline (URL input) and run_pipeline_from_text
         (user-pasted text). Everything below is source-agnostic.
+
+        Args:
+            metrics: Optional PipelineMetrics to record timing and LLM token usage.
         """
-        # 2. Extract locations with hierarchy
+        # 2. Decide whether the content is name-heavy or address-heavy.
+        mode = await classify_location_content(content, source_type=source_type)
+        session.source_type = mode
+
+        if mode == "address_first":
+            from backend.services.atlas_ai_discovery import discover_places_from_query
+
+            discovery = await discover_places_from_query(content)
+            locations = discovery.get("locations", [])
+            session.removed_noise = discovery.get("removed_noise", [])
+            session.removed_hierarchy = discovery.get("removed_hierarchy", [])
+            session.inferred_region = discovery.get("inferred_region")
+            session.is_multi_region = discovery.get("is_multi_region", False)
+
+            from backend.services import progress
+            progress.mark(request_id, "entity_linking_done", "Location fetched.", {
+                "location_count": len(locations),
+                "inferred_region": discovery.get("inferred_region"),
+                "mode": mode,
+            })
+            progress.mark(request_id, "geocode_done", "Coordinates locked in.", {
+                "query_count": len(locations),
+                "resolved_count": len(locations),
+            })
+
+            if metrics:
+                metrics.t_parse_done = time.time()
+
+            session.locations = locations
+            session.route = discovery.get("route")
+            return {
+                "title": discovery.get("title", session.title),
+                "locations": locations,
+                "route": discovery.get("route"),
+                "removed_noise": session.removed_noise,
+                "removed_hierarchy": session.removed_hierarchy,
+                "inferred_region": session.inferred_region,
+                "source_type": discovery.get("source_type", mode),
+                "session_id": session.session_id,
+            }
+
+        # 3. Extract locations with hierarchy
         from backend.services.extraction_pipeline import ExtractionPipeline
+        from backend.services.llm_client import get_last_llm_usage
         extraction = await ExtractionPipeline.extract(content, source_type)
+
+        # ── Record LLM token usage from extraction ──────────────────────
+        if metrics:
+            extr_usage = get_last_llm_usage()
+            metrics.llm_calls.append({
+                "call_name": "extraction",
+                "input_tokens": extr_usage.get("input_tokens", 0),
+                "output_tokens": extr_usage.get("output_tokens", 0),
+                "duration_s": extr_usage.get("duration_s", 0.0),
+            })
 
         location_names = extraction.get("locations", [])
         session.removed_noise = extraction.get("removed_noise", [])
@@ -80,10 +195,56 @@ class AgentOrchestrator:
         session.is_multi_region = extraction.get("is_multi_region", False)
 
         if not location_names:
+            # Some travel articles are better handled as discovery tasks than
+            # as strict entity extraction. Retry once with a compact query built
+            # from the title + a short excerpt of the content.
+            from backend.services.atlas_ai_discovery import discover_places_from_query
+
+            fallback_query = "\n".join(
+                part for part in [
+                    (title or "").strip(),
+                    content[:3000].strip(),
+                ]
+                if part
+            )
+            if fallback_query:
+                try:
+                    discovery = await discover_places_from_query(fallback_query)
+                    fallback_locations = discovery.get("locations", [])
+                    if fallback_locations:
+                        session.removed_noise = discovery.get("removed_noise", [])
+                        session.removed_hierarchy = discovery.get("removed_hierarchy", [])
+                        session.inferred_region = discovery.get("inferred_region")
+                        session.is_multi_region = discovery.get("is_multi_region", False)
+                        session.locations = fallback_locations
+                        session.route = discovery.get("route")
+                        return {
+                            "title": discovery.get("title", session.title),
+                            "locations": fallback_locations,
+                            "route": discovery.get("route"),
+                            "removed_noise": session.removed_noise,
+                            "removed_hierarchy": session.removed_hierarchy,
+                            "inferred_region": session.inferred_region,
+                            "source_type": discovery.get("source_type", "atlas_ai"),
+                            "session_id": session.session_id,
+                        }
+                except Exception:
+                    pass
+
             raise ValueError("No geographic locations could be extracted from this content.")
 
         # 2.5 Entity Linking — disambiguate ambiguous location names
         location_names = await self._entity_linking(location_names, extraction.get("inferred_region"))
+        from backend.services import progress
+        progress.mark(request_id, "entity_linking_done", "Location fetched.", {
+            "location_count": len(location_names),
+            "inferred_region": extraction.get("inferred_region"),
+            "mode": mode,
+        })
+
+        # ── Parse complete: text analysis finished ──────────────────────
+        if metrics:
+            metrics.t_parse_done = time.time()
 
         # 2.6 Geocode the inferred_region to get a proximity bias point
         proximity = None
@@ -91,8 +252,11 @@ class AgentOrchestrator:
         inferred_region = extraction.get("inferred_region")
         if inferred_region:
             try:
-                from backend.services.geocoder import _geocode_geoapify
-                region_geo = await _geocode_geoapify(inferred_region)
+                from backend.services.geocoder import \
+                    geocode as _geocode_region
+
+                # 使用完整 geocode 函数（含 fallback 链 + country check），不用 amenity-only 版本
+                region_geo = await _geocode_region(inferred_region)
                 if region_geo:
                     proximity = (region_geo["longitude"], region_geo["latitude"])
                     city_center = proximity
@@ -132,21 +296,32 @@ class AgentOrchestrator:
             if parts:
                 default_context = " ".join(parts[:2]) if len(parts) >= 2 else parts[0]
 
-        # Build geocoding queries — STRICTLY avoid duplicate context
+        # Build geocoding queries — prefer exact address from LLM when available.
         geocode_queries = []
         for loc in location_names:
             name = loc["name"]
-            ctx = loc.get("context", "")
-            
-            # Use the SIMPLEST possible query: just the name.
-            # Entity Linking already appends city/region (e.g. "White House, Washington DC").
-            # Adding any extra context causes Photon/Nominatim 403 from long URLs.
-            geocode_queries.append(name)
+            exact_address = (loc.get("address") or "").strip()
+            if exact_address:
+                geocode_queries.append({
+                    "query": exact_address,
+                    "fallback_query": name,
+                    "name": name,
+                })
+            else:
+                geocode_queries.append(name)
 
         geocoded = await batch_geocode(
             geocode_queries, proximity=proximity,
             city_name=inferred_region, city_center=city_center,
         )
+        progress.mark(request_id, "geocode_done", "Coordinates locked in.", {
+            "query_count": len(geocode_queries),
+            "resolved_count": len([item for item in geocoded if item]),
+        })
+
+        # ── Geocode complete ────────────────────────────────────────────
+        if metrics:
+            metrics.t_geocode_done = time.time()
 
         # Map geocoded results back to original names + context
         locations = []
@@ -184,7 +359,12 @@ class AgentOrchestrator:
         session.locations = locations
 
         # 3.5 Validate geocoded coordinates against inferred region
-        validated = self._validate_coordinates(locations, extraction.get("inferred_region"))
+        validated = self._validate_coordinates(
+            locations,
+            extraction.get("inferred_region"),
+            is_multi_region=extraction.get("is_multi_region", False),
+            region_center=city_center,
+        )
         removed_count = len(locations) - len(validated)
         if removed_count > 0:
             # Track removed locations
@@ -250,7 +430,7 @@ class AgentOrchestrator:
         # 6. Auto-save to Supabase + update memory
         try:
             await conversation_manager.save_conversation(session.session_id)
-            await self._update_memory(session)
+            await self._update_memory(session, metrics=metrics)
         except Exception:
             pass
 
@@ -265,21 +445,56 @@ class AgentOrchestrator:
             "session_id": session.session_id,
         }
 
-    async def run_pipeline_from_text(self, text: str, session: Session) -> dict:
+    async def run_pipeline_from_text(
+        self,
+        text: str,
+        session: Session,
+        request_id: str | None = None,
+        title: str | None = None,
+        source_type: str = "text",
+    ) -> dict:
         """Run the extraction pipeline on user-pasted text (no scraping).
 
         Covers sources we cannot scrape - Xiaohongshu notes, WeChat articles,
         text a friend sent - the user copies the content and pastes it in.
         """
         session.source_url = None
-        session.source_type = "text"
-        # Derive a short title from the first non-empty line of the text
-        first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "Pasted text")
-        session.title = first_line[:80]
+        session.source_type = source_type
+        if title:
+            session.title = title[:120]
+        else:
+            # Derive a short title from the first non-empty line of the text
+            first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "Pasted text")
+            session.title = first_line[:80]
 
-        return await self._process_content(text, "generic", session)
+        # ── Initialize performance metrics ──────────────────────────────
+        metrics = PipelineMetrics()
+        metrics.run_id = f"run_{int(time.time() * 1000)}"
+        metrics.source_url = "pasted_text"
+        metrics.t_request = time.time()
 
-    def _validate_coordinates(self, locations: list[dict], inferred_region: str | None = None) -> list[dict]:
+        result = await self._process_content(
+            text,
+            source_type,
+            session,
+            metrics,
+            request_id=request_id,
+            title=session.title,
+        )
+
+        # ── Finalize and record metrics ─────────────────────────────────
+        metrics.t_response = time.time()
+        record_metrics(metrics)
+
+        return result
+
+    def _validate_coordinates(
+        self,
+        locations: list[dict],
+        inferred_region: str | None = None,
+        is_multi_region: bool = False,
+        region_center: tuple[float, float] | None = None,
+    ) -> list[dict]:
         """
         Validate geocoded coordinates — relaxed validation.
 
@@ -306,13 +521,28 @@ class AgentOrchestrator:
         # Dynamic threshold: use median distance as baseline
         sorted_dists = sorted(distances)
         median_dist = sorted_dists[len(sorted_dists) // 2]
-        threshold = max(200.0, min(2000.0, median_dist * 8))
+        if is_multi_region:
+            threshold = max(200.0, min(1200.0, median_dist * 8))
+        else:
+            threshold = max(80.0, min(300.0, median_dist * 6))
 
         validated = []
         removed_noise = []
 
         for i, loc in enumerate(locations):
             dist = distances[i]
+            if region_center and not is_multi_region:
+                from backend.services.route_planner import haversine
+                dist_from_region = haversine(region_center[1], region_center[0], loc["latitude"], loc["longitude"])
+                if dist_from_region > 300.0:
+                    removed_noise.append({
+                        "name": loc.get("name", ""),
+                        "reason": (
+                            f"Far from inferred region '{inferred_region}': "
+                            f"{dist_from_region:.0f} km away"
+                        ),
+                    })
+                    continue
             if dist <= threshold:
                 validated.append(loc)
             else:
@@ -354,6 +584,8 @@ class AgentOrchestrator:
         )
 
         prompt = f"""You are a precise geographic entity linker. Given a list of location names from a travel post, disambiguate any ambiguous names.
+
+IMPORTANT: Input names may be in any language. You MUST output ALL disambiguated names in ENGLISH. Translate any non-English names to their English equivalent.
 
 Rules:
 1. For abbreviations, expand to full name (e.g. "ROM" → "Royal Ontario Museum", "AGO" → "Art Gallery of Ontario", "MOCA" → "Museum of Contemporary Art", "GGB" → "Golden Gate Bridge")
@@ -596,9 +828,11 @@ You have access to tools. Use them when the user asks to:
 - Reorder or optimize routes: use map_operation or plan_route
 - Find more information about a place: use geocode_location
 - Search for nearby places: use geocode_location with context
+- Discover a fresh set of places from a topic or pasted content: first identify candidate real-world places, then use geocode_location or batch_geocode to validate them before your final answer
 
 When the user's request is simple (e.g., just asking a question), respond directly without tools.
 When you need to modify the map or route, use the appropriate tool.
+When the user is asking for a list of places, prefer a compact line-by-line answer with concrete place names and city/region context so the client can turn it into map pins.
 Always explain what you're doing before calling a tool."""
 
         context = [{"role": "system", "content": system_prompt}]
@@ -646,13 +880,17 @@ Always explain what you're doing before calling a tool."""
                         session.route = None
 
 
-    async def _update_memory(self, session: Session):
-        """Auto-update long-term memory."""
+    async def _update_memory(self, session: Session, metrics: Optional[PipelineMetrics] = None):
+        """Auto-update long-term memory.
+
+        Args:
+            metrics: Optional PipelineMetrics to record LLM token usage.
+        """
         import asyncio
         import json
         import re
 
-        from backend.services.llm_client import call_llm
+        from backend.services.llm_client import call_llm, get_last_llm_usage
 
         # Build memory prompt from current session
         memory_prompt = f"""Analyze this travel conversation and extract user interests/preferences as
@@ -681,6 +919,16 @@ Always explain what you're doing before calling a tool."""
                 max_tokens=1024,
             )
             raw_content = result.get("content", "[]")
+
+            # ── Record LLM token usage from memory update ───────────────
+            if metrics:
+                mem_usage = get_last_llm_usage()
+                metrics.llm_calls.append({
+                    "call_name": "memory_update",
+                    "input_tokens": mem_usage.get("input_tokens", 0),
+                    "output_tokens": mem_usage.get("output_tokens", 0),
+                    "duration_s": mem_usage.get("duration_s", 0.0),
+                })
 
             # ---- Robust JSON extraction ----
             # Strip markdown code fences: ```json ... ``` or ``` ... ```

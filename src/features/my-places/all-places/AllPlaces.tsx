@@ -1,12 +1,13 @@
-import { ReactNode, useCallback, useEffect, useState } from 'react';
-import Constants from 'expo-constants';
 import PlaceCard from '@/components/place-card/PlaceCard';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { ActivityIndicator, FlatList, View } from 'react-native';
 import { Text } from '@/components/ui/text';
+import { useHome } from '@/features/home/HomeContext';
+import { fetchSavedPlaces, SavedPlace } from '@/services/place/placeService';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
-import { fetchSavedPlaces, SavedPlace } from '@/services/place/placeService';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import Constants from 'expo-constants';
+import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
 
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
@@ -16,6 +17,8 @@ type AllPlacesProps = {
   listHeader?: ReactNode;
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
+  /** ID of the currently selected place (for highlighting & auto-scroll). */
+  selectedPlaceId?: string | null;
 };
 
 const MAPBOX_TOKEN: string =
@@ -53,10 +56,19 @@ function toPlaceDetail(row: SavedPlace): PlaceDetail {
   };
 }
 
-export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll }: AllPlacesProps) {
+export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, selectedPlaceId }: AllPlacesProps) {
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const listRef = useRef<FlatList<PlaceDetail>>(null);
+  const { deleteSavedPlace, selectedPlaceId: contextSelectedId } = useHome();
+  // Use the prop if provided, otherwise fall back to context value
+  const effectiveSelectedId = selectedPlaceId ?? contextSelectedId;
+
+  const handleDelete = useCallback((id: string) => {
+    deleteSavedPlace(id);
+    setPlaces((prev) => prev.filter((p) => p.id !== id));
+  }, [deleteSavedPlace]);
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +86,16 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
     load();
   }, [load]);
 
+  // Auto-scroll to the selected place when selectedPlaceId changes
+  useEffect(() => {
+    if (effectiveSelectedId && places.length > 0) {
+      const idx = places.findIndex((p) => p.id === effectiveSelectedId);
+      if (idx >= 0) {
+        listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      }
+    }
+  }, [selectedPlaceId, places]);
+
   if (loading) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -84,6 +106,7 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
 
   return (
     <FlatList
+      ref={listRef}
       data={places}
       keyExtractor={(item) => item.id}
       style={{ flex: 1 }}
@@ -116,19 +139,41 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
       ItemSeparatorComponent={() => (
         <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
       )}
-      renderItem={({ item }) => (
-        <View style={{ paddingHorizontal: 16 }}>
-          <PlaceCard
-            name={item.name}
-            description={item.summary}
-            imageUrl={item.thumbnailUrl}
-            tags={item.tags}
-            date={item.savedAt}
-            onPress={() => onPlacePress?.(item)}
-          />
-        </View>
-      )}
+      renderItem={({ item }) => {
+        const isActive = effectiveSelectedId === item.id;
+        return (
+          <View style={[styles.row, { paddingHorizontal: 16 }, isActive && styles.rowActive]}>
+            <View style={{ flex: 1 }}>
+              <PlaceCard
+                name={item.name}
+                description={item.summary}
+                imageUrl={item.thumbnailUrl}
+                tags={item.tags}
+                date={item.savedAt}
+                onPress={() => onPlacePress?.(item)}
+              />
+            </View>
+            <TouchableOpacity
+              onPress={() => handleDelete(item.id)}
+              style={{ marginLeft: 8, padding: 8 }}
+            >
+              <Ionicons name="trash-outline" size={20} color="#DC2626" />
+            </TouchableOpacity>
+          </View>
+        );
+      }}
       showsVerticalScrollIndicator={false}
     />
   );
 }
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rowActive: {
+    backgroundColor: '#F2FBF6',
+    borderRadius: 18,
+  },
+});

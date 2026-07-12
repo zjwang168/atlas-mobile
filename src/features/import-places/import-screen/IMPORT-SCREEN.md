@@ -29,6 +29,7 @@ type ImportScreenProps = {
 - Send button is disabled when the input is empty (trimmed). Input max height is 120 dp before scrolling.
 - "Add files" and "Screenshots" source cards are stubbed (no-op presses).
 - The attach button ("+" icon) in the composer is stubbed.
+- Image Scan submits immediately into the analyzing overlay so the user sees the waiting screen right away.
 
 ## Integration
 

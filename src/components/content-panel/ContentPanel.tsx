@@ -47,6 +47,10 @@ type ContentPanelProps = {
   height?: number;
   /** When provided, overrides the 'default' snap height and snaps to it immediately. User can still drag freely. */
   defaultSnapHeight?: number;
+  /** Maximum pixel height allowed while dragging/snapping. */
+  maxHeight?: number;
+  /** Reports the live panel height during animations and drags. */
+  onHeightChange?: (height: number) => void;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -76,6 +80,8 @@ export default function ContentPanel({
   zIndex,
   height,
   defaultSnapHeight,
+  maxHeight,
+  onHeightChange,
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
   const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
@@ -91,9 +97,10 @@ export default function ContentPanel({
   useEffect(() => {
     const id = panelHeight.addListener(({ value }) => {
       currentPanelHeight.current = value;
+      onHeightChange?.(value);
     });
     return () => panelHeight.removeListener(id);
-  }, []);
+  }, [onHeightChange]);
 
   // Visual properties derived from panelHeight so they track live drag without
   // needing separate parallel animations.
@@ -143,7 +150,7 @@ export default function ContentPanel({
   useEffect(() => {
     if (height === undefined) return;
     Animated.timing(panelHeight, {
-      toValue: height,
+      toValue: maxHeight === undefined ? height : Math.min(height, maxHeight),
       duration: 260,
       useNativeDriver: false,
     }).start();
@@ -161,7 +168,7 @@ export default function ContentPanel({
     snapStateRef.current = 'default';
     setSnapState('default');
     Animated.timing(panelHeight, {
-      toValue: defaultSnapHeight,
+      toValue: maxHeight === undefined ? defaultSnapHeight : Math.min(defaultSnapHeight, maxHeight),
       duration: 260,
       useNativeDriver: false,
     }).start();
@@ -179,12 +186,15 @@ export default function ContentPanel({
     snapStateRef.current = next;
     setSnapState(next);
     onSnapStateChange?.(next);
+    const nextHeight = maxHeight === undefined
+      ? snapHeights.current[next]
+      : Math.min(snapHeights.current[next], maxHeight);
     if (!animated) {
-      panelHeight.setValue(snapHeights.current[next]);
+      panelHeight.setValue(nextHeight);
       return;
     }
     Animated.spring(panelHeight, {
-      toValue: snapHeights.current[next],
+      toValue: nextHeight,
       useNativeDriver: false,
       damping: 22,
       stiffness: 200,
@@ -235,10 +245,19 @@ export default function ContentPanel({
     }
   }, [visible]);
 
+  useEffect(() => {
+    if (maxHeight === undefined || currentPanelHeight.current <= maxHeight) return;
+    Animated.timing(panelHeight, {
+      toValue: maxHeight,
+      duration: 180,
+      useNativeDriver: false,
+    }).start();
+  }, [maxHeight]);
+
   const resolveSnap = (dy: number) => {
     const finalHeight = Math.max(
       snapHeights.current.compact,
-      Math.min(snapHeights.current.full, gestureStartHeight.current - dy),
+      Math.min(maxHeight ?? snapHeights.current.full, gestureStartHeight.current - dy),
     );
     // Always snap to the nearest defined snap point — no free-height zone.
     let nearest: SnapState = SNAP_ORDER[0];
@@ -254,7 +273,7 @@ export default function ContentPanel({
     panelHeight.setValue(
       Math.max(
         snapHeights.current.compact,
-        Math.min(snapHeights.current.full, gestureStartHeight.current - dy),
+        Math.min(maxHeight ?? snapHeights.current.full, gestureStartHeight.current - dy),
       ),
     );
   };
@@ -353,7 +372,7 @@ export default function ContentPanel({
         >
           <View
             className="h-1 w-12 rounded-sm bg-handle"
-            style={{ opacity: snapState === 'full' ? 1 : 0 }}
+            style={{ opacity: 1 }}
           />
         </View>
 

@@ -10,8 +10,8 @@
  * session and tighten RLS to `created_by = auth.uid()`.
  */
 
-import { supabase } from '../supabase/supabaseClient';
 import type { ParsedPlace } from '../import/importService';
+import { supabase } from '../supabase/supabaseClient';
 
 export type SavedPlace = {
   id: string;
@@ -37,14 +37,55 @@ export async function savePlaces(
 ): Promise<SavedPlace[]> {
   if (places.length === 0) return [];
 
-  const rows = places.map((p) => ({
+  // 改进的去重：名称互相包含 或 坐标极接近（~100m）
+  const normalizeName = (s: string) =>
+    s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
+  const COORD_THRESHOLD = 0.001;
+
+  const isDuplicate = (
+    place: { name: string; latitude: number; longitude: number },
+    saved: { name: string; latitude: number; longitude: number },
+  ): boolean => {
+    const name = normalizeName(place.name);
+    const savedName = normalizeName(saved.name);
+    const nameMatch = name.includes(savedName) || savedName.includes(name);
+    const coordMatch =
+      Math.abs(saved.latitude - place.latitude) < COORD_THRESHOLD &&
+      Math.abs(saved.longitude - place.longitude) < COORD_THRESHOLD;
+    return nameMatch || coordMatch;
+  };
+
+  const { data: existing, error: existingError } = await supabase
+    .from('places')
+    .select('id, name, subtitle, category, latitude, longitude, region, created_at');
+  if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
+
+  const existingRows = (existing ?? []) as SavedPlace[];
+
+  // 过滤出真正的新地点
+  const seenInBatch = new Set<string>();
+  const placesToInsert = places.filter((place) => {
+    const dupInExisting = existingRows.some((saved) => isDuplicate(place, saved));
+    const dupInBatch = places.some(
+      (other, idx) => places.indexOf(other) !== idx && isDuplicate(place, other),
+    );
+    if (dupInExisting || dupInBatch) return false;
+    return true;
+  });
+
+  if (placesToInsert.length === 0) {
+    // 全部重复，返回匹配的已存记录
+    return places.map((place) => existingRows.find((saved) => isDuplicate(place, saved)))
+      .filter((place): place is SavedPlace => Boolean(place));
+  }
+
+  const rows = placesToInsert.map((p) => ({
     name: p.name,
     subtitle: p.subtitle || null,
     category: p.type && p.type !== 'Place' ? p.type : null,
     latitude: p.latitude,
     longitude: p.longitude,
     region: source?.region ?? null,
-    external_source: 'import',
   }));
 
   const { data, error } = await supabase.from('places').insert(rows).select();
@@ -61,7 +102,12 @@ export async function savePlaces(
     if (srcError) console.warn('[placeService] place_sources insert failed:', srcError.message);
   }
 
-  return (data ?? []) as SavedPlace[];
+  return [
+    ...places
+      .map((place) => existingRows.find((saved) => isDuplicate(place, saved)))
+      .filter((place): place is SavedPlace => Boolean(place)),
+    ...((data ?? []) as SavedPlace[]),
+  ];
 }
 
 /** Fetch saved places, newest first, for the My Places screens. */
@@ -72,4 +118,14 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Failed to fetch places: ${error.message}`);
   return (data ?? []) as SavedPlace[];
+}
+
+/**
+ * Delete a place by ID from the places table.
+ *
+ * @param id  The ID of the place to delete.
+ */
+export async function deletePlace(id: string): Promise<void> {
+  const { error } = await supabase.from('places').delete().eq('id', id);
+  if (error) throw new Error(`Failed to delete place: ${error.message}`);
 }
