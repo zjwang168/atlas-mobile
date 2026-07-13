@@ -55,6 +55,48 @@ graph TD
 
 ---
 
+## LangChain Agent Runtime
+
+The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **custom Agent Loop** (tool-calling) for dynamic conversational interactions. Memory is managed in three tiers, and all LLM calls are traced via LangSmith.
+
+```mermaid
+graph TD
+    subgraph "Agent Execution"
+        A1[User Input] --> A2[Context Builder]
+        A2 --> A3[LLM Call with Tools]
+        A3 --> A4{Response Type?}
+        A4 -->|tool_call| A5[ToolRegistry.execute]
+        A5 --> A2
+        A4 -->|final_answer| A6[Structured Response]
+        A4 -->|text| A6
+    end
+
+    subgraph "Memory System"
+        B1[Short-term: Session Context]
+        B2[Working: Extracted Places]
+        B3[Long-term: User Preferences]
+    end
+
+    subgraph "LangSmith Tracing"
+        C1[Pipeline: AtlasParseGraph]
+        C2[Agent Steps: agent_loop_step]
+        C3[LLM Calls: langsmith_tags]
+        C4[Performance Metrics]
+    end
+
+    A2 --> B1
+    A3 --> C3
+    A5 --> C2
+```
+
+**Architecture Reference**:
+- **StateGraph (DAG Pipeline)**: 7-node DAG defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py): `fetch → classify (conditional branch) → extract → entity_link → geocode → route → persist`
+- **Agent Loop**: Defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py). Runs up to 10 steps per turn. Each iteration: build context → `call_llm(tools=TOOLS)` → classify response → `tool_call` triggers `registry.execute()` and continues; `final_answer` or `text` returns.
+- **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), Working (extracted places), Long-term (user preferences via Supabase).
+- **Tracing**: [`observability.py`](backend/services/observability.py) — Pipeline graph named `AtlasParseGraph`, agent loop steps tagged as `agent_loop_step`, LLM calls tagged with `langsmith_tags`.
+
+---
+
 ## Architecture Overview
 
 | Layer | Technology | Purpose |
@@ -77,42 +119,66 @@ graph TD
 
 ## Data Flow
 
-Data flows are split into four independent pipelines, each with a dedicated processing path.
+Data flows are split into five independent pipelines, each with a dedicated processing path.
 
-### Scenario A: URL / Text Import Pipeline
+### Scenario A: Smart Text Pipeline
+
+```
+POST /parse_text
+→ smart_text_service.py: analyze_smart_text()
+  → web_search_router.py: should_use_web_search()
+  → (optional) web_search() via Tavily
+  → LLM (Qwen for web reasoning, DeepSeek for extraction)
+→ content_classifier.py: classify_content()
+→ extraction_pipeline.py: extract_places()
+→ geocoder.py: geocode()
+→ route_planner.py: plan_route()
+→ supabase_service.py: persist()
+```
 
 ```mermaid
 sequenceDiagram
     participant C as Client (Mobile)
     participant API as FastAPI
-    participant LC as LangGraph StateGraph
+    participant STS as SmartTextService
+    participant WSR as WebSearchRouter
     participant LLM as DeepSeek/Qwen
     participant S as Services
     participant DB as Supabase
-    
-    C->>API: POST /parse_link (URL)
-    API->>LC: invoke graph
-    LC->>S: fetch_web_content (Playwright/Trafilatura)
-    S-->>LC: raw HTML/text
-    LC->>LLM: classify_content
-    LLM-->>LC: type: named_poi / address_first
-    LC->>LLM: extract_places
-    LLM-->>LC: structured places
-    LC->>LLM: entity_linking (disambiguation)
-    LLM-->>LC: linked entities
-    LC->>S: geocode_addresses (5-tier fallback)
-    S-->>LC: geo coordinates
-    LC->>S: plan_route (TSP + 2-opt)
-    S-->>LC: optimized route
-    LC->>DB: persist_results
-    DB-->>LC: saved IDs
-    LC-->>API: PipelineResult
-    API-->>C: parsed places
+
+    C->>API: POST /parse_text (pasted text)
+    API->>STS: analyze_smart_text()
+    STS->>WSR: should_use_web_search()
+    WSR-->>STS: decision (boolean)
+    alt web_search enabled
+        STS->>LLM: Qwen web reasoning + Tavily
+        LLM-->>STS: enriched context
+    end
+    STS->>LLM: DeepSeek extraction
+    LLM-->>STS: structured places
+    STS->>S: classify_content → extract_places → geocode → plan_route
+    S->>DB: persist_results
+    DB-->>S: saved IDs
+    S-->>STS: PipelineResult
+    STS-->>API: parsed places
+    API-->>C: structured response
 ```
 
-**Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`web_scraper.py`](backend/services/web_scraper.py), [`playwright_scraper.py`](backend/services/playwright_scraper.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
+**Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
 
 ### Scenario B: Image Scan Pipeline
+
+```
+POST /scan_images or POST /scan_images_base64
+→ image_scanner.py: scan_images()
+  → gemini_computer_use.py: Gemini screenshot analysis
+  → glm_ocr.py: OCR text extraction
+→ content_classifier.py: classify_content()
+→ extraction_pipeline.py: extract_places()
+→ geocoder.py: geocode()
+→ route_planner.py: plan_route()
+→ supabase_service.py: persist()
+```
 
 ```mermaid
 sequenceDiagram
@@ -123,132 +189,169 @@ sequenceDiagram
     participant LLM as DeepSeek/Qwen
     participant S as Services
     participant DB as Supabase
-    
+
     C->>API: POST /scan_images (JPEG/PNG/HEIC)
-    API->>GCU: Gemini Computer Use (screenshot)
+    API->>GCU: Gemini Computer Use (screenshot analysis)
     GCU-->>API: page screenshots
     API->>OCR: GLM-OCR (text extraction)
     OCR-->>API: extracted text
-    API->>LLM: classify_content
-    LLM-->>API: type: named_poi / address_first
-    alt named_poi
-        API->>LLM: extract_places + entity_linking
-        LLM-->>API: structured places
-    else address_first
-        API->>S: atlas_ai_discovery (address research)
-        S-->>API: resolved addresses
-    end
-    API->>S: geocode_addresses (5-tier fallback)
-    S-->>API: geo coordinates
-    API->>S: plan_route (TSP + 2-opt)
-    S-->>API: optimized route
-    API->>DB: persist_results
-    DB-->>API: saved IDs
+    API->>S: classify_content → extract_places → geocode → plan_route
+    S->>DB: persist_results
+    DB-->>S: saved IDs
+    S-->>API: PipelineResult
     API-->>C: parsed places + route
 ```
 
-**Key files**: [`image_scanner.py`](backend/services/image_scanner.py), [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py), [`content_classifier.py`](backend/services/content_classifier.py)
+**Key files**: [`image_scanner.py`](backend/services/image_scanner.py), [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
 
-### Scenario C: AI Chat Discovery
+### Scenario C: Reddit Links Pipeline
 
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant AG as Agent Orchestrator
-    participant LLM as DeepSeek/Qwen
-    participant TR as ToolRegistry
-    participant WS as Tavily Web Search
-    participant S as Services
-    
-    C->>API: POST /atlas_ai/discover (natural language query)
-    API->>AG: agent loop (tool-calling)
-    loop Agent Loop (max steps)
-        AG->>LLM: prompt + tool definitions
-        LLM-->>AG: response / tool call
-        alt has tool call
-            AG->>TR: execute tool
-            TR->>WS: scrape_url / web_search
-            TR->>S: geocode_location / batch_geocode
-            TR->>S: extract_locations / plan_route
-            S-->>TR: tool result
-            TR-->>AG: result
-        else no tool call
-            AG-->>API: final response
-        end
-    end
-    API-->>C: structured places + response
+```
+POST /parse_link (reddit.com URL)
+→ agent_orchestrator.py: run_pipeline()
+→ web_fetch_chain.py: fetch_web_content()
+  → _looks_like_reddit() → true
+  → _scrape_reddit() → reddit_fetcher.py: fetch_reddit_post()
+  → Reddit JSON API (title + selftext)
+→ content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
 ```
 
-**Key files**: [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py), [`tool_definitions.py`](backend/services/tool_definitions.py), [`backend/langchain/tools.py`](backend/langchain/tools.py)
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant WFC as WebFetchChain
+    participant RF as RedditFetcher
+    participant LLM as DeepSeek/Qwen
+    participant S as Services
+    participant DB as Supabase
 
-### Scenario D: Conversation Management
+    C->>API: POST /parse_link (reddit.com URL)
+    API->>WFC: fetch_web_content()
+    WFC->>WFC: _looks_like_reddit() → true
+    WFC->>RF: _scrape_reddit() → fetch_reddit_post()
+    RF->>RF: Reddit JSON API (title + selftext)
+    RF-->>WFC: parsed Reddit content
+    WFC-->>API: cleaned text
+    API->>S: classify_content → extract_places → geocode → plan_route
+    S->>DB: persist_results
+    DB-->>S: saved IDs
+    S-->>API: PipelineResult
+    API-->>C: parsed places
+```
+
+**Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`reddit_fetcher.py`](backend/services/reddit_fetcher.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
+
+### Scenario D: Any Links Pipeline (Generic URL)
+
+```
+POST /parse_link (non-reddit URL) or POST /scrape_url
+→ web_fetch_chain.py: fetch_web_content()
+  → Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX + BeautifulSoup (fallback chain)
+→ (optional) playwright_scraper.py or web_scraper.py for Gemini screenshot extraction
+→ content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
+```
 
 ```mermaid
 sequenceDiagram
     participant C as Client (Mobile)
     participant API as FastAPI
-    participant CM as Conversation Manager
+    participant WFC as WebFetchChain
+    participant FP as FallbackProviders
+    participant PS as PlaywrightScraper
+    participant LLM as DeepSeek/Qwen
+    participant S as Services
+    participant DB as Supabase
+
+    C->>API: POST /parse_link (non-reddit URL)
+    API->>WFC: fetch_web_content()
+    WFC->>FP: Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX+BS4
+    FP-->>WFC: extracted content
+    alt JS-heavy / anti-bot page
+        WFC->>PS: playwright_scraper (Gemini screenshot extraction)
+        PS-->>WFC: captured text
+    end
+    WFC-->>API: cleaned content
+    API->>S: classify_content → extract_places → geocode → plan_route
+    S->>DB: persist_results
+    DB-->>S: saved IDs
+    S-->>API: PipelineResult
+    API-->>C: parsed places
+```
+
+**Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`playwright_scraper.py`](backend/services/playwright_scraper.py), [`web_scraper.py`](backend/services/web_scraper.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
+
+### Scenario E: Conversation Management
+
+```
+POST /chat (with session_id)
+→ agent_orchestrator.py: chat()
+→ conversation_manager.py: get_session_context()
+  → Short-term: current conversation history
+  → Working: extracted places buffer
+  → Long-term: user preferences from DB
+→ _agent_loop(): LLM with context + tools
+  → ToolRegistry.execute() for tool calls
+  → conversation_manager.py: update_session()
+→ Structured response
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant CM as ConversationManager
     participant MEM as Memory (3-Tier)
     participant LLM as DeepSeek/Qwen
+    participant TR as ToolRegistry
     participant DB as Supabase
-    
-    C->>API: POST /chat (message)
-    API->>CM: load context
-    CM->>MEM: short-term (current iteration)
-    MEM-->>CM: recent messages + tool results
-    CM->>MEM: working (session context)
-    MEM-->>CM: extracted places, preferences
-    CM->>LLM: prompt with context
-    LLM-->>CM: response
-    CM->>MEM: update short-term
-    alt session end
-        CM->>MEM: long-term (Supabase)
-        MEM->>DB: persist conversation
-        DB-->>MEM: saved
-        CM->>LLM: extract user preferences
-        LLM-->>CM: preferences
-        CM->>DB: save preferences
+
+    C->>API: POST /chat (message + session_id)
+    API->>CM: get_session_context()
+    CM->>MEM: Short-term (conversation history)
+    MEM-->>CM: recent messages
+    CM->>MEM: Working (extracted places buffer)
+    MEM-->>CM: active places
+    CM->>MEM: Long-term (user preferences from DB)
+    MEM-->>CM: saved preferences
+    CM-->>API: consolidated context
+
+    API->>API: _agent_loop() with context + tools
+    loop Agent Loop (max 10 steps)
+        API->>LLM: prompt with context + tool definitions
+        LLM-->>API: response / tool_call
+        alt tool_call
+            API->>TR: ToolRegistry.execute()
+            TR-->>API: tool result
+            API->>CM: update_session()
+        else final_answer / text
+            API-->>API: break loop
+        end
     end
-    CM-->>API: response
-    API-->>C: reply + updated context
+
+    API->>CM: update_session()
+    CM->>DB: persist conversation state
+    DB-->>CM: saved
+    API-->>C: structured response + updated context
 ```
 
-**Key files**: [`conversation_manager.py`](backend/services/conversation_manager.py), [`agent_orchestrator.py`](backend/services/agent_orchestrator.py)
-
----
-
-## Tools Reference
-
-| Tool Name | Status | Description |
-|-----------|--------|-------------|
-| `scrape_url` | ✅ Implemented | Scrape web content from URL |
-| `geocode_location` | ✅ Implemented | Geocode a single address |
-| `batch_geocode` | ✅ Implemented | Batch geocode multiple addresses |
-| `plan_route` | ✅ Implemented | TSP route optimization |
-| `extract_locations` | ✅ Implemented | Extract place entities from text |
-| `compute_region_cluster` | ⏳ Planned | Cluster places by region |
-| `save_conversation` | ⏳ Planned | Persist conversation context |
-| `load_conversation` | ⏳ Planned | Load conversation history |
-| `map_operation` | ⏳ Planned | Render map operations |
-
-> **Note**: The [`web_search()`](backend/langchain/tools.py) function is defined in [`backend/langchain/tools.py`](backend/langchain/tools.py) and uses **Tavily API** for live web search. It is consumed internally by [`smart_text_service.py`](backend/services/smart_text_service.py) but is **not yet registered** in the [`ToolRegistry`](backend/services/tool_definitions.py) — this is a future improvement so the agent loop can invoke web search dynamically.
+**Key files**: [`conversation_manager.py`](backend/services/conversation_manager.py), [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`tool_definitions.py`](backend/services/tool_definitions.py)
 
 ---
 
 ## LangSmith & Observability
-
 | Feature | Implementation | Status |
 |---------|---------------|--------|
-| **Tracing** | LangSmith via [`configure_langsmith()`](backend/services/observability.py) | ✅ Enabled (requires `LANGSMITH_API_KEY`) |
+| **Tracing** | LangSmith via [`configure_langsmith()`](backend/services/observability.py) | ✅ Configured via environment |
 | **Pipeline Tracing** | `AtlasParseGraph` named graph in LangGraph | ✅ Active |
 | **Agent Loop Tracing** | `agent_loop_step` run metadata | ✅ Active |
 | **LLM Call Tracing** | Model metadata with `langsmith_tags` | ✅ Active |
 | **Performance Metrics** | Custom [`performance_logger.py`](backend/services/performance_logger.py) | ✅ Active |
 | **Real-time Progress** | [`progress.py`](backend/services/progress.py) SSE stream | ✅ Active |
-| **Evaluation** | LangSmith evaluation datasets | ❌ Not yet configured |
 
 Configuration in [`observability.py`](backend/services/observability.py) reads `LANGSMITH_API_KEY` from the environment and sets `LANGSMITH_TRACING=true`, `LANGCHAIN_TRACING_V2=true`, and `LANGSMITH_PROJECT=atlas-mobile`. The system degrades gracefully when the key is absent.
+
+**What is LangSmith Evaluation?** LangSmith Evaluation is a feature that allows you to test LLM pipelines against predefined datasets to measure performance (accuracy, latency, cost). To set it up: 1) Create a dataset in the [LangSmith UI](https://smith.langchain.com), 2) Add test cases (inputs + expected outputs), 3) Run evaluators using `langsmith.evaluation.evaluate()` or `run_on_dataset()`. This is an optional enhancement and not required for core functionality.
 
 ---
 
