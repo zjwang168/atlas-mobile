@@ -103,32 +103,57 @@ The system uses two complementary AI execution models: a **LangGraph StateGraph*
 
 ```mermaid
 graph TD
-    subgraph "Agent Execution"
-        A1[User Input] --> A2[Context Builder]
-        A2 --> A3[LLM Call with Tools]
-        A3 --> A4{Response Type?}
-        A4 -->|tool_call| A5[ToolRegistry.execute]
-        A5 --> A2
-        A4 -->|final_answer| A6[Structured Response]
-        A4 -->|text| A6
+    subgraph "LangGraph StateGraph (DAG Pipeline)"
+        S[Start] --> F[fetch_web_content]
+        F --> C[classify_content]
+        C -->|address_first| G[geocode_addresses]
+        C -->|named_poi| E[extract_places]
+        E --> EL[entity_linking]
+        EL --> G
+        G --> R[plan_route]
+        R --> P[persist_results]
+        P --> END[End]
+    end
+
+    subgraph "Agent Execution (Tool-Calling Loop)"
+        UI[User Input] --> CB[Context Builder]
+        CB --> LLM[LLM Call with Tools]
+        LLM --> RT{Response Type?}
+        RT -->|tool_call| TREQ[ToolRegistry.execute]
+        TREQ --> LLM
+        RT -->|final_answer| RESP[Structured Response]
+        RT -->|text| RESP
+    end
+
+    subgraph "Tool Registry"
+        T1[scrape_url]
+        T2[geocode_location]
+        T3[batch_geocode]
+        T4[plan_route]
+        T5[extract_locations]
+        T6[compute_region_cluster ⏳]
+        T7[save_conversation ⏳]
+        T8[load_conversation ⏳]
+        T9[map_operation ⏳]
     end
 
     subgraph "Memory System"
-        B1[Short-term: Session Context]
-        B2[Working: Extracted Places]
-        B3[Long-term: User Preferences]
+        M1[Short-term: Session Context]
+        M2[Working: Extracted Places]
+        M3[Long-term: User Preferences]
     end
 
     subgraph "LangSmith Tracing"
-        C1[Pipeline: AtlasParseGraph]
-        C2[Agent Steps: agent_loop_step]
-        C3[LLM Calls: langsmith_tags]
-        C4[Performance Metrics]
+        LS1[Pipeline: AtlasParseGraph]
+        LS2[Agent Steps: agent_loop_step]
+        LS3[LLM Calls: langsmith_tags]
+        LS4[Performance Metrics]
     end
 
-    A2 --> B1
-    A3 --> C3
-    A5 --> C2
+    CB --> M1
+    LLM --> LS3
+    TREQ --> LS2
+    P --> LS1
 ```
 
 **Architecture Reference**:
