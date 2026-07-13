@@ -28,8 +28,8 @@ graph TD
         H[User Query] --> I[Agent Orchestrator]
         I --> J[LLM: DeepSeek / Qwen]
         J --> K{Tool Call?}
-        K -->|Yes| L[ToolRegistry.execute()]
-        L --> M[scrape_url / geocode_location / batch_geocode / plan_route / extract_locations]
+        K -->|Yes| L["ToolRegistry.execute()"]
+        L --> M["scrape_url / geocode_location / batch_geocode / plan_route / extract_locations"]
         M --> J
         K -->|No| N[Final Response]
     end
