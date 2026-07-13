@@ -103,18 +103,6 @@ The system uses two complementary AI execution models: a **LangGraph StateGraph*
 
 ```mermaid
 graph TD
-    subgraph "LangGraph StateGraph (DAG Pipeline)"
-        S[Start] --> F[fetch_web_content]
-        F --> C[classify_content]
-        C -->|address_first| G[geocode_addresses]
-        C -->|named_poi| E[extract_places]
-        E --> EL[entity_linking]
-        EL --> G
-        G --> R[plan_route]
-        R --> P[persist_results]
-        P --> END[End]
-    end
-
     subgraph "Agent Execution (Tool-Calling Loop)"
         UI[User Input] --> CB[Context Builder]
         CB --> LLM[LLM Call with Tools]
@@ -131,10 +119,11 @@ graph TD
         T3[batch_geocode]
         T4[plan_route]
         T5[extract_locations]
-        T6[compute_region_cluster ⏳]
-        T7[save_conversation ⏳]
-        T8[load_conversation ⏳]
-        T9[map_operation ⏳]
+        T6[web_search<br/>Tavily API]
+        T7[compute_region_cluster ⏳]
+        T8[save_conversation ⏳]
+        T9[load_conversation ⏳]
+        T10[map_operation ⏳]
     end
 
     subgraph "Memory System"
@@ -153,7 +142,6 @@ graph TD
     CB --> M1
     LLM --> LS3
     TREQ --> LS2
-    P --> LS1
 ```
 
 **Architecture Reference**:
