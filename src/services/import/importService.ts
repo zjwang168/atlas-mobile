@@ -18,6 +18,7 @@ import {
 
 export type ParsedPlace = {
   id: string;
+  stableKey?: string;
   name: string;
   subtitle: string;
   type: string;
@@ -78,8 +79,14 @@ function medianCenter(places: BackendLocation[]): [number, number] {
 function adaptResponse(backend: BackendParseResponse): ParseResult {
   const places: ParsedPlace[] = (backend.locations ?? []).map((loc, index) => ({
     id: String(index + 1),
+    stableKey: buildPlaceStableKey({
+      name: loc.name,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      category: loc.category,
+    }),
     name: loc.name,
-    subtitle: shouldShowAddress(loc) ? (loc.full_address || loc.description || '') : (loc.description || ''),
+    subtitle: formatSubtitle(loc),
     type: loc.category || 'Place',
     latitude: loc.latitude,
     longitude: loc.longitude,
@@ -102,6 +109,26 @@ function looksLikeAddress(value: string): boolean {
   return /\d/.test(value) && /\b(st|street|rd|road|ave|avenue|blvd|boulevard|dr|drive|ln|lane|way|pkwy|parkway|hwy|highway|ct|court|pl|place|sq|square)\b/i.test(value);
 }
 
+function normalizeStableCategory(value?: string | null): string {
+  const normalized = normalizeLabel(value || '');
+  return normalized === 'place' ? '' : normalized;
+}
+
+export function buildPlaceStableKey(loc: {
+  name: string;
+  latitude: number;
+  longitude: number;
+  category?: string | null;
+}): string {
+  const parts = [
+    normalizeLabel(loc.name || ''),
+    normalizeStableCategory(loc.category || ''),
+    loc.latitude.toFixed(5),
+    loc.longitude.toFixed(5),
+  ].filter(Boolean);
+  return parts.join('|');
+}
+
 export function shouldShowAddress(loc: BackendLocation): boolean {
   const name = normalizeLabel(loc.name || '');
   const address = normalizeLabel(loc.full_address || '');
@@ -111,8 +138,17 @@ export function shouldShowAddress(loc: BackendLocation): boolean {
   return false;
 }
 
+export function formatSubtitle(loc: BackendLocation): string {
+  const description = (loc.description || '').trim();
+  const address = (loc.full_address || '').trim();
+  if (description && address && description !== address) {
+    return `${description}${description.endsWith('.') ? '' : '.'} ${address}`;
+  }
+  return description || address || '';
+}
+
 export function formatParsedPlaceSubtitle(loc: BackendLocation): string {
-  return shouldShowAddress(loc) ? (loc.full_address || loc.description || '') : (loc.description || '');
+  return formatSubtitle(loc);
 }
 
 /**

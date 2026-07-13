@@ -11,5 +11,8 @@ CREATE POLICY "Enable all for anon" ON conversation_messages
 CREATE POLICY "Enable all for anon" ON conversation_locations
   FOR ALL USING (true) WITH CHECK (true);
 
+CREATE POLICY "Enable all for anon" ON conversation_summaries
+  FOR ALL USING (true) WITH CHECK (true);
+
 CREATE POLICY "Enable all for anon" ON long_term_memory
   FOR ALL USING (true) WITH CHECK (true);

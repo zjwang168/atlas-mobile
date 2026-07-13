@@ -2,13 +2,15 @@
 
 Extract real-world places from Reddit posts, pasted text, web pages, screenshots, and images — then geocode them, plan optimal routes, and visualize them on an interactive Mapbox map.
 
-Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **DeepSeek V4 Flash** + **Qwen 3.5 Flash** + **Gemini 3.5 Flash** + **GLM-OCR** + **Mapbox**.
+Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **LangChain 1.0 / LangGraph** + **DeepSeek V4 Flash** + **Qwen 3.5 Flash** + **Gemini 3.5 Flash** + **GLM-OCR** + **Mapbox**.
 
 > **Expo SDK v56**: This project targets the latest Expo SDK. Always consult the [official Expo v56 docs](https://docs.expo.dev/versions/v56.0.0/) before making build/config changes.
 
 ---
 
 ## Multi-Agent Workflow
+
+项目使用 **LangChain 1.0 / LangGraph** 构建多 Agent 协作系统。每个导入场景通过 LangGraph StateGraph 编排为确定性工作流（DAG），AI Chat 场景则使用基于 LangChain 的自定义 Agent Loop（tool-calling）实现动态工具调用。
 
 ```mermaid
 graph TD
@@ -38,7 +40,8 @@ graph TD
     AA --> DA[POST /atlas_ai/discover]
 
     subgraph "LLM & Vision Services"
-        QW[Qwen 3.5 Flash<br/>Live web search]
+        QW[Qwen 3.5 Flash<br/>Live web reasoning]
+        DS[DeepSeek V4 Flash<br/>Structured extraction]
         GCU[Gemini Computer Use<br/>Page screenshots]
         OCR[GLM-OCR]
     end
@@ -51,9 +54,9 @@ graph TD
         RT[Route Planner<br/>TSP + 2-opt]
     end
 
-    PT -->|web search on| QW
-    QW --> ORCH
-    PT -->|web search off| ORCH
+    PT --> QW
+    QW --> DS
+    DS --> ORCH
     PL --> ORCH
 
     SI --> OCR
@@ -61,8 +64,8 @@ graph TD
     GCU --> OCR
     OCR --> ORCH
 
-    DA --> DS[DeepSeek<br/>Address research]
-    DS --> GEO
+    DA --> DS2[DeepSeek<br/>Address research]
+    DS2 --> GEO
 
     ORCH --> EX
     EX --> EL
@@ -122,7 +125,7 @@ graph TD
 │                                                                     │
 │  AI Agent & LLM Services (my focus):                                │
 │    ├─ agent_orchestrator.py     — Supervisor Agent + tool-calling   │
-│    ├─ smart_text_service.py     — Smart text → DeepSeek extraction  │
+│    ├─ smart_text_service.py     — Smart text → Qwen + DeepSeek cascade│
 │    ├─ image_scanner.py          — Image → OCR → classify → parse    │
 │    ├─ gemini_computer_use.py    — Gemini vision browser automation   │
 │    ├─ glm_ocr.py                — GLM-OCR integration               │
@@ -130,7 +133,8 @@ graph TD
 │    ├─ atlas_ai_discovery.py     — DeepSeek address research         │
 │    ├─ extraction_pipeline.py    — Two-stage LLM + rule filtering    │
 │    ├─ web_search_router.py      — Qwen web search heuristics        │
-│    ├── llm_client.py            — DeepSeek / Qwen / Hunyuan clients │
+│    ├─ langchain_runtime.py      — LangChain model/runtime helpers    │
+│    ├─ llm_client.py            — DeepSeek / Qwen / Hunyuan / Gemini │
 │    ├─ geocoder.py               — Multi-layer fallback geocoding     │
 │    ├─ route_planner.py          — TSP + 2-opt route optimization    │
 │    ├─ conversation_manager.py   — Three-tier memory system          │
@@ -154,101 +158,80 @@ graph TD
 
 ## Data Flow
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant App as React Native App
-    participant Backend as FastAPI Backend
-    participant Source as Source Content
-    participant LLM as DeepSeek V4 Flash
-    participant Qwen as Qwen 3.5 Flash
-    participant Vision as Gemini Computer Use
-    participant OCR as GLM-OCR
-    participant Geo as Geocoder (Fallback Chain)
-    participant DB as Supabase
+数据流按使用场景拆分为四个独立的 Pipeline，每个场景有独立的处理流程。
 
-    Note over User,Geo: === User Submits Content ===
+### 场景 A：URL/Text 导入 Pipeline (Parse Pipeline)
 
-    User->>App: Paste URL / text / images
-    User->>App: Select import mode
-
-    alt === URL / Reddit Link ===
-        App->>Backend: POST /parse_link {url}
-        Backend->>Source: Fetch web content
-        Source-->>Backend: HTML / text
-        Backend->>LLM: Extract geographic entities + hierarchy
-        LLM-->>Backend: {entities, inferred_region}
-
-    else === Smart Text (no web search) ===
-        App->>Backend: POST /parse_text {text, web_search: false}
-        Backend->>LLM: Extract places from pasted text
-        LLM-->>Backend: {title, places}
-
-    else === Smart Text (with web search) ===
-        App->>Backend: POST /parse_text {text, web_search: true}
-        Backend->>Qwen: Produce live web-backed answer
-        Qwen-->>Backend: natural language text
-        Backend->>LLM: Re-extract places from answer
-        LLM-->>Backend: {title, places}
-
-    else === Image Scan ===
-        App->>Backend: POST /scan_images_base64 {images}
-        Backend->>OCR: OCR uploaded images (max 3)
-        OCR-->>Backend: extracted text
-        Backend->>Backend: LLM classify content (POI vs address)
-        Backend->>LLM: Deduplicate + filter hierarchy
-        LLM-->>Backend: structured places
-
-    else === Any Links (Vision) ===
-        App->>Backend: POST /scan_url {url}
-        Backend->>Vision: Open page, capture screenshots
-        Vision-->>Backend: screenshot array
-        Backend->>OCR: OCR all screenshots
-        OCR-->>Backend: extracted text
-        Backend->>LLM: Same extraction path as Image Scan
-        LLM-->>Backend: structured places
-
-    else === Atlas AI Discovery ===
-        App->>Backend: POST /atlas_ai/discover {query}
-        Backend->>LLM: Research exact addresses
-        LLM-->>Backend: addresses + metadata
-    end
-
-    Note over Backend,Geo: === Entity Linking + Geocoding ===
-    Backend->>LLM: Disambiguate ambiguous names
-    LLM-->>Backend: resolved names
-
-    Backend->>Geo: Layer 1: Geoapify
-    alt POI found
-        Geo-->>Backend: Coordinates
-    else Not found
-        Geo->>Geo: Layer 2: LocationIQ
-        alt POI found
-            Geo-->>Backend: Coordinates
-        else Not found
-            Geo->>Geo: Layer 3-5: Nominatim → Photon → Google Maps
-            Geo-->>Backend: Best available coords
-        end
-    end
-
-    Note over Backend: === Route Planning ===
-    Backend->>Backend: Build distance matrix (Haversine)
-    Backend->>Backend: Greedy TSP + 2-opt optimization
-
-    Note over Backend,DB: === Persistence ===
-    Backend->>DB: Save conversation + locations
-    Backend->>LLM: Extract memory items from session
-    LLM-->>Backend: {key, value, category}[]
-    Backend->>DB: Save long-term memory items
-
-    Note over Backend: === Cache & Return ===
-    Backend->>Backend: cache.set(url, result)
-    Backend-->>App: ParseResult {title, locations, route, region}
-
-    Note over App: === Render Results ===
-    App->>App: Display places on Mapbox with color-coded markers
-    App->>App: Show route polyline on map
+```text
+User Input (URL/Text)
+  → Web Fetch / Smart Text
+  → Content Classification (content_classifier.py)
+  → Structured Extraction (extraction_pipeline.py via DeepSeek)
+  → Entity Linking
+  → Geocoding (5-layer fallback)
+  → Route Planning (TSP + 2-opt)
+  → Supabase Persistence
 ```
+
+**Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`web_scraper.py`](backend/services/web_scraper.py), [`playwright_scraper.py`](backend/services/playwright_scraper.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
+
+### 场景 B：图片扫描导入 (Image Scan Pipeline)
+
+```text
+User Input (Image URL / Base64 / File Upload)
+  → Gemini Computer Use (screenshot)
+  → GLM-OCR (text extraction)
+  → Content Classification
+  → Structured Extraction (DeepSeek)
+  → Geocoding → Route Planning → Supabase
+```
+
+**Key files**: [`image_scanner.py`](backend/services/image_scanner.py), [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py)
+
+### 场景 C：AI 对话探索 (AI Chat / Atlas AI Discovery)
+
+```text
+User Query (Natural Language)
+  → Agent Loop (tool-calling)
+    → Web Search (Tavily)
+    → Address Discovery (DeepSeek)
+    → Geocoding
+  → Response with structured places
+```
+
+**Key files**: [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) (agent loop), [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py), [`web_search_router.py`](backend/services/web_search_router.py), [`tool_definitions.py`](backend/services/tool_definitions.py)
+
+### 场景 D：对话管理 (Conversation Management)
+
+```text
+User Message
+  → Conversation Manager (3-tier memory)
+    → Short-term (session context)
+    → Working (extracted places)
+    → Long-term (user preferences)
+  → LLM with context
+  → Structured response
+```
+
+**Key files**: [`conversation_manager.py`](backend/services/conversation_manager.py), [`agent_orchestrator.py`](backend/services/agent_orchestrator.py)
+
+---
+
+## LangChain & LangSmith 集成
+
+### LangChain 集成
+
+- **LangGraph StateGraph** — 用于 Parse Pipeline 的 7 节点确定性工作流（fetch → classify → extract → entity_link → geocode → route → persist），定义在 [`langchain_runtime.py`](backend/services/langchain_runtime.py) 和 [`backend/langchain/runtime.py`](backend/langchain/runtime.py)
+- **自定义 Agent Loop** — 用于 AI Chat 的 tool-calling 循环，通过 [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) 管理工具注册和调用路由
+- **Callback Handler** (`ProgressStreamHandler`) — 将 LLM Token 流实时推送到前端，定义在 [`langchain_runtime.py`](backend/services/langchain_runtime.py)
+- **Tool Definitions** — 通过 [`tool_definitions.py`](backend/services/tool_definitions.py) 注册 Agent 可用工具（添加/删除地点、重排序路线等）
+
+### LangSmith 可观测性
+
+- **配置**：通过 [`observability.py`](backend/services/observability.py) 的 `configure_langsmith()` 启用
+- **环境变量**：`LANGSMITH_API_KEY`, `LANGSMITH_PROJECT=atlas-mobile`
+- **追踪范围**：LangGraph Pipeline 执行、Agent Loop 每一步、LLM 调用
+- **用途**：调试 LLM 调用、分析 Token 消耗、优化 Prompt、追踪 Pipeline 性能
 
 ---
 
@@ -262,11 +245,9 @@ Fetches web/Reddit content, extracts geographic entities with two-stage (LLM + r
 
 ### 2. Smart Text — `POST /parse_text`
 
-Two modes:
-- **`web_search=false`**: DeepSeek parses pasted text (travel notes, Xiaohongshu, WeChat, copied text) directly into structured places. Covers sources that cannot be scraped.
-- **`web_search=true`**: Qwen 3.5 Flash first produces a live web-backed natural-language answer, then DeepSeek re-parses that answer through the same extraction pipeline. The web search router uses heuristic keyword matching (English + Chinese) to auto-detect when live search would be beneficial.
+The smart-text pipeline now always runs a `qwen3.5-flash -> deepseek-chat` cascade, then geocodes the structured output. The `web_search` flag is still accepted for API compatibility, but it no longer changes the pipeline.
 
-**Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py)
+**Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`backend/langchain/runtime.py`](backend/langchain/runtime.py)
 
 ### 3. Image Scan — `POST /scan_images_base64` / `POST /scan_images`
 
@@ -296,12 +277,12 @@ I designed and implemented the AI agent orchestration layer that coordinates spe
 
 | Agent | Responsibility | Implementation |
 |-------|---------------|----------------|
-| **Supervisor Orchestrator** | Routes each import to the correct sub-agent chain, manages session context, handles follow-up chat with tool-calling loop | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) — 992 lines |
+| **Supervisor Orchestrator** | Routes each import through an explicit LangGraph StateGraph, manages session context, handles follow-up chat with tool-calling | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) |
 | **Extraction Agent** | Two-stage pipeline: LLM extracts all geographic entities with hierarchy classification → rule engine filters out redundant high-level entities (countries, states, cities) while preserving POIs, neighborhoods, and landmarks | [`extraction_pipeline.py`](backend/services/extraction_pipeline.py) |
 | **Entity Linking Agent** | DeepSeek-based disambiguation: resolves ambiguous names by appending geographic context (ROM→Royal Ontario Museum, Suzhou→Suzhou, Jiangsu, Cambridge→Cambridge, UK), and resolves generic terms (monuments→Washington Monument) | Integrated in orchestrator |
 | **Content Classifier** | LLM routes OCR/pasted text to the correct pipeline: named POI content → entity extraction, address-heavy content → address-first geocoding | [`content_classifier.py`](backend/services/content_classifier.py) |
-| **Smart Text Agent** | Parses freeform travel notes, prompts, and itineraries via DeepSeek with configurable web search routing | [`smart_text_service.py`](backend/services/smart_text_service.py) |
-| **Web Search Router** | Heuristic + keyword matching (English + Chinese) to detect when live web search is beneficial, then routes to Qwen 3.5 Flash | [`web_search_router.py`](backend/services/web_search_router.py) |
+| **Smart Text Agent** | Parses freeform travel notes, prompts, and itineraries via a fixed Qwen 3.5 Flash → DeepSeek V4 Flash cascade | [`smart_text_service.py`](backend/services/smart_text_service.py) |
+| **Web Search Router** | Retained for compatibility; smart text no longer branches on the toggle | [`web_search_router.py`](backend/services/web_search_router.py) |
 | **Image Scanner** | Orchestrates GLM-OCR → content classification → extraction/discovery pipeline | [`image_scanner.py`](backend/services/image_scanner.py) |
 | **Vision Browser Agent** | Gemini Computer Use for visual page capture — handles anti-bot, JS-heavy, and login-walled pages | [`gemini_computer_use.py`](backend/services/gemini_computer_use.py) |
 | **OCR Service** | GLM-OCR integration via Zhipu AI's Layout Parsing API, with HEIC→JPEG conversion for iOS compatibility | [`glm_ocr.py`](backend/services/glm_ocr.py) |
@@ -547,9 +528,9 @@ atlas-mobile/
 | **Backend** | FastAPI (Python 3.10+) + Uvicorn |
 | **HTTP Client** | httpx |
 | **Browser Automation** | Playwright |
-| **Primary LLM** | DeepSeek V4 Flash (`deepseek-chat`) |
-| **Web Search LLM** | Qwen 3.5 Flash (`qwen3.5-flash`) |
-| **Vision LLM** | Gemini 3.5 Flash (`gemini-3.5-flash`) |
+| **LLM Framework** | LangChain (`langchain`, `langchain-core`, `langgraph`) — 构建 LLM Pipeline (LangGraph StateGraph) 和 Agent 循环 |
+| **LLM Observability** | LangSmith (`langsmith`) — LLM 可观测性与追踪平台 |
+| **LLM Providers** | DeepSeek V4 Flash (主力结构化提取), Qwen 3.5 Flash (Web 推理), Gemini 3.5 Flash (视觉/OCR) |
 | **OCR** | GLM-OCR (Zhipu AI Layout Parsing) |
 | **Optional LLM** | Tencent Hunyuan (`hy3-preview`) |
 | **Database** | Supabase (PostgreSQL) |
@@ -565,8 +546,8 @@ atlas-mobile/
 
 | Change | Description | Files |
 |--------|-------------|-------|
-| **Supervisor Orchestrator** | Built the core agent coordination system that routes each import type to the correct sub-agent chain, manages session context, and handles follow-up chat with a tool-calling loop | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) |
-| **Smart Text Pipeline** | Implemented DeepSeek-based extraction from freeform text (travel notes, Xiaohongshu, WeChat), with optional Qwen web search toggle for live-backed answers | [`smart_text_service.py`](backend/services/smart_text_service.py) |
+| **Supervisor Orchestrator** | Built the core agent coordination system that routes each import type through a LangGraph StateGraph, manages session context, and handles follow-up chat with a tool-calling loop | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) |
+| **Smart Text Pipeline** | Implemented a fixed Qwen 3.5 Flash → DeepSeek V4 Flash cascade from freeform text to structured places | [`smart_text_service.py`](backend/services/smart_text_service.py) |
 | **Image Scan Pipeline** | Built the GLM-OCR → LLM content classification → extraction/discovery routing pipeline | [`image_scanner.py`](backend/services/image_scanner.py), [`content_classifier.py`](backend/services/content_classifier.py) |
 | **Any Links (Vision) Pipeline** | Integrated Gemini Computer Use to capture webpage screenshots, then OCR and parse through the existing extraction path | [`gemini_computer_use.py`](backend/services/gemini_computer_use.py) |
 | **Atlas AI Discovery** | Built DeepSeek-based direct address research for natural-language queries, bypassing the extraction pipeline | [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py) |

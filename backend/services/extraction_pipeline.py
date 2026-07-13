@@ -83,7 +83,7 @@ class ExtractionPipeline:
     """Two-stage extraction: LLM extraction + rule-based hierarchical filtering."""
 
     @staticmethod
-    async def extract(text: str, source_type: str = "generic") -> dict:
+    async def extract(text: str, source_type: str = "generic", request_id: str | None = None) -> dict:
         """
         Full extraction pipeline.
 
@@ -97,12 +97,16 @@ class ExtractionPipeline:
         }
         """
         # Stage 1: Raw extraction via LLM
-        entities = await ExtractionPipeline._stage1_extract(text)
+        from backend.services import progress
+        progress.stream_note(request_id, "langchain:extract:start", {"detail": "Extracting geographic entities."})
+        entities = await ExtractionPipeline._stage1_extract(text, request_id=request_id)
 
         # Stage 2: Filter by hierarchy
+        progress.stream_note(request_id, "langchain:extract:filter", {"detail": "Filtering redundant hierarchy."})
         filtered = ExtractionPipeline._stage2_filter_hierarchy(entities["entities"])
 
         # Stage 3: Detect outliers
+        progress.stream_note(request_id, "langchain:extract:validate", {"detail": "Validating resolved coordinates."})
         final = ExtractionPipeline._stage3_detect_outliers(
             filtered["locations"],
             entities.get("inferred_region"),
@@ -119,7 +123,7 @@ class ExtractionPipeline:
         }
 
     @staticmethod
-    async def _stage1_extract(text: str) -> dict:
+    async def _stage1_extract(text: str, request_id: str | None = None) -> dict:
         """Stage 1: Use LLM to extract all entities with hierarchy levels."""
         from backend.services.llm_client import call_llm
 
@@ -135,6 +139,7 @@ class ExtractionPipeline:
             ],
             temperature=0.2,
             max_tokens=8192,
+            request_id=request_id,
         )
 
         content = result.get("content", "{}")

@@ -5,6 +5,7 @@ Handles CRUD operations for:
 - conversations: title, source_url, metadata
 - conversation_messages: role, content, tool_calls, tool_results
 - conversation_locations: name, lat, lng, hierarchy_level, is_active
+- conversation_summaries: rolling compressed chat context
 
 Uses the existing supabaseClient from the frontend (same project reference).
 Environment variables: SUPABASE_URL, SUPABASE_ANON_KEY (from .env)
@@ -110,6 +111,39 @@ class SupabaseService:
 
         return conversation_id
 
+    async def save_conversation_summary(
+        self,
+        conversation_id: str,
+        summary: str,
+        start_message_index: int,
+        end_message_index: int,
+    ) -> bool:
+        """Persist a rolling summary snapshot for a conversation."""
+        client = self._get_client()
+        if not client:
+            return False
+
+        import asyncio
+        import uuid
+
+        record = {
+            "id": str(uuid.uuid4()),
+            "conversation_id": conversation_id,
+            "summary": summary,
+            "start_message_index": start_message_index,
+            "end_message_index": end_message_index,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        try:
+            await asyncio.to_thread(
+                lambda: client.table("conversation_summaries").insert(record).execute()
+            )
+            return True
+        except Exception as e:
+            print(f"[SupabaseService] save_conversation_summary error: {e}")
+            return False
+
     async def load_conversation(self, conversation_id: str):
         """Load a conversation from Supabase. Returns a Session object."""
         client = self._get_client()
@@ -148,6 +182,16 @@ class SupabaseService:
                 .execute()
         )
 
+        # Load latest summary
+        summary_result = await asyncio.to_thread(
+            lambda: client.table("conversation_summaries")
+                .select("*")
+                .eq("conversation_id", conversation_id)
+                .order("end_message_index", desc=True)
+                .limit(1)
+                .execute()
+        )
+
         # Reconstruct session
         session = Session(session_id=str(uuid.uuid4()))
         session.conversation_id = conversation_id
@@ -155,6 +199,10 @@ class SupabaseService:
         session.source_type = conv.get("source_type")
         session.title = conv.get("title", "")
         session.inferred_region = conv.get("inferred_region")
+        if summary_result.data:
+            latest_summary = summary_result.data[0]
+            session.conversation_summary = latest_summary.get("summary", "")
+            session.summary_message_count = latest_summary.get("end_message_index", 0) or 0
 
         # Reconstruct messages
         for msg in msg_result.data or []:
@@ -181,6 +229,25 @@ class SupabaseService:
 
         return session
 
+    async def load_latest_conversation_summary(self, conversation_id: str) -> str:
+        client = self._get_client()
+        if not client:
+            return ""
+
+        import asyncio
+
+        result = await asyncio.to_thread(
+            lambda: client.table("conversation_summaries")
+                .select("summary")
+                .eq("conversation_id", conversation_id)
+                .order("end_message_index", desc=True)
+                .limit(1)
+                .execute()
+        )
+        if result.data:
+            return result.data[0].get("summary", "") or ""
+        return ""
+
     async def list_conversations(self, user_id: str = None) -> list:
         """List all saved conversations."""
         client = self._get_client()
@@ -197,7 +264,34 @@ class SupabaseService:
         query = query.order("updated_at", desc=True).limit(50)
 
         result = await asyncio.to_thread(lambda: query.execute())
-        return result.data or []
+        conversations = result.data or []
+        summaries = []
+        try:
+            summary_result = await asyncio.to_thread(
+                lambda: client.table("conversation_summaries")
+                    .select("conversation_id, summary, end_message_index, updated_at")
+                    .order("end_message_index", desc=True)
+                    .execute()
+            )
+            summaries = summary_result.data or []
+        except Exception:
+            summaries = []
+
+        latest_by_conv: dict[str, dict] = {}
+        for row in summaries:
+            conv_id = row.get("conversation_id")
+            if conv_id and conv_id not in latest_by_conv:
+                latest_by_conv[conv_id] = row
+
+        for conv in conversations:
+            latest = latest_by_conv.get(conv.get("id"))
+            if latest:
+                conv["latest_summary"] = latest.get("summary", "")
+                conv["summary_end_message_index"] = latest.get("end_message_index", 0)
+            else:
+                conv["latest_summary"] = ""
+                conv["summary_end_message_index"] = 0
+        return conversations
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         """Delete a conversation and all related data."""

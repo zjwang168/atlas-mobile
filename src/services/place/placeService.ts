@@ -11,10 +11,12 @@
  */
 
 import type { ParsedPlace } from '../import/importService';
+import { buildPlaceStableKey } from '../import/importService';
 import { supabase } from '../supabase/supabaseClient';
 
 export type SavedPlace = {
   id: string;
+  stableKey?: string;
   name: string;
   subtitle: string;
   category: string | null;
@@ -23,6 +25,15 @@ export type SavedPlace = {
   region: string | null;
   created_at: string;
 };
+
+function makeStableKey(place: { name: string; latitude: number; longitude: number; category?: string | null }): string {
+  return buildPlaceStableKey({
+    name: place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    category: place.category ?? '',
+  });
+}
 
 /**
  * Persist the selected places from an import.
@@ -117,7 +128,10 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     .select('id, name, subtitle, category, latitude, longitude, region, created_at')
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Failed to fetch places: ${error.message}`);
-  return (data ?? []) as SavedPlace[];
+  return ((data ?? []) as SavedPlace[]).map((place) => ({
+    ...place,
+    stableKey: makeStableKey(place),
+  }));
 }
 
 /**

@@ -19,7 +19,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import TopBlurFade from '../../../components/ui/top-blur-fade';
-import { type ParseResult } from '../../../services/import/importService';
+import { buildPlaceStableKey, type ParseResult } from '../../../services/import/importService';
 import { typography } from '../../../theme/typography';
 import { useHome } from '../../home/HomeContext';
 import MapboxMap, { type MapMarker } from '../../map/MapboxMap';
@@ -60,41 +60,44 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
   const { height: screenH } = useWindowDimensions();
   const { savedPlaces } = useHome();
 
-  // 名称归一化 + 坐标阈值去重
-  const normalizeName = useCallback((s: string) =>
-    s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' '),
-  []);
-  const COORD_THRESHOLD = 0.001; // ~100m
-  const isPlaceSaved = useCallback(
-    (place: { name: string; latitude: number; longitude: number }) => {
-      const name = normalizeName(place.name);
-      return savedPlaces.some((s) => {
-        const savedName = normalizeName(s.name);
-        const nameMatch = name.includes(savedName) || savedName.includes(name);
-        const coordMatch =
-          Math.abs(s.latitude - place.latitude) < COORD_THRESHOLD &&
-          Math.abs(s.longitude - place.longitude) < COORD_THRESHOLD;
-        return nameMatch || coordMatch;
-      });
-    },
-    [savedPlaces, normalizeName],
-  );
+  const getPlaceKey = useCallback((place: { stableKey?: string; name: string; latitude: number; longitude: number; type: string }) => {
+    return place.stableKey || buildPlaceStableKey({
+      name: place.name,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      category: place.type || '',
+    });
+  }, []);
+
+  const savedKeySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const place of savedPlaces) {
+      set.add(getPlaceKey({
+        stableKey: place.stableKey,
+        name: place.name,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        type: place.category || '',
+      }));
+    }
+    return set;
+  }, [getPlaceKey, savedPlaces]);
 
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(
-      result.places
-        .filter((p) => !isPlaceSaved(p))
-        .map((p) => [p.id, true])
-    )
+    Object.fromEntries(result.places.map((p) => [p.id, !savedKeySet.has(getPlaceKey(p))]))
   );
   const [detailName, setDetailName] = useState<string | null>(null);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(result.places[0]?.id ?? null);
 
   const selectedIds = useMemo(
-    () => result.places.filter((p) => selected[p.id]).map((p) => p.id),
-    [result.places, selected]
+    () => result.places.filter((p) => selected[p.id] && !savedKeySet.has(getPlaceKey(p))).map((p) => p.id),
+    [getPlaceKey, result.places, savedKeySet, selected]
   );
-  const allSelected = selectedIds.length === result.places.length;
+  const selectableIds = useMemo(
+    () => result.places.filter((p) => !savedKeySet.has(getPlaceKey(p))).map((p) => p.id),
+    [getPlaceKey, result.places, savedKeySet]
+  );
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id]);
 
   const markers: MapMarker[] = useMemo(
     () =>
@@ -109,12 +112,28 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
   );
 
   const toggleOne = (id: string) => {
-    const place = result.places.find((p) => p.id === id);
-    if (place && isPlaceSaved(place)) return;
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
   };
   const toggleAll = () =>
-    setSelected(Object.fromEntries(result.places.map((p) => [p.id, !allSelected])));
+    setSelected((prev) => ({
+      ...prev,
+      ...Object.fromEntries(selectableIds.map((id) => [id, !allSelected])),
+    }));
+
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const place of result.places) {
+        const key = getPlaceKey(place);
+        if (savedKeySet.has(key)) {
+          next[place.id] = false;
+        } else if (next[place.id] === undefined) {
+          next[place.id] = true;
+        }
+      }
+      return next;
+    });
+  }, [getPlaceKey, result.places, savedKeySet]);
 
   // Match the home ContentPanel "default" snap geometry.
   const panelHeight = screenH * 0.55;
@@ -267,21 +286,22 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
                   <Text style={styles.sentimentText}>{sentimentLabel(place.sentiment)}</Text>
                 </View>
               </View>
-              {/* Checkbox: 已保存 → 绿色勾且不可操作；未保存 → 可选中的圆圈勾 */}
-              {isPlaceSaved(place) ? (
-                <View style={[styles.check, { backgroundColor: '#E9FBF1', borderColor: '#12C170' }]}>
-                  <Ionicons name="checkmark" size={16} color="#12C170" />
-                </View>
-              ) : (
-                <TouchableOpacity
-                  onPress={() => toggleOne(place.id)}
-                  hitSlop={10}
-                  activeOpacity={0.7}
-                  style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
-                >
-                  {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
-                </TouchableOpacity>
-              )}
+              <View style={styles.checkWrap}>
+                {savedKeySet.has(getPlaceKey(place)) ? (
+                  <View style={styles.savedBadge}>
+                    <Text style={styles.savedBadgeText}>Saved</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => toggleOne(place.id)}
+                    hitSlop={10}
+                    activeOpacity={0.7}
+                    style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
+                  >
+                    {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+                  </TouchableOpacity>
+                )}
+              </View>
             </Pressable>
           ))}
         </ScrollView>
@@ -320,6 +340,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
           <Pressable
             style={styles.btnGlassClip}
             onPress={() => onAddToPlan(selectedIds)}
+            disabled={selectedIds.length === 0}
           >
             <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" isInteractive />
             <Text style={styles.btnLabelDark}>Add to plan</Text>
@@ -328,8 +349,9 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
 
         {/* Save places — prominent green capsule */}
         <Pressable
-          style={[styles.btnShadow, styles.btnGreen]}
+          style={[styles.btnShadow, styles.btnGreen, selectedIds.length === 0 && styles.btnDisabled]}
           onPress={() => onSave(selectedIds)}
+          disabled={selectedIds.length === 0}
         >
           <Text style={styles.btnLabelLight}>Save places</Text>
         </Pressable>
@@ -488,9 +510,26 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLOR.textPrimary,
   },
+  checkWrap: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  savedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#E9FBF1',
+  },
+  savedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLOR.primaryStrong,
+    letterSpacing: 0.2,
+  },
   check: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: COLOR.primary },
   checkOff: { borderWidth: 1.5, borderColor: '#D7D7DC' },
+  checkSavedDisabled: { opacity: 0.45 },
 
   // Bottom fade + action bar
   fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 130 },
@@ -519,6 +558,9 @@ const styles = StyleSheet.create({
     backgroundColor: COLOR.primary,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  btnDisabled: {
+    opacity: 0.45,
   },
   btnLabelDark: { fontSize: 16, fontWeight: '600', color: COLOR.textPrimary },
   btnLabelLight: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },

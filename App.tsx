@@ -1,7 +1,7 @@
 import { PortalHost } from '@rn-primitives/portal';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, LogBox, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import './global.css';
@@ -23,6 +23,11 @@ import {
   type ParseResult,
 } from './src/services/import/importService';
 import { saveChatHistory } from './src/services/supabase/supabaseClient';
+
+LogBox.ignoreLogs([
+  'RCTScrollViewComponentView implements focusItemsInRect',
+  '[CoreHaptics] CHHapticPattern',
+]);
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';
 type ImportMeta = {

@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
 
+import { buildPlaceStableKey } from '../import/importService';
 import type { ChatHistoryItem } from '../../features/home/HomeContext';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -133,6 +134,12 @@ export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
       locationCount: conv.location_count || convLocations.length,
       places: convLocations.map((loc: any, index: number) => ({
         id: String(index + 1),
+        stableKey: buildPlaceStableKey({
+          name: loc.name || '',
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          category: loc.category || '',
+        }),
         name: loc.name || '',
         subtitle: loc.full_address || '',
         type: loc.category || 'Place',

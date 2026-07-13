@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { ParseProgressEvent } from '../../../services/api/apiService';
@@ -28,6 +28,46 @@ type TokenInfo = {
   total_tokens: number;
 };
 
+type LiveStep = {
+  key: string;
+  label: string;
+  detail: string;
+  elapsed_s: number;
+};
+
+function LiveReasoningRow({ label, detail, elapsed_s }: { label: string; detail: string; elapsed_s: number }) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(progress, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 10,
+      tension: 90,
+    }).start();
+  }, [progress]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.liveRow,
+        {
+          opacity: progress,
+          transform: [
+            { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
+            { scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1] }) },
+          ],
+        },
+      ]}
+    >
+      <Text style={styles.liveStep}>
+        {label} · {elapsed_s}s
+      </Text>
+      <Text style={styles.liveDetail}>{detail}</Text>
+    </Animated.View>
+  );
+}
+
 /**
  * Processing state with progress timeline, token usage, and ad slot placeholder.
  */
@@ -42,6 +82,7 @@ export default function AnalyzingScreen({
   const { width: W } = useWindowDimensions();
   const [elapsed, setElapsed] = useState(0);
   const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
+  const shimmer = useRef(new Animated.Value(0)).current;
 
   // Timer
   useEffect(() => {
@@ -51,6 +92,17 @@ export default function AnalyzingScreen({
     }, 1000);
     return () => clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, { toValue: 1, duration: 1200, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: 1200, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
 
   // Poll performance endpoint for token usage
   useEffect(() => {
@@ -88,10 +140,25 @@ export default function AnalyzingScreen({
   const geocodeEvent = eventByKey.get('geocode_done');
   const finishedEvent = eventByKey.get('finished');
 
+  const liveSteps: LiveStep[] = useMemo(() => {
+    return progressEvents
+      .filter((event) => event.key.startsWith('stream_'))
+      .slice(-6)
+      .map((event, index) => {
+        const detailValue = event.data?.chunk ?? event.data?.detail ?? event.label;
+        return {
+          key: `${event.key}-${index}`,
+          label: event.label,
+          detail: String(detailValue),
+          elapsed_s: event.elapsed_s,
+        };
+      });
+  }, [progressEvents]);
+
   const timeline = [
     {
       key: 'source_fetched',
-      label: 'Source fetched.',
+      label: 'Source prepared',
       event: sourceEvent,
       detail: sourceEvent?.data?.title
         ? String(sourceEvent.data.title).slice(0, 40)
@@ -99,7 +166,7 @@ export default function AnalyzingScreen({
     },
     {
       key: 'entity_linking_done',
-      label: 'Location fetched.',
+      label: 'Places identified',
       event: entityEvent,
       detail: entityEvent?.data?.location_count
         ? `${entityEvent.data.location_count} candidate places`
@@ -107,7 +174,7 @@ export default function AnalyzingScreen({
     },
     {
       key: 'geocode_done',
-      label: 'Coordinates locked in.',
+      label: 'Coordinates resolved',
       event: geocodeEvent,
       detail: geocodeEvent?.data?.resolved_count
         ? `${geocodeEvent.data.resolved_count}/${geocodeEvent.data.query_count} coordinates resolved`
@@ -115,7 +182,7 @@ export default function AnalyzingScreen({
     },
     {
       key: 'finished',
-      label: 'Finished.',
+      label: 'Ready',
       event: finishedEvent,
       detail: finishedEvent ? 'Opening results in 2s' : 'Building result screen',
     },
@@ -158,39 +225,73 @@ export default function AnalyzingScreen({
               <Text style={styles.timerText}>{elapsed}s</Text>
             </View>
           </View>
+          <ScrollView
+            style={styles.cardScroll}
+            contentContainerStyle={styles.cardScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
-          {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-
-          {/* Timeline */}
-          <View style={styles.timeline}>
-            {timeline.map((item) => {
-              const done = Boolean(item.event);
-              return (
-                <View key={item.key} style={styles.timelineRow}>
-                  <View style={[styles.dot, done && styles.dotDone]}>
-                    {done ? <Ionicons name="checkmark" size={12} color="#FFFFFF" /> : null}
-                  </View>
-                  <View style={styles.timelineText}>
-                    <Text style={[styles.timelineLabel, done && styles.timelineLabelDone]}>
-                      {item.event?.label || item.label}
-                      {item.event ? ` ${item.event.elapsed_s}s` : ''}
-                    </Text>
-                    <Text style={styles.timelineDetail}>{item.detail}</Text>
-                  </View>
+            {liveSteps.length > 0 && (
+              <View style={styles.liveBox}>
+                <View style={styles.liveHeader}>
+                  <Text style={styles.liveLabel}>Live reasoning</Text>
+                  <Animated.View
+                    style={[
+                      styles.livePulse,
+                      {
+                        opacity: shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }),
+                        transform: [
+                          {
+                            translateX: shimmer.interpolate({ inputRange: [0, 1], outputRange: [0, 10] }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
                 </View>
-              );
-            })}
-          </View>
+                {liveSteps.map((step) => (
+                  <LiveReasoningRow
+                    key={step.key}
+                    label={step.label}
+                    detail={step.detail}
+                    elapsed_s={step.elapsed_s}
+                  />
+                ))}
+              </View>
+            )}
 
-          {/* Token usage */}
-          {tokenInfo && (
-            <View style={styles.tokenRow}>
-              <Ionicons name="flash-outline" size={13} color={COLOR.textTertiary} />
-              <Text style={styles.tokenText}>
-                Tokens: {tokenInfo.total_tokens.toLocaleString()} (in: {tokenInfo.input_tokens.toLocaleString()}, out: {tokenInfo.output_tokens.toLocaleString()})
-              </Text>
+            {/* Timeline */}
+            <View style={styles.timeline}>
+              {timeline.map((item) => {
+                const done = Boolean(item.event);
+                return (
+                  <View key={item.key} style={styles.timelineRow}>
+                    <View style={[styles.dot, done && styles.dotDone]}>
+                      {done ? <Ionicons name="checkmark" size={12} color="#FFFFFF" /> : null}
+                    </View>
+                    <View style={styles.timelineText}>
+                      <Text style={[styles.timelineLabel, done && styles.timelineLabelDone]}>
+                        {item.event?.label || item.label}
+                        {item.event ? ` ${item.event.elapsed_s}s` : ''}
+                      </Text>
+                      <Text style={styles.timelineDetail}>{item.detail}</Text>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
-          )}
+
+            {/* Token usage */}
+            {tokenInfo && (
+              <View style={styles.tokenRow}>
+                <Ionicons name="flash-outline" size={13} color={COLOR.textTertiary} />
+                <Text style={styles.tokenText}>
+                  Tokens: {tokenInfo.total_tokens.toLocaleString()} (in: {tokenInfo.input_tokens.toLocaleString()}, out: {tokenInfo.output_tokens.toLocaleString()})
+                </Text>
+              </View>
+            )}
+          </ScrollView>
         </View>
 
         {/* Ad Slot */}
@@ -239,6 +340,45 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: COLOR.textSecondary,
   },
+  liveBox: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(18, 193, 112, 0.08)',
+  },
+  liveHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  liveLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    color: COLOR.textSecondary,
+    textTransform: 'uppercase',
+  },
+  livePulse: {
+    width: 18,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#12C170',
+  },
+  liveRow: {
+    marginBottom: 10,
+  },
+  liveStep: {
+    marginBottom: 2,
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLOR.textPrimary,
+  },
+  liveDetail: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLOR.textSecondary,
+  },
   topBar: {
     alignItems: 'flex-end',
     paddingHorizontal: 20,
@@ -255,7 +395,7 @@ const styles = StyleSheet.create({
   center: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     paddingHorizontal: 20,
   },
 
@@ -296,15 +436,23 @@ const styles = StyleSheet.create({
 
   card: {
     width: '100%',
+    height: 290,
     borderRadius: 24,
     backgroundColor: COLOR.cardBg,
     padding: 20,
     marginBottom: 16,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.06,
     shadowRadius: 20,
     elevation: 4,
+  },
+  cardScroll: {
+    flex: 1,
+  },
+  cardScrollContent: {
+    paddingBottom: 4,
   },
   cardHeader: {
     flexDirection: 'row',

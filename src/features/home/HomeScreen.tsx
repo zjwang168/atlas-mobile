@@ -13,6 +13,7 @@ import type { SavedPlan } from '../my-plan/create-plan/savePlan';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
 import AIChatBox from './AIChatBox';
+import DebugPanel from './DebugPanel';
 import ChatHistoryPanel from './ChatHistoryPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
@@ -240,6 +241,8 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={handleOpenAIChat}
+          onLongPress={() => setOverlay({ kind: 'debug' })}
+          delayLongPress={800}
           style={[
             styles.aiFab,
             {
@@ -276,6 +279,10 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
       {/* Chat History Panel */}
       {overlay.kind === 'chatHistory' && (
         <ChatHistoryPanel onClose={() => setOverlay({ kind: 'none' })} />
+      )}
+
+      {overlay.kind === 'debug' && (
+        <DebugPanel onClose={() => setOverlay({ kind: 'none' })} />
       )}
 
       {/* CreatePlan full-screen overlay — triggered by "Add to plan" from SaveScreen */}

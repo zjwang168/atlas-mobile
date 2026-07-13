@@ -2,10 +2,11 @@
 
 import time
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Callable
 
 _PROGRESS: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_PROGRESS = 100
+_LISTENERS: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
 
 
 def start(request_id: str, label: str = "Starting") -> None:
@@ -28,6 +29,31 @@ def start(request_id: str, label: str = "Starting") -> None:
         _PROGRESS.popitem(last=False)
 
 
+def add_listener(request_id: str, listener: Callable[[dict[str, Any]], None]) -> None:
+    listeners = _LISTENERS.setdefault(request_id, [])
+    listeners.append(listener)
+
+
+def remove_listener(request_id: str, listener: Callable[[dict[str, Any]], None]) -> None:
+    listeners = _LISTENERS.get(request_id)
+    if not listeners:
+        return
+    try:
+        listeners.remove(listener)
+    except ValueError:
+        pass
+    if not listeners:
+        _LISTENERS.pop(request_id, None)
+
+
+def _notify(request_id: str, entry: dict[str, Any]) -> None:
+    for listener in list(_LISTENERS.get(request_id, [])):
+        try:
+            listener(entry)
+        except Exception:
+            pass
+
+
 def mark(request_id: str | None, key: str, label: str, data: dict[str, Any] | None = None) -> None:
     if not request_id:
         return
@@ -45,6 +71,7 @@ def mark(request_id: str | None, key: str, label: str, data: dict[str, Any] | No
         "data": data or {},
     })
     _PROGRESS.move_to_end(request_id)
+    _notify(request_id, entry)
 
 
 def finish(request_id: str | None, data: dict[str, Any] | None = None) -> None:
@@ -72,3 +99,9 @@ def get(request_id: str) -> dict[str, Any]:
             "events": [],
         }
     return entry
+
+
+def stream_note(request_id: str | None, label: str, data: dict[str, Any] | None = None) -> None:
+    if not request_id:
+        return
+    mark(request_id, f"stream_{int(time.time() * 1000)}", label, data or {})
