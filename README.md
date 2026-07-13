@@ -14,43 +14,85 @@ The system uses **LangChain 1.0 / LangGraph** to build a multi-agent collaborati
 
 ```mermaid
 graph TD
-    subgraph "LangGraph StateGraph (DAG Pipeline)"
-        A[fetch_web_content] --> B[classify_content]
-        B -->|address_first| C[geocode_addresses]
-        B -->|named_poi| D[extract_places]
-        D --> E[entity_linking]
-        E --> C
-        C --> F[plan_route]
-        F --> G[persist_results]
+    User[User submits content] --> App[React Native App]
+
+    subgraph "Import Modes"
+        ST[Smart Text<br/>Paste notes / prompts]
+        IS[Image Scan<br/>Upload screenshots]
+        RL[Reddit Links<br/>Paste Reddit URLs]
+        AL[Any Links<br/>Vision-scan any URL]
     end
 
-    subgraph "Custom Agent Loop (Tool-Calling)"
-        H[User Query] --> I[Agent Orchestrator]
-        I --> J[LLM: DeepSeek / Qwen]
-        J --> K{Tool Call?}
-        K -->|Yes| L["ToolRegistry.execute()"]
-        L --> M["scrape_url / geocode_location / batch_geocode / plan_route / extract_locations"]
-        M --> J
-        K -->|No| N[Final Response]
+    subgraph "Atlas AI"
+        AA[Natural language query]
     end
 
-    subgraph "Tool Registry"
-        O[scrape_url]
-        P[geocode_location]
-        Q[batch_geocode]
-        R[plan_route]
-        S[extract_locations]
+    App --> ST
+    App --> IS
+    App --> RL
+    App --> AL
+    App --> AA
+
+    RL --> PL[POST /parse_link]
+    ST --> PT[POST /parse_text]
+    IS --> SI[POST /scan_images_base64]
+    AL --> SU[POST /scan_url]
+    AA --> DA[POST /atlas_ai/discover]
+
+    subgraph "LLM & Vision Services"
+        QW[Qwen 3.5 Flash<br/>Live web reasoning]
+        DS[DeepSeek V4 Flash<br/>Structured extraction]
+        GCU[Gemini Computer Use<br/>Page screenshots]
+        OCR[GLM-OCR]
     end
 
-    subgraph "Observability"
-        T[LangSmith Tracing]
-        U[Performance Logger]
-        V[Progress Stream]
+    subgraph "Extraction & Geocoding Pipeline"
+        ORCH[Agent Orchestrator<br/>Supervisor coordination]
+        EX[Extraction Pipeline<br/>DeepSeek + hierarchy filter]
+        EL[Entity Linking<br/>Disambiguation + context]
+        GEO[Geocoder<br/>Multi-layer fallback]
+        RT[Route Planner<br/>TSP + 2-opt]
     end
 
-    G --> T
-    J --> T
-    L --> T
+    PT --> QW
+    QW --> DS
+    DS --> ORCH
+    PL --> ORCH
+
+    SI --> OCR
+    SU --> GCU
+    GCU --> OCR
+    OCR --> ORCH
+
+    DA --> DS2[DeepSeek<br/>Address research]
+    DS2 --> GEO
+
+    ORCH --> EX
+    EX --> EL
+    EL --> GEO
+    GEO --> RT
+
+    subgraph "Geocoding Fallback Chain"
+        G1[Geoapify<br/>3k/day free]
+        G2[LocationIQ<br/>5k/day free]
+        G3[Nominatim<br/>1 req/s]
+        G4[Photon<br/>No key needed]
+        G5[Google Maps]
+        G1 -->|fallback| G2 -->|fallback| G3 -->|fallback| G4 -->|fallback| G5
+    end
+
+    GEO --> G1
+
+    subgraph "Memory & Persistence"
+        MEM[Three-tier Memory<br/>Context → Session → Supabase]
+        CACHE[LRU Cache<br/>Disk-persisted]
+    end
+
+    RT --> MEM
+    MEM --> RESP[ParseResult JSON]
+    MEM --> CACHE
+
+    RESP --> App
 ```
 
 ---
