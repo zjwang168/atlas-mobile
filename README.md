@@ -378,7 +378,76 @@ sequenceDiagram
 
 **Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`playwright_scraper.py`](backend/services/playwright_scraper.py), [`web_scraper.py`](backend/services/web_scraper.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
 
-### Scenario E: Conversation Management
+### Scenario E: YouTube Links Pipeline
+
+```
+POST /parse_youtube
+→ backend/langgraph/atlas_graph.py: parse_youtube node
+  → youtube-transcript-api: transcript / subtitles / chapters
+  → DeepSeek extraction: place extraction + dedupe + hierarchy cleanup
+  → geocoder.py: geocode()
+  → route_planner.py: plan_route()
+  → supabase_service.py: persist()
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant LG as LangGraph App
+    participant YT as youtube-transcript-api
+    participant DS as DeepSeek
+    participant GEO as Geocoder
+    participant DB as Supabase
+
+    C->>API: POST /parse_youtube
+    API->>LG: parse_youtube node
+    LG->>YT: fetch transcript + chapters
+    YT-->>LG: transcript / subtitles / chapters
+    LG->>DS: extract places + dedupe + hierarchy cleanup
+    DS-->>LG: structured place candidates
+    LG->>GEO: geocode coordinates
+    GEO-->>LG: resolved locations
+    LG->>DB: persist conversation / session state
+    LG-->>API: ParseResponse
+    API-->>C: map pins + place list
+```
+
+**Key files**: [`youtube_places_service.py`](backend/services/youtube_places_service.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py)
+
+### Scenario F: Find Image Places Pipeline
+
+```
+POST /find_image_places
+→ backend/langgraph/atlas_graph.py: find_image_places node
+  → GPT-4o Vision: landmark / place recognition
+  → geocoder.py: optional coordinate validation / normalization
+  → supabase_service.py: persist()
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant LG as LangGraph App
+    participant GPT as GPT-4o Vision
+    participant GEO as Geocoder
+    participant DB as Supabase
+
+    C->>API: POST /find_image_places
+    API->>LG: find_image_places node
+    LG->>GPT: image + prompt
+    GPT-->>LG: landmark name + coordinates + confidence
+    LG->>GEO: optional coordinate validation / normalization
+    GEO-->>LG: final location payload
+    LG->>DB: persist session or conversation context
+    LG-->>API: ParseResponse
+    API-->>C: map pin + place label
+```
+
+**Key files**: [`find_image_places_service.py`](backend/services/find_image_places_service.py), [`langchain_runtime.py`](backend/services/langchain_runtime.py)
+
+### Scenario G: Conversation Management
 
 ```
 POST /chat (with session_id)
@@ -493,58 +562,11 @@ For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens
 
 ### 5. YouTube Links — `POST /parse_youtube`
 
-Accepts a YouTube URL, fetches transcript/subtitles and chapters when available, extracts places from the combined content with the DeepSeek-based extraction pipeline, geocodes the resolved locations, and returns them to Save Places.
-
-**Key files**: [`youtube_places_service.py`](backend/services/youtube_places_service.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py)
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant LG as LangGraph App
-    participant YT as youtube-transcript-api
-    participant DS as DeepSeek
-    participant GEO as Geocoder
-    participant DB as Supabase
-
-    C->>API: POST /parse_youtube
-    API->>LG: parse_youtube node
-    LG->>YT: fetch transcript + chapters
-    YT-->>LG: transcript / subtitles / chapters
-    LG->>DS: extract places + dedupe + hierarchy cleanup
-    DS-->>LG: structured place candidates
-    LG->>GEO: geocode coordinates
-    GEO-->>LG: resolved locations
-    LG->>DB: persist conversation / session state
-    LG-->>API: ParseResponse
-    API-->>C: map pins + place list
-```
+See `Data Flow` Scenario E for the live call chain and diagram.
 
 ### 6. Find Image Places — `POST /find_image_places`
 
-Accepts a single image, uses GPT-4o vision to identify a landmark or place, and returns one structured location result with coordinates and confidence for the Save Places screen.
-
-**Key files**: [`find_image_places_service.py`](backend/services/find_image_places_service.py), [`langchain_runtime.py`](backend/services/langchain_runtime.py)
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant LG as LangGraph App
-    participant GPT as GPT-4o Vision
-    participant GEO as Geocoder
-    participant DB as Supabase
-
-    C->>API: POST /find_image_places
-    API->>LG: find_image_places node
-    LG->>GPT: image + prompt
-    GPT-->>LG: landmark name + coordinates + confidence
-    LG->>GEO: optional coordinate validation / normalization
-    GEO-->>LG: final location payload
-    LG->>DB: persist session or conversation context
-    LG-->>API: ParseResponse
-    API-->>C: map pin + place label
-```
+See `Data Flow` Scenario F for the live call chain and diagram.
 
 ### 7. Atlas AI Discovery — `POST /atlas_ai/discover`
 
