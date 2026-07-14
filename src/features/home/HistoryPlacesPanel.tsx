@@ -6,7 +6,7 @@ import { Text } from '@/components/ui/text';
 import { typography } from '../../theme/typography';
 import type { ChatHistoryItem } from './HomeContext';
 import { useHome } from './HomeContext';
-import { buildPlaceStableKey } from '../../services/import/importService';
+import { isSamePlace } from '../../services/place/placeService';
 
 type HistoryPlacesPanelProps = {
   item: ChatHistoryItem;
@@ -25,21 +25,10 @@ function sentimentLabel(sentiment?: string | null) {
 }
 
 function isPlaceSaved(
-  place: { stableKey?: string; name: string; latitude: number; longitude: number; subtitle: string; type: string },
-  savedPlaces: { stableKey?: string; name: string; latitude: number; longitude: number; subtitle?: string; type?: string }[],
+  place: { name: string; latitude: number; longitude: number },
+  savedPlaces: { name: string; latitude: number; longitude: number }[],
 ): boolean {
-  const key = place.stableKey || buildPlaceStableKey({
-    name: place.name,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    category: place.type || '',
-  });
-  return savedPlaces.some((s) => (s.stableKey || buildPlaceStableKey({
-    name: s.name,
-    latitude: s.latitude,
-    longitude: s.longitude,
-    category: s.type || '',
-  })) === key);
+  return savedPlaces.some((s) => isSamePlace(place, s));
 }
 
 export default function HistoryPlacesPanel({

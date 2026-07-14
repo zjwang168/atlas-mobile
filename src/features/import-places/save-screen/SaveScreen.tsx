@@ -19,7 +19,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import TopBlurFade from '../../../components/ui/top-blur-fade';
-import { buildPlaceStableKey, type ParseResult } from '../../../services/import/importService';
+import { type ParseResult } from '../../../services/import/importService';
+import { isSamePlace } from '../../../services/place/placeService';
 import { typography } from '../../../theme/typography';
 import { useHome } from '../../home/HomeContext';
 import MapboxMap, { type MapMarker } from '../../map/MapboxMap';
@@ -60,42 +61,25 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
   const { height: screenH } = useWindowDimensions();
   const { savedPlaces } = useHome();
 
-  const getPlaceKey = useCallback((place: { stableKey?: string; name: string; latitude: number; longitude: number; type: string }) => {
-    return place.stableKey || buildPlaceStableKey({
-      name: place.name,
-      latitude: place.latitude,
-      longitude: place.longitude,
-      category: place.type || '',
-    });
-  }, []);
-
-  const savedKeySet = useMemo(() => {
-    const set = new Set<string>();
-    for (const place of savedPlaces) {
-      set.add(getPlaceKey({
-        stableKey: place.stableKey,
-        name: place.name,
-        latitude: place.latitude,
-        longitude: place.longitude,
-        type: place.category || '',
-      }));
-    }
-    return set;
-  }, [getPlaceKey, savedPlaces]);
+  const isPlaceAlreadySaved = useCallback(
+    (place: { name: string; latitude: number; longitude: number }) =>
+      savedPlaces.some((s) => isSamePlace(place, s)),
+    [savedPlaces],
+  );
 
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(result.places.map((p) => [p.id, !savedKeySet.has(getPlaceKey(p))]))
+    Object.fromEntries(result.places.map((p) => [p.id, !isPlaceAlreadySaved(p)]))
   );
   const [detailName, setDetailName] = useState<string | null>(null);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(result.places[0]?.id ?? null);
 
   const selectedIds = useMemo(
-    () => result.places.filter((p) => selected[p.id] && !savedKeySet.has(getPlaceKey(p))).map((p) => p.id),
-    [getPlaceKey, result.places, savedKeySet, selected]
+    () => result.places.filter((p) => selected[p.id] && !isPlaceAlreadySaved(p)).map((p) => p.id),
+    [isPlaceAlreadySaved, result.places, selected]
   );
   const selectableIds = useMemo(
-    () => result.places.filter((p) => !savedKeySet.has(getPlaceKey(p))).map((p) => p.id),
-    [getPlaceKey, result.places, savedKeySet]
+    () => result.places.filter((p) => !isPlaceAlreadySaved(p)).map((p) => p.id),
+    [isPlaceAlreadySaved, result.places]
   );
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id]);
 
@@ -124,8 +108,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
     setSelected((prev) => {
       const next = { ...prev };
       for (const place of result.places) {
-        const key = getPlaceKey(place);
-        if (savedKeySet.has(key)) {
+        if (isPlaceAlreadySaved(place)) {
           next[place.id] = false;
         } else if (next[place.id] === undefined) {
           next[place.id] = true;
@@ -133,7 +116,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
       }
       return next;
     });
-  }, [getPlaceKey, result.places, savedKeySet]);
+  }, [isPlaceAlreadySaved, result.places]);
 
   // Match the home ContentPanel "default" snap geometry.
   const panelHeight = screenH * 0.55;
@@ -287,7 +270,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
                 </View>
               </View>
               <View style={styles.checkWrap}>
-                {savedKeySet.has(getPlaceKey(place)) ? (
+                {isPlaceAlreadySaved(place) ? (
                   <View style={styles.savedBadge}>
                     <Text style={styles.savedBadgeText}>Saved</Text>
                   </View>
