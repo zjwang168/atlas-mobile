@@ -180,6 +180,7 @@ function AppContent() {
             sourceUrl,
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: 'any_links',
           });
           setTimeout(() => {
             if (!cancelled) setOverlay('save');
@@ -226,6 +227,7 @@ function AppContent() {
             sourceUrl: 'image_scan',
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: 'image_scan',
           });
           setTimeout(() => {
             if (!cancelled) setOverlay('save');
@@ -248,6 +250,17 @@ function AppContent() {
         : importMeta?.mode === 'atlas_discover'
         ? discoverFromAtlasQuery
         : parseInput;
+    // Which flow produced this chat — stored to conversations.source_type
+    // and shown as a chip in Chat History.
+    const historySourceType =
+      importMeta?.mode === 'smart_text' || importMeta?.mode === 'atlas_discover'
+        ? 'smart_text'
+        : /^(https?:\/\/|www\.)\S+$/i.test(importText.trim())
+        ? importText.includes('reddit.com')
+          ? 'reddit_links'
+          : 'link'
+        : 'text';
+
     runner(importText, handleProgress)
       .then((result) => {
         if (!cancelled) {
@@ -267,6 +280,7 @@ function AppContent() {
             sourceUrl,
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: historySourceType,
           });
 
           // 同步到 Supabase（异步，不阻塞 UI）
@@ -275,6 +289,7 @@ function AppContent() {
             sourceUrl,
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: historySourceType,
           })
             .then(({ id, createdAt }) => {
               replaceChatHistoryItem(tempHistoryId, {
@@ -284,6 +299,7 @@ function AppContent() {
                 locationCount: adaptedResult.places.length,
                 places: adaptedResult.places,
                 createdAt,
+                sourceType: historySourceType,
               });
             })
             .catch((err) => console.warn('[App] saveChatHistory error:', err));
