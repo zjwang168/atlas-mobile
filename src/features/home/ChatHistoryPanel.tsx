@@ -10,6 +10,16 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+/** Display labels for conversations.source_type values. */
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  smart_text: 'Smart Text',
+  image_scan: 'Image Scan',
+  reddit_links: 'Reddit Links',
+  any_links: 'Any Links',
+  link: 'Link',
+  text: 'Text',
+};
+
 import { loadChatHistory } from '../../services/supabase/supabaseClient';
 import type { ChatHistoryItem } from './HomeContext';
 import { useHome } from './HomeContext';
@@ -100,6 +110,13 @@ export default function ChatHistoryPanel({ onClose }: ChatHistoryPanelProps) {
           {item.title}
         </Text>
         <View style={styles.itemActions}>
+          {item.sourceType ? (
+            <View style={styles.sourceChip}>
+              <Text style={styles.sourceChipText}>
+                {SOURCE_TYPE_LABELS[item.sourceType] ?? item.sourceType}
+              </Text>
+            </View>
+          ) : null}
           <Text style={styles.itemCount}>{item.locationCount} 个地点</Text>
           <TouchableOpacity
             style={styles.iconButton}
@@ -251,6 +268,18 @@ const styles = StyleSheet.create({
     color: '#000',
     flex: 1,
     marginRight: 12,
+  },
+  sourceChip: {
+    backgroundColor: 'rgba(0, 122, 255, 0.10)',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 6,
+  },
+  sourceChipText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#007AFF',
   },
   itemCount: {
     fontSize: 13,

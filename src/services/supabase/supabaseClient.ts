@@ -38,6 +38,7 @@ export async function saveChatHistory(
     id,
     title: item.title,
     source_url: item.sourceUrl,
+    source_type: item.sourceType ?? null,
     location_count: item.locationCount,
     created_at: createdAt,
     updated_at: createdAt,
@@ -88,7 +89,7 @@ export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
   // Load conversations
   const { data: conversations, error: convError } = await supabase
     .from('conversations')
-    .select('id, title, source_url, location_count, created_at')
+    .select('id, title, source_url, source_type, location_count, created_at')
     .order('updated_at', { ascending: false })
     .limit(50);
 
@@ -131,6 +132,7 @@ export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
       id: conv.id,
       title: conv.title || 'Untitled',
       sourceUrl: conv.source_url || '',
+      sourceType: conv.source_type ?? undefined,
       locationCount: conv.location_count || convLocations.length,
       places: convLocations.map((loc: any, index: number) => ({
         id: String(index + 1),
