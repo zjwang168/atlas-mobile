@@ -1,5 +1,5 @@
-import Constants from 'expo-constants';
 import { ParseResult } from '@/types/route';
+import Constants from 'expo-constants';
 
 /**
  * Base URL for the FastAPI backend.
@@ -223,6 +223,24 @@ export async function scanUrl(
   onProgress?: (progress: ParseProgress) => void,
 ): Promise<ParseResult> {
   return postParseWithProgress<ParseResult>('/scan_url', { url }, onProgress);
+}
+
+export async function parseYoutube(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_youtube', { url }, onProgress);
+}
+
+/**
+ * Find image places — identify geographic location from an image.
+ * Uses Google Cloud Vision landmark detection + optional DeepSeek vision fallback.
+ */
+export async function findImagePlace(
+  imageBase64: string,
+  onProgress?: (progress: ParseProgress) => void,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/find_image_places', { image: imageBase64 }, onProgress);
 }
 
 export async function fetchMemories(): Promise<MemoryRecord[]> {

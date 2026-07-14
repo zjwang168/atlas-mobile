@@ -10,8 +10,10 @@
 
 import {
   discoverAtlasPlaces as apiDiscoverAtlasPlaces,
+  findImagePlace as apiFindImagePlace,
   parseLink as apiParseLink,
   parseText as apiParseText,
+  parseYoutube as apiParseYoutube,
   scanUrl as apiScanUrl,
   type ParseProgress,
 } from '../api/apiService';
@@ -200,5 +202,25 @@ export async function scanAnyLink(
   onProgress?: ParseProgressHandler,
 ): Promise<ParseResult> {
   const backend = (await apiScanUrl(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseYoutubeLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseYoutube(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+/**
+ * Identify a geographic place from a single image using Google Cloud Vision
+ * landmark detection + optional DeepSeek vision fallback.
+ */
+export async function findImagePlace(
+  imageBase64: string,
+  onProgress?: ParseProgressHandler,
+): Promise<ParseResult> {
+  const backend = (await apiFindImagePlace(imageBase64, onProgress)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }

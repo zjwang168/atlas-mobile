@@ -181,6 +181,11 @@ class ScanUrlRequest(BaseModel):
     request_id: Optional[str] = None
 
 
+class YouTubeParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     detail: str
 
@@ -288,6 +293,48 @@ async def scan_url(req: ScanUrlRequest):
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Any Links scan failed: {e}")
+
+
+@app.post("/parse_youtube", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_youtube(req: YouTubeParseRequest):
+    """Identify places from a YouTube video's transcript and chapters."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No YouTube URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+
+    try:
+        progress.start(req.request_id, "Opening video.") if req.request_id else None
+        progress.stream_note(req.request_id, "youtube:fetch", {"detail": "Fetching transcript and chapters."})
+
+        from backend.services.youtube_places_service import parse_youtube_url
+        result = await parse_youtube_url(url, request_id=req.request_id)
+        result["source_type"] = "youtube_links"
+
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+
+        locs = result.get("locations", [])
+        print(f"\n{'='*50}")
+        print(f"📺 YouTube URL: {url[:80]}")
+        print(f"📍 Locations ({len(locs)}):")
+        for i, loc in enumerate(locs):
+            print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
+        print(f"{'='*50}\n")
+
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"YouTube parse failed: {e}")
 
 
 @app.post("/parse_link", response_model=ParseResponse,
@@ -583,6 +630,41 @@ async def health():
 async def parse_progress(request_id: str) -> dict:
     """Return progress events for an in-flight or recent parse request."""
     return progress.get(request_id)
+
+
+# ---- Find Image Places ----
+
+class FindImagePlaceRequest(BaseModel):
+    image: str  # base64-encoded image data
+
+
+@app.post("/find_image_places", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def find_image_place_endpoint(req: FindImagePlaceRequest):
+    """Identify a geographic place from an image using Google Cloud Vision + optional DeepSeek vision fallback.
+
+    Accepts a single base64-encoded image.
+    Returns the identified landmark name, coordinates, and a confidence-based subtitle.
+    """
+    if not req.image:
+        raise HTTPException(status_code=400, detail="No image provided.")
+
+    from backend.services.find_image_places_service import find_image_place
+    try:
+        result = await find_image_place(req.image)
+        loc = (result.get("locations") or [{}])[0]
+        print(
+            f"\n{'='*50}\n"
+            f"🖼️ Find Image Place: {result.get('title', '?')}\n"
+            f"📍 ({loc.get('latitude', 0):.4f}, {loc.get('longitude', 0):.4f})\n"
+            f"🔍 Source: {loc.get('source', '?')}\n"
+            f"{'='*50}\n"
+        )
+        return ParseResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Find image place failed: {e}")
 
 
 # ---- Image Scan ----

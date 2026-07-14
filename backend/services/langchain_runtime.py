@@ -17,7 +17,7 @@ from langchain_core.messages import (AIMessage, BaseMessage, HumanMessage,
                                      SystemMessage)
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-ProviderName = Literal["deepseek", "qwen", "hunyuan", "gemini"]
+ProviderName = Literal["deepseek", "qwen", "hunyuan", "gemini", "openai"]
 
 
 def _message_from_dict(message: dict[str, Any]) -> BaseMessage:
@@ -48,6 +48,8 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
 
 
 def _base_url_for_provider(provider: ProviderName) -> Optional[str]:
+    if provider == "openai":
+        return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1"
     if provider == "deepseek":
         return os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").strip() or "https://api.deepseek.com/v1"
     if provider == "qwen":
@@ -81,6 +83,7 @@ def get_chat_model(provider: ProviderName, model: str, temperature: float = 0.2)
     from langchain_openai import ChatOpenAI
 
     api_key_env = {
+        "openai": "OPENAI_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
         "qwen": "QWEN_API_KEY",
         "hunyuan": "HUNYUAN_API_KEY",

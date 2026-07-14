@@ -1,6 +1,6 @@
 # OurAtlas — AI-Powered Travel Location Extractor
 
-Extract real-world places from Reddit posts, pasted text, web pages, screenshots, and images — then geocode them, plan optimal routes, and visualize them on an interactive Mapbox map.
+Extract real-world places from Reddit posts, pasted text, web pages, screenshots, YouTube videos, and images — then geocode them, plan optimal routes, and visualize them on an interactive Mapbox map.
 
 Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **LangChain 1.0 / LangGraph** + **DeepSeek V4 Flash** + **Qwen 3.5 Flash** + **Gemini 3.5 Flash** + **GLM-OCR** + **Mapbox**.
 
@@ -18,9 +18,11 @@ graph TD
 
     subgraph "Import Modes"
         ST[Smart Text<br/>Paste notes / prompts]
-        IS[Image Scan<br/>Upload screenshots]
+        FT[Find Text Places<br/>Upload screenshots]
         RL[Reddit Links<br/>Paste Reddit URLs]
         AL[Any Links<br/>Vision-scan any URL]
+        YT[YouTube Links<br/>Paste YouTube URLs]
+        IF[Find Image Places<br/>Upload a photo]
     end
 
     subgraph "Atlas AI"
@@ -28,15 +30,19 @@ graph TD
     end
 
     App --> ST
-    App --> IS
+    App --> FT
     App --> RL
     App --> AL
+    App --> YT
+    App --> IF
     App --> AA
 
     RL --> PL[POST /parse_link]
     ST --> PT[POST /parse_text]
-    IS --> SI[POST /scan_images_base64]
+    FT --> SI[POST /scan_images_base64]
     AL --> SU[POST /scan_url]
+    YT --> YP[POST /parse_youtube]
+    IF --> FP[POST /find_image_places]
     AA --> DA[POST /atlas_ai/discover]
 
     subgraph "LLM & Vision Services"
@@ -44,6 +50,7 @@ graph TD
         DS[DeepSeek V4 Flash<br/>Structured extraction]
         GCU[Gemini Computer Use<br/>Page screenshots]
         OCR[GLM-OCR]
+        GPT4O[GPT-4o Vision<br/>Photo place recognition]
     end
 
     subgraph "Extraction & Geocoding Pipeline"
@@ -63,6 +70,10 @@ graph TD
     SU --> GCU
     GCU --> OCR
     OCR --> ORCH
+
+    YP --> DS
+    FP --> GPT4O
+    GPT4O --> GEO
 
     DA --> DS2[DeepSeek<br/>Address research]
     DS2 --> GEO
@@ -162,6 +173,7 @@ graph TD
 | **LLM Providers** | DeepSeek V4 Flash | Primary: structured extraction, classification, entity linking |
 | | Qwen 3.5 Flash | Secondary: web search decision, smart text reasoning |
 | | Gemini 3.5 Flash | Vision/OCR: Computer Use, screenshot analysis |
+| | GPT-4o | Vision: single-image place recognition |
 | **LLM Observability** | LangSmith | Full-stack tracing for LangGraph pipelines & agent calls |
 | **OCR** | GLM-OCR | Chinese text extraction from images |
 | **Geocoding** | Geoapify → LocationIQ → Google Maps (5-tier fallback) | Address → coordinates resolution |
@@ -174,7 +186,7 @@ graph TD
 
 ## Data Flow
 
-Data flows are split into five independent pipelines, each with a dedicated processing path.
+Data flows are split into seven independent pipelines, each with a dedicated processing path.
 
 ### Scenario A: Smart Text Pipeline
 
@@ -221,7 +233,7 @@ sequenceDiagram
 
 **Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
 
-### Scenario B: Image Scan Pipeline
+### Scenario B: Find Text Places Pipeline
 
 ```
 POST /scan_images or POST /scan_images_base64
@@ -424,7 +436,7 @@ The smart-text pipeline runs a `qwen3.5-flash → deepseek-chat` cascade, then g
 
 **Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`backend/langchain/runtime.py`](backend/langchain/runtime.py)
 
-### 3. Image Scan — `POST /scan_images_base64` / `POST /scan_images`
+### 3. Find Text Places — `POST /scan_images_base64` / `POST /scan_images`
 
 Upload up to 3 images (JPEG/PNG, or HEIC converted to JPEG). GLM-OCR extracts text, then an LLM-based [`content_classifier.py`](backend/services/content_classifier.py) routes the content: named POI → extraction pipeline, address-heavy → address-first geocoding via Atlas AI Discovery.
 
@@ -432,11 +444,23 @@ Upload up to 3 images (JPEG/PNG, or HEIC converted to JPEG). GLM-OCR extracts te
 
 ### 4. Any Links (Vision) — `POST /scan_url`
 
-For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens the page in a Playwright browser, dismisses interstitials, scrolls top-to-bottom, and captures up to 8 screenshots. GLM-OCR reads the screenshots, then reuses the Image Scan extraction path downstream.
+For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens the page in a Playwright browser, dismisses interstitials, scrolls top-to-bottom, and captures up to 8 screenshots. GLM-OCR reads the screenshots, then reuses the Find Text Places extraction path downstream.
 
 **Key files**: [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py)
 
-### 5. Atlas AI Discovery — `POST /atlas_ai/discover`
+### 5. YouTube Links — `POST /parse_youtube`
+
+Accepts a YouTube URL, fetches transcript/subtitles and chapters when available, extracts places from the combined content with the DeepSeek-based extraction pipeline, geocodes the resolved locations, and returns them to Save Places.
+
+**Key files**: [`youtube_places_service.py`](backend/services/youtube_places_service.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py)
+
+### 6. Find Image Places — `POST /find_image_places`
+
+Accepts a single image, uses GPT-4o vision to identify a landmark or place, and returns one structured location result with coordinates and confidence for the Save Places screen.
+
+**Key files**: [`find_image_places_service.py`](backend/services/find_image_places_service.py), [`langchain_runtime.py`](backend/services/langchain_runtime.py)
+
+### 7. Atlas AI Discovery — `POST /atlas_ai/discover`
 
 For natural-language queries that need exact addresses: DeepSeek researches addresses directly (e.g. "Where did Taylor Swift get married?" → Church of St. Patrick, Killarney), then address-first geocoding returns coordinates without going through the full extraction pipeline.
 
@@ -456,7 +480,9 @@ For natural-language queries that need exact addresses: DeepSeek researches addr
 | **Content Classifier** | LLM routes OCR/pasted text to the correct pipeline: named POI content → entity extraction, address-heavy content → address-first geocoding | [`content_classifier.py`](backend/services/content_classifier.py) |
 | **Smart Text Agent** | Parses freeform travel notes, prompts, and itineraries via a fixed Qwen 3.5 Flash → DeepSeek V4 Flash cascade | [`smart_text_service.py`](backend/services/smart_text_service.py) |
 | **Web Search Router** | Retained for compatibility; smart text no longer branches on the toggle | [`web_search_router.py`](backend/services/web_search_router.py) |
-| **Image Scanner** | Orchestrates GLM-OCR → content classification → extraction/discovery pipeline | [`image_scanner.py`](backend/services/image_scanner.py) |
+| **Find Text Places** | Orchestrates GLM-OCR → content classification → extraction/discovery pipeline | [`image_scanner.py`](backend/services/image_scanner.py) |
+| **YouTube Links Parser** | Extracts transcript/subtitles + chapters, then runs DeepSeek extraction and geocoding | [`youtube_places_service.py`](backend/services/youtube_places_service.py) |
+| **Find Image Places** | Uses GPT-4o vision to identify a landmark from a single photo | [`find_image_places_service.py`](backend/services/find_image_places_service.py) |
 | **Vision Browser Agent** | Gemini Computer Use for visual page capture — handles anti-bot, JS-heavy, and login-walled pages | [`gemini_computer_use.py`](backend/services/gemini_computer_use.py) |
 | **OCR Service** | GLM-OCR integration via Zhipu AI's Layout Parsing API, with HEIC → JPEG conversion for iOS compatibility | [`glm_ocr.py`](backend/services/glm_ocr.py) |
 | **Atlas Discovery Agent** | DeepSeek-based direct address research for natural-language queries, bypassing the extraction pipeline | [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py) |
