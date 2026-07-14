@@ -48,6 +48,9 @@ graph TD
     subgraph "LLM & Vision Services"
         QW[Qwen 3.5 Flash<br/>Live web reasoning]
         DS[DeepSeek V4 Flash<br/>Structured extraction]
+        TV[Tavily API<br/>Web search tool]
+        YTAPI[youtube-transcript-api<br/>Transcript + chapters]
+        RED[Reddit API<br/>Post title + selftext]
         GCU[Gemini Computer Use<br/>Page screenshots]
         OCR[GLM-OCR]
         GPT4O[GPT-4o Vision<br/>Photo place recognition]
@@ -65,6 +68,7 @@ graph TD
 
     PT --> QW
     QW --> DS
+    QW --> TV
     DS --> ORCH
     PL --> ORCH
 
@@ -73,7 +77,9 @@ graph TD
     GCU --> OCR
     OCR --> ORCH
 
-    YP --> DS
+    YP --> YTAPI
+    YTAPI --> DS
+    PL --> RED
     FP --> GPT4O
     GPT4O --> GEO
 
@@ -135,8 +141,8 @@ graph TD
         T5[extract_locations]
         T6[web_search<br/>Tavily API]
         T7[compute_region_cluster ⏳]
-        T8[save_conversation ⏳]
-        T9[load_conversation ⏳]
+        T8[save_conversation]
+        T9[load_conversation]
         T10[map_operation ⏳]
     end
 
@@ -491,11 +497,54 @@ Accepts a YouTube URL, fetches transcript/subtitles and chapters when available,
 
 **Key files**: [`youtube_places_service.py`](backend/services/youtube_places_service.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py)
 
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant LG as LangGraph App
+    participant YT as youtube-transcript-api
+    participant DS as DeepSeek
+    participant GEO as Geocoder
+    participant DB as Supabase
+
+    C->>API: POST /parse_youtube
+    API->>LG: parse_youtube node
+    LG->>YT: fetch transcript + chapters
+    YT-->>LG: transcript / subtitles / chapters
+    LG->>DS: extract places + dedupe + hierarchy cleanup
+    DS-->>LG: structured place candidates
+    LG->>GEO: geocode coordinates
+    GEO-->>LG: resolved locations
+    LG->>DB: persist conversation / session state
+    LG-->>API: ParseResponse
+    API-->>C: map pins + place list
+```
+
 ### 6. Find Image Places — `POST /find_image_places`
 
 Accepts a single image, uses GPT-4o vision to identify a landmark or place, and returns one structured location result with coordinates and confidence for the Save Places screen.
 
 **Key files**: [`find_image_places_service.py`](backend/services/find_image_places_service.py), [`langchain_runtime.py`](backend/services/langchain_runtime.py)
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant LG as LangGraph App
+    participant GPT as GPT-4o Vision
+    participant GEO as Geocoder
+    participant DB as Supabase
+
+    C->>API: POST /find_image_places
+    API->>LG: find_image_places node
+    LG->>GPT: image + prompt
+    GPT-->>LG: landmark name + coordinates + confidence
+    LG->>GEO: optional coordinate validation / normalization
+    GEO-->>LG: final location payload
+    LG->>DB: persist session or conversation context
+    LG-->>API: ParseResponse
+    API-->>C: map pin + place label
+```
 
 ### 7. Atlas AI Discovery — `POST /atlas_ai/discover`
 

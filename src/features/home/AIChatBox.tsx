@@ -1,10 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Modal,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -13,7 +14,12 @@ import {
 
 import { Text } from '@/components/ui/text';
 import ContentPanel from '../../components/content-panel/ContentPanel';
-import { chatWithAtlas, createChatSession } from '../../services/api/apiService';
+import {
+  chatWithAtlas,
+  createChatSession,
+  fetchConversation,
+  fetchConversations,
+} from '../../services/api/apiService';
 import type { ParsedPlace } from '../../services/import/importService';
 import { typography } from '../../theme/typography';
 
@@ -22,6 +28,28 @@ type Message = {
   role: 'user' | 'assistant';
   text: string;
 };
+
+type ConversationSummary = {
+  id: string;
+  title: string;
+  source_url?: string | null;
+  location_count?: number;
+  message_count?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+function normalizeAssistantText(text: string): string {
+  const cleaned = text.trim();
+  if (!cleaned) return 'No response returned.';
+
+  // Guard against accidental tool-call JSON being rendered in the chat bubble.
+  if ((cleaned.startsWith('{') || cleaned.startsWith('```')) && cleaned.includes('"tool"')) {
+    return 'Working on that...';
+  }
+
+  return cleaned;
+}
 
 type AIChatBoxProps = {
   places: ParsedPlace[];
@@ -50,6 +78,9 @@ export default function AIChatBox({
   const [inputText, setInputText] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [historyVisible, setHistoryVisible] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [conversationList, setConversationList] = useState<ConversationSummary[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
   const subtitle = useMemo(
@@ -76,6 +107,49 @@ export default function AIChatBox({
     return created.session_id;
   };
 
+  const loadConversationHistory = async () => {
+    setHistoryVisible(true);
+    setLoadingHistory(true);
+    try {
+      const items = await fetchConversations();
+      setConversationList(items);
+    } catch (error) {
+      console.warn('[AIChatBox] fetchConversations failed:', error);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const restoreConversation = async (conversationId: string) => {
+    setPending(true);
+    try {
+      const detail = await fetchConversation(conversationId);
+      const session = detail.session;
+      const restoredMessages: Message[] = (detail.messages || []).map((message, index) => ({
+        id: `${message.role}_${index}_${Date.now()}`,
+        role: message.role === 'user' ? 'user' : 'assistant',
+        text: message.content,
+      }));
+
+      setSessionId(session.session_id);
+      setMessages(
+        restoredMessages.length > 0
+          ? restoredMessages
+          : [{ id: `restored_${Date.now()}`, role: 'assistant', text: 'Conversation restored.' }],
+      );
+      setHistoryVisible(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to restore conversation.';
+      setMessages((prev) => [...prev, { id: `ai_${Date.now()}`, role: 'assistant', text: message }]);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!visible) setHistoryVisible(false);
+  }, [visible]);
+
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || pending) return;
@@ -93,7 +167,7 @@ export default function AIChatBox({
         {
           id: `ai_${Date.now()}`,
           role: 'assistant',
-          text: response.response || 'No response returned.',
+          text: normalizeAssistantText(response.response || ''),
         },
       ]);
 
@@ -140,6 +214,9 @@ export default function AIChatBox({
                 {subtitle}
               </Text>
             </View>
+            <TouchableOpacity onPress={loadConversationHistory} style={styles.historyButton} activeOpacity={0.75}>
+              <Ionicons name="time-outline" size={18} color="#1A1A1A" />
+            </TouchableOpacity>
             <TouchableOpacity onPress={onClose} style={styles.closeButton} activeOpacity={0.75}>
               <Ionicons name="close" size={20} color="#1A1A1A" />
             </TouchableOpacity>
@@ -182,6 +259,59 @@ export default function AIChatBox({
               </TouchableOpacity>
             </View>
           </KeyboardAvoidingView>
+
+          <Modal
+            visible={historyVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setHistoryVisible(false)}
+          >
+            <View style={styles.modalBackdrop}>
+              <View style={styles.modalCard}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Conversation History</Text>
+                  <TouchableOpacity onPress={() => setHistoryVisible(false)} style={styles.modalClose}>
+                    <Ionicons name="close" size={18} color="#1A1A1A" />
+                  </TouchableOpacity>
+                </View>
+
+                {loadingHistory ? (
+                  <View style={styles.modalLoading}>
+                    <ActivityIndicator size="large" color="#2563EB" />
+                  </View>
+                ) : conversationList.length === 0 ? (
+                  <View style={styles.modalEmpty}>
+                    <Text style={styles.modalEmptyText}>No saved conversations yet.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={conversationList}
+                    keyExtractor={(item) => item.id}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        style={styles.convItem}
+                        activeOpacity={0.8}
+                        onPress={() => restoreConversation(item.id)}
+                        disabled={pending}
+                      >
+                        <View style={styles.convItemTop}>
+                          <Text style={styles.convTitle} numberOfLines={1}>
+                            {item.title || 'Untitled conversation'}
+                          </Text>
+                          <Text style={styles.convMeta}>
+                            {item.location_count ?? 0} places
+                          </Text>
+                        </View>
+                        <Text style={styles.convSub} numberOfLines={1}>
+                          {item.source_url || item.id}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  />
+                )}
+              </View>
+            </View>
+          </Modal>
         </View>
       )}
     </ContentPanel>
@@ -221,6 +351,14 @@ const styles = StyleSheet.create({
     color: '#717171',
   },
   closeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  historyButton: {
     width: 40,
     height: 40,
     borderRadius: 999,
@@ -297,5 +435,77 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     opacity: 0.45,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    maxHeight: '70%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    ...typography.display,
+    color: '#111827',
+  },
+  modalClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalLoading: {
+    paddingVertical: 40,
+  },
+  modalEmpty: {
+    paddingVertical: 32,
+    alignItems: 'center',
+  },
+  modalEmptyText: {
+    ...typography.bodySmall,
+    color: '#6B7280',
+  },
+  convItem: {
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  convItemTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  convTitle: {
+    flex: 1,
+    ...typography.body,
+    color: '#111827',
+    fontWeight: '700',
+  },
+  convMeta: {
+    ...typography.bodySmall,
+    color: '#2563EB',
+  },
+  convSub: {
+    marginTop: 4,
+    ...typography.bodySmall,
+    color: '#6B7280',
   },
 });
