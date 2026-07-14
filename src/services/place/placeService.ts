@@ -35,6 +35,35 @@ function makeStableKey(place: { name: string; latitude: number; longitude: numbe
   });
 }
 
+/** Normalize a place name for fuzzy comparison. */
+const normalizePlaceName = (s: string) =>
+  s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
+
+/** Coordinate proximity treated as "the same spot" (~100m). */
+const COORD_THRESHOLD = 0.001;
+
+/**
+ * Whether two parsed/saved places refer to the same real-world place:
+ * normalized names contain each other OR coordinates are within ~100m.
+ *
+ * Single source of truth for place identity — used by the save dedup in
+ * savePlaces() and by the "Saved" badges in SaveScreen / HistoryPlacesPanel.
+ * (Exact stableKey matching is too brittle for this: a name variant or a
+ * geocode differing by >1e-5 degrees breaks it.)
+ */
+export function isSamePlace(
+  a: { name: string; latitude: number; longitude: number },
+  b: { name: string; latitude: number; longitude: number },
+): boolean {
+  const nameA = normalizePlaceName(a.name);
+  const nameB = normalizePlaceName(b.name);
+  const nameMatch = nameA.includes(nameB) || nameB.includes(nameA);
+  const coordMatch =
+    Math.abs(a.latitude - b.latitude) < COORD_THRESHOLD &&
+    Math.abs(a.longitude - b.longitude) < COORD_THRESHOLD;
+  return nameMatch || coordMatch;
+}
+
 /**
  * Persist the selected places from an import.
  *
@@ -48,24 +77,6 @@ export async function savePlaces(
 ): Promise<SavedPlace[]> {
   if (places.length === 0) return [];
 
-  // 改进的去重：名称互相包含 或 坐标极接近（~100m）
-  const normalizeName = (s: string) =>
-    s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
-  const COORD_THRESHOLD = 0.001;
-
-  const isDuplicate = (
-    place: { name: string; latitude: number; longitude: number },
-    saved: { name: string; latitude: number; longitude: number },
-  ): boolean => {
-    const name = normalizeName(place.name);
-    const savedName = normalizeName(saved.name);
-    const nameMatch = name.includes(savedName) || savedName.includes(name);
-    const coordMatch =
-      Math.abs(saved.latitude - place.latitude) < COORD_THRESHOLD &&
-      Math.abs(saved.longitude - place.longitude) < COORD_THRESHOLD;
-    return nameMatch || coordMatch;
-  };
-
   const { data: existing, error: existingError } = await supabase
     .from('places')
     .select('id, name, subtitle, category, latitude, longitude, region, created_at');
@@ -73,12 +84,11 @@ export async function savePlaces(
 
   const existingRows = (existing ?? []) as SavedPlace[];
 
-  // 过滤出真正的新地点
-  const seenInBatch = new Set<string>();
+  // 过滤出真正的新地点（对库内已存 + 本批次内部都去重）
   const placesToInsert = places.filter((place) => {
-    const dupInExisting = existingRows.some((saved) => isDuplicate(place, saved));
+    const dupInExisting = existingRows.some((saved) => isSamePlace(place, saved));
     const dupInBatch = places.some(
-      (other, idx) => places.indexOf(other) !== idx && isDuplicate(place, other),
+      (other, idx) => places.indexOf(other) !== idx && isSamePlace(place, other),
     );
     if (dupInExisting || dupInBatch) return false;
     return true;
@@ -86,7 +96,7 @@ export async function savePlaces(
 
   if (placesToInsert.length === 0) {
     // 全部重复，返回匹配的已存记录
-    return places.map((place) => existingRows.find((saved) => isDuplicate(place, saved)))
+    return places.map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
       .filter((place): place is SavedPlace => Boolean(place));
   }
 
@@ -115,7 +125,7 @@ export async function savePlaces(
 
   return [
     ...places
-      .map((place) => existingRows.find((saved) => isDuplicate(place, saved)))
+      .map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
       .filter((place): place is SavedPlace => Boolean(place)),
     ...((data ?? []) as SavedPlace[]),
   ];
