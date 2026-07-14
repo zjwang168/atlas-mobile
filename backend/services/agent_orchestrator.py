@@ -46,6 +46,11 @@ class AgentOrchestrator:
         init_registry()  # Ensure all tools are registered
         self._parse_graph = self._build_parse_graph()
 
+    @property
+    def parse_graph(self):
+        """Expose the compiled parse graph for LangGraph Studio / server entrypoints."""
+        return self._parse_graph
+
     async def run_pipeline(self, url: str, session: Session, request_id: str | None = None) -> dict:
         """Run the complete extraction pipeline for a URL through LangGraph."""
         from backend.services.cache import get_cached_result, set_cached_result

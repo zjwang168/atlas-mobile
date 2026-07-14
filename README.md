@@ -10,7 +10,7 @@ Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **LangChain 1
 
 ## Multi-Agent Workflow
 
-The system uses **LangChain 1.0 / LangGraph** to build a multi-agent collaboration system. Import pipelines are orchestrated as deterministic DAGs through a LangGraph StateGraph, while the AI Chat scenario uses a custom LangChain-based Agent Loop (tool-calling) for dynamic tool invocation.
+The system uses **LangChain 1.0 / LangGraph** to build a multi-agent collaboration system. Import pipelines now run through a Studio-visible LangGraph app, while the FastAPI layer stays as a thin compatibility shell for the mobile app.
 
 ```mermaid
 graph TD
@@ -53,12 +53,14 @@ graph TD
         GPT4O[GPT-4o Vision<br/>Photo place recognition]
     end
 
-    subgraph "Extraction & Geocoding Pipeline"
+    subgraph "LangGraph Core"
+        LG[LangGraph App<br/>Atlas graph nodes + checkpoints]
         ORCH[Agent Orchestrator<br/>Supervisor coordination]
         EX[Extraction Pipeline<br/>DeepSeek + hierarchy filter]
         EL[Entity Linking<br/>Disambiguation + context]
         GEO[Geocoder<br/>Multi-layer fallback]
         RT[Route Planner<br/>TSP + 2-opt]
+        MEM[Memory / Checkpoints<br/>thread state + session memory]
     end
 
     PT --> QW
@@ -78,10 +80,12 @@ graph TD
     DA --> DS2[DeepSeek<br/>Address research]
     DS2 --> GEO
 
-    ORCH --> EX
+    ORCH --> LG
+    LG --> EX
     EX --> EL
     EL --> GEO
     GEO --> RT
+    RT --> MEM
 
     subgraph "Geocoding Fallback Chain"
         G1[Geoapify<br/>3k/day free]
@@ -99,7 +103,6 @@ graph TD
         CACHE[LRU Cache<br/>Disk-persisted]
     end
 
-    RT --> MEM
     MEM --> RESP[ParseResult JSON]
     MEM --> CACHE
 
@@ -110,7 +113,7 @@ graph TD
 
 ## LangChain Agent Runtime
 
-The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **custom Agent Loop** (tool-calling) for dynamic conversational interactions. Memory is managed in three tiers, and all LLM calls are traced via LangSmith.
+The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **custom Agent Loop** (tool-calling) for dynamic conversational interactions. Memory is managed in three tiers, graph runs are checkpointed by thread, and all LLM calls are traced via LangSmith.
 
 ```mermaid
 graph TD
@@ -144,7 +147,7 @@ graph TD
     end
 
     subgraph "LangSmith Tracing"
-        LS1[Pipeline: AtlasParseGraph]
+        LS1[Pipeline: AtlasApp]
         LS2[Agent Steps: agent_loop_step]
         LS3[LLM Calls: langsmith_tags]
         LS4[Performance Metrics]
@@ -155,11 +158,27 @@ graph TD
     TREQ --> LS2
 ```
 
+**How to view Studio and traces**
+1. Start the LangGraph Agent Server locally with the repo's `langgraph.json`.
+2. Open Studio from the LangSmith UI and connect it to that local server.
+3. Run a flow from `backend/langgraph/atlas_graph.py`.
+4. Reuse the same `thread_id` to inspect one run across multiple steps.
+5. Open a checkpoint to inspect state, replay from that point, or fork a new branch.
+
+**How to view LangSmith Evaluation**
+1. Open [smith.langchain.com](https://smith.langchain.com).
+2. Create a dataset with input examples and optional reference outputs.
+3. Run an experiment against your graph or chain.
+4. Inspect each row to see the run output, evaluator scores, and latency/cost.
+5. Compare multiple experiments to understand whether a prompt or graph change improved results.
+
 **Architecture Reference**:
-- **StateGraph (DAG Pipeline)**: 7-node DAG defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py): `fetch → classify (conditional branch) → extract → entity_link → geocode → route → persist`
+- **LangGraph App**: [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) is the Studio-facing entry point. It dispatches `parse_link`, `parse_text`, `scan_url`, `parse_youtube`, `find_image_places`, `atlas_ai_discover`, and `chat` into graph nodes.
+- **StateGraph (DAG Pipeline)**: The parse path still runs as a deterministic graph, but now it is visible to Studio as a graph run with checkpoints and thread state.
 - **Agent Loop**: Defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py). Runs up to 10 steps per turn. Each iteration: build context → `call_llm(tools=TOOLS)` → classify response → `tool_call` triggers `registry.execute()` and continues; `final_answer` or `text` returns.
-- **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), Working (extracted places), Long-term (user preferences via Supabase).
-- **Tracing**: [`observability.py`](backend/services/observability.py) — Pipeline graph named `AtlasParseGraph`, agent loop steps tagged as `agent_loop_step`, LLM calls tagged with `langsmith_tags`.
+- **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), working (extracted places), and long-term (user preferences via Supabase). Checkpoints give you thread-scoped time travel during runs.
+- **Tracing**: [`observability.py`](backend/services/observability.py) — LangSmith tracing is enabled through environment config, with graph runs, agent loop steps, and LLM calls visible in LangSmith.
+- **Studio Entry Point**: [`backend/langgraph_app.py`](backend/langgraph_app.py) + [`langgraph.json`](langgraph.json) expose the graph to LangGraph Studio without changing the FastAPI compatibility layer.
 
 ---
 
@@ -192,15 +211,16 @@ Data flows are split into seven independent pipelines, each with a dedicated pro
 
 ```
 POST /parse_text
-→ smart_text_service.py: analyze_smart_text()
-  → web_search_router.py: should_use_web_search()
-  → (optional) web_search() via Tavily
-  → LLM (Qwen for web reasoning, DeepSeek for extraction)
-→ content_classifier.py: classify_content()
-→ extraction_pipeline.py: extract_places()
-→ geocoder.py: geocode()
-→ route_planner.py: plan_route()
-→ supabase_service.py: persist()
+→ backend/langgraph/atlas_graph.py: parse_text node
+  → smart_text_service.py: analyze_smart_text()
+    → web_search_router.py: should_use_web_search()
+    → (optional) web_search() via Tavily
+    → LLM (Qwen for web reasoning, DeepSeek for extraction)
+  → content_classifier.py: classify_content()
+  → extraction_pipeline.py: extract_places()
+  → geocoder.py: geocode()
+  → route_planner.py: plan_route()
+  → supabase_service.py: persist()
 ```
 
 ```mermaid
@@ -214,7 +234,8 @@ sequenceDiagram
     participant DB as Supabase
 
     C->>API: POST /parse_text (pasted text)
-    API->>STS: analyze_smart_text()
+    API->>LG: parse_text node
+    LG->>STS: analyze_smart_text()
     STS->>WSR: should_use_web_search()
     WSR-->>STS: decision (boolean)
     alt web_search enabled
@@ -237,14 +258,15 @@ sequenceDiagram
 
 ```
 POST /scan_images or POST /scan_images_base64
-→ image_scanner.py: scan_images()
-  → gemini_computer_use.py: Gemini screenshot analysis
-  → glm_ocr.py: OCR text extraction
-→ content_classifier.py: classify_content()
-→ extraction_pipeline.py: extract_places()
-→ geocoder.py: geocode()
-→ route_planner.py: plan_route()
-→ supabase_service.py: persist()
+→ backend/langgraph/atlas_graph.py: scan_url / scan_images_base64 path
+  → image_scanner.py: scan_images()
+    → gemini_computer_use.py: Gemini screenshot analysis
+    → glm_ocr.py: OCR text extraction
+  → content_classifier.py: classify_content()
+  → extraction_pipeline.py: extract_places()
+  → geocoder.py: geocode()
+  → route_planner.py: plan_route()
+  → supabase_service.py: persist()
 ```
 
 ```mermaid
@@ -275,12 +297,13 @@ sequenceDiagram
 
 ```
 POST /parse_link (reddit.com URL)
-→ agent_orchestrator.py: run_pipeline()
-→ web_fetch_chain.py: fetch_web_content()
-  → _looks_like_reddit() → true
-  → _scrape_reddit() → reddit_fetcher.py: fetch_reddit_post()
-  → Reddit JSON API (title + selftext)
-→ content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
+→ backend/langgraph/atlas_graph.py: parse_link node
+  → agent_orchestrator.py: run_pipeline()
+  → web_fetch_chain.py: fetch_web_content()
+    → _looks_like_reddit() → true
+    → _scrape_reddit() → reddit_fetcher.py: fetch_reddit_post()
+    → Reddit JSON API (title + selftext)
+  → content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
 ```
 
 ```mermaid
@@ -313,10 +336,11 @@ sequenceDiagram
 
 ```
 POST /parse_link (non-reddit URL) or POST /scrape_url
-→ web_fetch_chain.py: fetch_web_content()
-  → Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX + BeautifulSoup (fallback chain)
-→ (optional) playwright_scraper.py or web_scraper.py for Gemini screenshot extraction
-→ content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
+→ backend/langgraph/atlas_graph.py: parse_link / scan_url path
+  → web_fetch_chain.py: fetch_web_content()
+    → Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX + BeautifulSoup (fallback chain)
+  → (optional) playwright_scraper.py or web_scraper.py for Gemini screenshot extraction
+  → content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
 ```
 
 ```mermaid
@@ -352,15 +376,16 @@ sequenceDiagram
 
 ```
 POST /chat (with session_id)
-→ agent_orchestrator.py: chat()
-→ conversation_manager.py: get_session_context()
-  → Short-term: current conversation history
-  → Working: extracted places buffer
-  → Long-term: user preferences from DB
-→ _agent_loop(): LLM with context + tools
-  → ToolRegistry.execute() for tool calls
-  → conversation_manager.py: update_session()
-→ Structured response
+→ backend/langgraph/atlas_graph.py: chat node
+  → agent_orchestrator.py: chat()
+  → conversation_manager.py: get_session_context()
+    → Short-term: current conversation history
+    → Working: extracted places buffer
+    → Long-term: user preferences from DB
+  → _agent_loop(): LLM with context + tools
+    → ToolRegistry.execute() for tool calls
+    → conversation_manager.py: update_session()
+  → Structured response
 ```
 
 ```mermaid
@@ -410,7 +435,7 @@ sequenceDiagram
 | Feature | Implementation | Status |
 |---------|---------------|--------|
 | **Tracing** | LangSmith via [`configure_langsmith()`](backend/services/observability.py) | ✅ Configured via environment |
-| **Pipeline Tracing** | `AtlasParseGraph` named graph in LangGraph | ✅ Active |
+| **Pipeline Tracing** | `AtlasApp` graph in LangGraph + `AtlasParseGraph` legacy inner graph | ✅ Active |
 | **Agent Loop Tracing** | `agent_loop_step` run metadata | ✅ Active |
 | **LLM Call Tracing** | Model metadata with `langsmith_tags` | ✅ Active |
 | **Performance Metrics** | Custom [`performance_logger.py`](backend/services/performance_logger.py) | ✅ Active |
@@ -418,7 +443,19 @@ sequenceDiagram
 
 Configuration in [`observability.py`](backend/services/observability.py) reads `LANGSMITH_API_KEY` from the environment and sets `LANGSMITH_TRACING=true`, `LANGCHAIN_TRACING_V2=true`, and `LANGSMITH_PROJECT=atlas-mobile`. The system degrades gracefully when the key is absent.
 
-**What is LangSmith Evaluation?** LangSmith Evaluation is a feature that allows you to test LLM pipelines against predefined datasets to measure performance (accuracy, latency, cost). To set it up: 1) Create a dataset in the [LangSmith UI](https://smith.langchain.com), 2) Add test cases (inputs + expected outputs), 3) Run evaluators using `langsmith.evaluation.evaluate()` or `run_on_dataset()`. This is an optional enhancement and not required for core functionality.
+**How to use LangGraph Studio**
+1. Start the LangGraph Agent Server locally with the repo's `langgraph.json`.
+2. Open Studio from the LangSmith UI and connect it to that local server.
+3. Run a flow from `backend/langgraph/atlas_graph.py`.
+4. Reuse the same `thread_id` to inspect one run across multiple steps.
+5. Open a checkpoint to inspect state, replay from that point, or fork a new branch.
+
+**How to use LangSmith Evaluation**
+1. Open [smith.langchain.com](https://smith.langchain.com).
+2. Create a dataset with input examples and optional reference outputs.
+3. Run an experiment against your graph or chain.
+4. Inspect each row to see the run output, evaluator scores, and latency/cost.
+5. Compare multiple experiments to see whether a prompt or graph change improved results.
 
 ---
 
@@ -474,7 +511,7 @@ For natural-language queries that need exact addresses: DeepSeek researches addr
 
 | Agent | Responsibility | Implementation |
 |-------|---------------|----------------|
-| **Supervisor Orchestrator** | Routes each import through an explicit LangGraph StateGraph, manages session context, handles follow-up chat with tool-calling | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) |
+| **Supervisor Orchestrator** | Routes each import through the LangGraph app, manages session context, handles follow-up chat with tool-calling | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) |
 | **Extraction Agent** | Two-stage pipeline: LLM extracts all geographic entities with hierarchy classification → rule engine filters out redundant high-level entities (countries, states, cities) while preserving POIs, neighborhoods, and landmarks | [`extraction_pipeline.py`](backend/services/extraction_pipeline.py) |
 | **Entity Linking Agent** | DeepSeek-based disambiguation: resolves ambiguous names by appending geographic context (ROM → Royal Ontario Museum, Suzhou → Suzhou, Jiangsu, Cambridge → Cambridge, UK), resolves generic terms (monuments → Washington Monument) | Integrated in orchestrator |
 | **Content Classifier** | LLM routes OCR/pasted text to the correct pipeline: named POI content → entity extraction, address-heavy content → address-first geocoding | [`content_classifier.py`](backend/services/content_classifier.py) |
