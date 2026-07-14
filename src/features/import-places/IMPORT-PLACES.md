@@ -66,9 +66,9 @@ export type ParseResult = {
 export async function parseLink(input: string): Promise<ParseResult>
 ```
 
-`parseLink` currently returns mocked data after a 2.2 s delay. Replace its body with the real native parser call when ready — the UI contract is stable.
+The import adapter now calls the live backend. Smart text always follows a `qwen3.5-flash -> deepseek-chat` cascade before geocoding; the `webSearch` toggle is still accepted for compatibility but no longer changes that cascade. Image scan still starts with GLM OCR, Reddit links keep the DeepSeek-based parse route, and Any Links keeps the Gemini vision path.
 
-`src/types/import.ts` is an empty stub; add any additional shared types there if needed.
+`src/types/import.ts` is still an empty stub; add any additional shared types there if needed.
 
 ---
 

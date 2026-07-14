@@ -61,7 +61,7 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const listRef = useRef<FlatList<PlaceDetail>>(null);
-  const { deleteSavedPlace, selectedPlaceId: contextSelectedId } = useHome();
+  const { deleteSavedPlace, selectedPlaceId: contextSelectedId, savedPlaces } = useHome();
   // Use the prop if provided, otherwise fall back to context value
   const effectiveSelectedId = selectedPlaceId ?? contextSelectedId;
 
@@ -85,6 +85,11 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    setPlaces(savedPlaces.map(toPlaceDetail));
+    setLoading(false);
+  }, [savedPlaces]);
 
   // Auto-scroll to the selected place when selectedPlaceId changes
   useEffect(() => {

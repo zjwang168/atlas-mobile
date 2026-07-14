@@ -25,6 +25,10 @@ class Session:
 
     # Messages: list of {"role", "content", "tool_calls", "tool_results", "timestamp"}
     messages: list = field(default_factory=list)
+    conversation_summary: str = ""
+    summary_message_count: int = 0
+    last_summary_at: float = 0.0
+    user_memory_summary: str = ""
 
     # Extracted data
     locations: list = field(default_factory=list)  # GeocodedLocation dicts
@@ -63,6 +67,9 @@ class Session:
             "title": self.title,
             "locations": self.locations,
             "route": self.route,
+            "conversation_summary": self.conversation_summary,
+            "summary_message_count": self.summary_message_count,
+            "user_memory_summary": self.user_memory_summary,
             "removed_noise": self.removed_noise,
             "removed_hierarchy": self.removed_hierarchy,
             "inferred_region": self.inferred_region,
@@ -81,6 +88,7 @@ class Session:
             "source_url": self.source_url,
             "location_count": len(self.locations),
             "message_count": len(self.messages),
+            "summary_message_count": self.summary_message_count,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -201,6 +209,46 @@ class ConversationManager:
             except Exception:
                 return []
         return []
+
+    async def save_conversation_summary(
+        self,
+        session_id: str,
+        summary: str,
+        start_message_index: int,
+        end_message_index: int,
+    ) -> bool:
+        """Persist a rolling summary for a conversation."""
+        session = self.get_session(session_id)
+        if not session or not session.conversation_id:
+            return False
+
+        session.conversation_summary = summary
+        session.summary_message_count = end_message_index
+        session.last_summary_at = time.time()
+
+        supabase = self._get_supabase()
+        if supabase:
+            try:
+                await supabase.save_conversation_summary(
+                    conversation_id=session.conversation_id,
+                    summary=summary,
+                    start_message_index=start_message_index,
+                    end_message_index=end_message_index,
+                )
+                return True
+            except Exception as e:
+                print(f"[ConversationManager] Failed to save summary: {e}")
+                return False
+        return False
+
+    async def load_latest_conversation_summary(self, conversation_id: str) -> str:
+        supabase = self._get_supabase()
+        if not supabase:
+            return ""
+        try:
+            return await supabase.load_latest_conversation_summary(conversation_id)
+        except Exception:
+            return ""
 
     # ---- Long-term Persistence (Conversations) ----
 

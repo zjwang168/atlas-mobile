@@ -54,7 +54,9 @@ User request:
 JSON:"""
 
 
-async def discover_places_from_query(query: str) -> dict:
+async def discover_places_from_query(query: str, request_id: str | None = None) -> dict:
+    from backend.services import progress
+    progress.stream_note(request_id, "atlas_ai:research", {"detail": "Researching exact places from the request."})
     llm_result = await asyncio.to_thread(
         call_llm,
         messages=[
@@ -65,6 +67,7 @@ async def discover_places_from_query(query: str) -> dict:
         ],
         temperature=0.2,
         max_tokens=4096,
+        request_id=request_id,
     )
 
     content = llm_result.get("content", "{}")
@@ -87,6 +90,7 @@ async def discover_places_from_query(query: str) -> dict:
         })
 
     geocoded = await batch_geocode(geocode_queries, city_name=inferred_region)
+    progress.stream_note(request_id, "atlas_ai:geocode", {"detail": f"Resolved {len([g for g in geocoded if g])} candidate places."})
 
     resolved_locations: list[dict] = []
     for place, geo in zip(places, geocoded):

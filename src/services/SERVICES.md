@@ -19,6 +19,23 @@ export async function parseLink(url: string): Promise<ParseResult>
 
 `ParseResult` is defined in `src/types/route.ts`. See `src/features/parse-route/FETCHPARSE.md` for full backend documentation.
 
+### `import/importService.ts`
+
+Import parsing adapter for the four import modes.
+
+```ts
+/**
+ * Parse pasted input or links into places for the import flow.
+ * Smart text now always uses a qwen -> deepseek cascade.
+ * Image scan keeps GLM OCR as the entry point.
+ * Reddit links keep the existing DeepSeek parse pipeline.
+ * Any links keep the Gemini-based vision path.
+ */
+export async function parseInput(input: string): Promise<ParseResult>
+```
+
+`parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape.
+
 ## Stub Services (not yet implemented)
 
 These files are empty placeholders. Implement here when the feature is ready — **do not create new service files**:
@@ -26,7 +43,7 @@ These files are empty placeholders. Implement here when the feature is ready —
 | File | Intended purpose |
 |---|---|
 | `ai/aiService.ts` | Claude / DeepSeek AI client for in-app AI features |
-| `import/importService.ts` | Import pipeline: parse raw text → extract places |
+| `import/importService.ts` | Import pipeline: parse pasted text / URLs / scans into places |
 | `place/placeService.ts` | CRUD for user's saved places (Supabase) |
 | `supabase/supabaseClient.ts` | Supabase JS client singleton |
 

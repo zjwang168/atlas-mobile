@@ -24,6 +24,7 @@ export type Overlay =
   | { kind: 'none' }
   | { kind: 'search' }
   | { kind: 'chatHistory' }
+  | { kind: 'debug' }
   | { kind: 'placeDetail'; placeName: string }
   | { kind: 'planDetail'; planId: string }
   | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void }

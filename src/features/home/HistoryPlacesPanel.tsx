@@ -6,6 +6,7 @@ import { Text } from '@/components/ui/text';
 import { typography } from '../../theme/typography';
 import type { ChatHistoryItem } from './HomeContext';
 import { useHome } from './HomeContext';
+import { buildPlaceStableKey } from '../../services/import/importService';
 
 type HistoryPlacesPanelProps = {
   item: ChatHistoryItem;
@@ -23,33 +24,22 @@ function sentimentLabel(sentiment?: string | null) {
   return 'Neutral';
 }
 
-/** 名称归一化：去标点、去多余空格、转小写 */
-function normalizeName(s: string): string {
-  return s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
-}
-
-/** 坐标距离阈值 ~100m */
-const COORD_THRESHOLD = 0.001;
-
-/**
- * 判断某个 ParsedPlace 是否已存在于 savedPlaces 中。
- * 同时检查名称互相包含 + 坐标是否极接近，以处理：
- * - "White House" vs "White House, 1600 Pennsylvania Avenue"
- * - (31.1135, 121.0505) vs (31.1135, 121.0506)
- */
 function isPlaceSaved(
-  place: { name: string; latitude: number; longitude: number },
-  savedPlaces: { name: string; latitude: number; longitude: number }[],
+  place: { stableKey?: string; name: string; latitude: number; longitude: number; subtitle: string; type: string },
+  savedPlaces: { stableKey?: string; name: string; latitude: number; longitude: number; subtitle?: string; type?: string }[],
 ): boolean {
-  const name = normalizeName(place.name);
-  return savedPlaces.some((s) => {
-    const savedName = normalizeName(s.name);
-    const nameMatch = name.includes(savedName) || savedName.includes(name);
-    const coordMatch =
-      Math.abs(s.latitude - place.latitude) < COORD_THRESHOLD &&
-      Math.abs(s.longitude - place.longitude) < COORD_THRESHOLD;
-    return nameMatch || coordMatch;
+  const key = place.stableKey || buildPlaceStableKey({
+    name: place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    category: place.type || '',
   });
+  return savedPlaces.some((s) => (s.stableKey || buildPlaceStableKey({
+    name: s.name,
+    latitude: s.latitude,
+    longitude: s.longitude,
+    category: s.type || '',
+  })) === key);
 }
 
 export default function HistoryPlacesPanel({
@@ -65,7 +55,7 @@ export default function HistoryPlacesPanel({
   const [selected, setSelected] = useState<string[]>([]);
   const listRef = useRef<FlatList>(null);
 
-  // 每个地点是否已保存（通过 name+coord 判断，不是用 ID）
+  // 每个地点是否已保存（通过稳定键判断，不是用 ID）
   const savedSet = useMemo(() => {
     const set = new Set<string>();
     for (const place of item.places) {
@@ -80,7 +70,7 @@ export default function HistoryPlacesPanel({
   useEffect(() => {
     const initial: string[] = [];
     for (const place of item.places) {
-      if (isPlaceSaved(place, savedPlaces)) {
+      if (!isPlaceSaved(place, savedPlaces)) {
         initial.push(place.id);
       }
     }
@@ -97,9 +87,8 @@ export default function HistoryPlacesPanel({
   }, [selectedPlaceId, item.places]);
 
   const toggleSelect = useCallback((id: string) => {
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id],
-    );
+    if (savedSet.has(id)) return;
+    setSelected((prev) => prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]);
   }, []);
 
   const handleSave = useCallback(() => {
@@ -108,6 +97,9 @@ export default function HistoryPlacesPanel({
       onSavePlaces(unsavedSelected);
     }
   }, [selected, savedSet, onSavePlaces]);
+
+  const selectableCount = item.places.length - savedSet.size;
+  const selectedUnsavedCount = selected.filter((id) => !savedSet.has(id)).length;
 
   return (
     <View style={styles.container}>
@@ -122,7 +114,12 @@ export default function HistoryPlacesPanel({
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.saveButton} onPress={handleSave} activeOpacity={0.8}>
+        <TouchableOpacity
+          style={[styles.saveButton, selectableCount === 0 && styles.saveButtonDisabled]}
+          onPress={handleSave}
+          activeOpacity={0.8}
+          disabled={selectedUnsavedCount === 0}
+        >
           <Ionicons name="bookmark-outline" size={16} color="#FFFFFF" />
           <Text style={styles.saveButtonText}>Save places</Text>
         </TouchableOpacity>
@@ -161,10 +158,9 @@ export default function HistoryPlacesPanel({
                   <Text style={styles.chipText}>{sentimentLabel(place.sentiment)}</Text>
                 </View>
               </View>
-              {/* 已保存 → 绿色勾且不可操作；未保存 → 可选中的圆圈勾 */}
               {isSaved ? (
-                <View style={[styles.check, styles.checkSaved]}>
-                  <Ionicons name="checkmark" size={16} color="#12C170" />
+                <View style={styles.savedBadge}>
+                  <Text style={styles.savedBadgeText}>Saved</Text>
                 </View>
               ) : (
                 <TouchableOpacity
@@ -234,6 +230,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
+  saveButtonDisabled: {
+    opacity: 0.45,
+  },
   list: {
     flex: 1,
     paddingHorizontal: 16,
@@ -293,8 +292,20 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(60,60,67,0.08)',
     marginHorizontal: 12,
   },
+  savedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#E9FBF1',
+    alignSelf: 'center',
+  },
+  savedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#0C8149',
+    letterSpacing: 0.2,
+  },
   check: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: '#12C170' },
   checkOff: { borderWidth: 1.5, borderColor: '#D7D7DC' },
-  checkSaved: { backgroundColor: '#E9FBF1', borderWidth: 1.5, borderColor: '#12C170' },
 });

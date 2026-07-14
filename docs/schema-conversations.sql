@@ -83,6 +83,26 @@ CREATE TABLE conversation_locations (
 
 CREATE INDEX idx_conv_locations_conv ON conversation_locations(conversation_id);
 
+CREATE TABLE conversation_summaries (
+
+    id UUID PRIMARY KEY,
+
+    conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+
+    summary TEXT NOT NULL,
+
+    start_message_index INTEGER NOT NULL DEFAULT 0,
+
+    end_message_index INTEGER NOT NULL DEFAULT 0,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+
+);
+
+CREATE INDEX idx_conv_summaries_conv ON conversation_summaries(conversation_id, end_message_index DESC);
+
 CREATE TABLE long_term_memory (
 
     id UUID PRIMARY KEY,
@@ -100,4 +120,3 @@ CREATE TABLE long_term_memory (
 );
 
 CREATE INDEX idx_ltm_key ON long_term_memory(key);
-

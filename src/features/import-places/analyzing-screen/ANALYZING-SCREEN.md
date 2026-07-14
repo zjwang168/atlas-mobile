@@ -2,7 +2,7 @@
 
 ## Overview
 
-Full-screen animated overlay shown while `parseLink()` is running. Displays an animated SVG mesh-gradient background, a swaying link-preview pill, and a cancel button. Does not drive the parse itself — the parent calls `onCancel` if the user wants to abort.
+Full-screen animated overlay shown while `parseLink()` is running. Displays an animated SVG mesh-gradient background, a swaying link-preview pill, a cancel button, and the live parse timeline streamed from the backend progress endpoint. Does not drive the parse itself — the parent calls `onCancel` if the user wants to abort.
 
 ## File Structure
 
@@ -16,9 +16,11 @@ src/features/import-places/analyzing-screen/
 
 ```ts
 type AnalyzingScreenProps = {
-  url: string;             // raw text/URL shown in the preview pill
-  thumbnailUri?: string;   // optional thumbnail image for the pill
-  onCancel: () => void;    // user tapped Cancel or the close button
+  url: string;                 // raw text/URL shown in the preview pill
+  thumbnailUri?: string;       // optional thumbnail image for the pill
+  progressEvents?: ParseProgressEvent[]; // live timeline entries from the backend
+  notice?: string;             // optional status banner text
+  onCancel: () => void;        // user tapped Cancel or the close button
 };
 ```
 
@@ -27,6 +29,7 @@ type AnalyzingScreenProps = {
 - Renders as `position: absolute` covering the full screen (not inside `ContentPanel`).
 - Background is a soft mint mesh gradient built from three SVG radial-gradient blobs whose centres drift continuously via Reanimated's `withRepeat`/`withTiming`.
 - The link pill sways ±4° to signal active work.
+- Progress rows now reflect backend streaming notes rather than only fixed labels.
 - A close button (top-right) and a "Cancel" capsule (bottom) both call `onCancel`.
 - The component does not know when parsing finishes — the parent transitions to `SaveScreen` when `parseLink()` resolves.
 

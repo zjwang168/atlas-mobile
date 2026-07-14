@@ -11,6 +11,7 @@ Flow:
 
 from backend.services.content_classifier import classify_location_content
 from backend.services.glm_ocr import ocr_images
+from backend.services.translation import translate_to_english
 
 
 async def scan_images(images: list[bytes]) -> dict:
@@ -34,9 +35,14 @@ async def scan_text(text: str) -> dict:
         raise ValueError("No Place Information that can be extracted")
 
     print(f"[ImageScanner] OCR complete: {len(text)} chars extracted")
+    from backend.services import progress
+    progress.stream_note(None, "image_scan:ocr", {"detail": "OCR text extracted."})
+
+    text = await translate_to_english(text)
 
     classification = await _classify_text(text)
     print(f"[ImageScanner] Classification: {classification}")
+    progress.stream_note(None, "image_scan:classify", {"detail": f"Routed as {classification}."})
 
     if classification == "named_poi":
         return await _route_to_extraction(text)

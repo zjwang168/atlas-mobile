@@ -7,22 +7,20 @@ Core LLM client that supports two modes:
 Uses the DeepSeek Chat API (compatible with OpenAI SDK format).
 """
 
-import json
 import logging
 import os
 import time
 from typing import Optional
 
-import httpx
+import json
+
+from langchain_core.messages import AIMessage
+
+from backend.langchain.runtime import ProgressStreamHandler, get_chat_model, normalize_messages
 
 logger = logging.getLogger("atlas.llm")
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
-HUNYUAN_API_URL = "https://api.hunyuan.cloud.tencent.com/v1/chat/completions"
-# TokenHub is the OpenAI-compatible gateway for Tencent Hunyuan models.
-# Official docs route chat/completions through tokenhub.tencentmaas.com.
-HUNYUAN_TOKENHUB_API_URL = "https://tokenhub.tencentmaas.com/v1/chat/completions"
 HUNYUAN_DEFAULT_MODEL = os.environ.get("HUNYUAN_MODEL", "hy3-preview")
 HUNYUAN_REASONING_EFFORT = os.environ.get("HUNYUAN_REASONING_EFFORT", "low").strip() or "low"
 HUNYUAN_WEB_PROMPT = """You are using Tencent Hunyuan in live-web mode.
@@ -35,8 +33,6 @@ Rules:
 3. Do not answer from memory when live verification is available.
 4. If you cannot verify something from the web, say so clearly instead of guessing.
 """
-QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-QWEN_RESPONSES_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_MODEL", "qwen3.5-flash")
 QWEN_WEB_PROMPT = """You are using Qwen in live-web mode.
 
@@ -68,9 +64,6 @@ def get_last_llm_usage() -> dict:
         dict with keys: input_tokens, output_tokens, duration_s
     """
     return dict(_last_llm_usage)
-
-# Retrieve API key from environment (not hardcoded in source)
-API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 SYSTEM_PROMPT = """You are a location extraction assistant. Extract all real geographic locations (cities, landmarks, restaurants, shops, parks, natural features) from the Reddit post text below.
 
@@ -233,6 +226,7 @@ def call_llm(
     max_retries: int = 2,
     provider: str = "deepseek",
     extra_body: Optional[dict] = None,
+    request_id: Optional[str] = None,
 ) -> dict:
     """Core LLM call with optional tool definitions and retry logic.
 
@@ -256,78 +250,38 @@ def call_llm(
         httpx.HTTPError: if the API call fails after all retries.
     """
     provider = provider.lower().strip()
-    if provider == "hunyuan":
-        key = api_key or os.environ.get("HUNYUAN_API_KEY", "")
-        api_url = os.environ.get("HUNYUAN_API_URL", HUNYUAN_TOKENHUB_API_URL).strip() or HUNYUAN_TOKENHUB_API_URL
-        model = model or HUNYUAN_DEFAULT_MODEL
-        missing_key_msg = "Tencent Hunyuan API key is missing. Set HUNYUAN_API_KEY environment variable."
-    elif provider == "qwen":
-        key = api_key or os.environ.get("QWEN_API_KEY", "")
-        api_url = os.environ.get("QWEN_API_URL", QWEN_RESPONSES_API_URL).strip() or QWEN_RESPONSES_API_URL
-        model = model or QWEN_DEFAULT_MODEL
-        missing_key_msg = "Qwen API key is missing. Set QWEN_API_KEY environment variable."
+    model = model or DEFAULT_MODEL
+
+    if provider == "qwen":
+        web_prompt = QWEN_WEB_PROMPT
+    elif provider == "hunyuan":
+        web_prompt = HUNYUAN_WEB_PROMPT
     else:
-        key = api_key or API_KEY
-        api_url = DEEPSEEK_API_URL
-        model = model or DEFAULT_MODEL
-        missing_key_msg = "DeepSeek API key is missing. Set DEEPSEEK_API_KEY environment variable."
+        web_prompt = ""
 
-    if not key:
-        raise ValueError(missing_key_msg)
-
-    # Build messages with optional tool definitions appended to system prompt
+    enriched_messages = list(messages)
     if tools:
         tools_prompt = _build_tools_prompt(tools)
-        enriched_messages = []
-        for msg in messages:
+        for idx, msg in enumerate(enriched_messages):
             if msg["role"] == "system":
-                enriched_messages.append({
+                enriched_messages[idx] = {
                     "role": "system",
                     "content": msg["content"] + tools_prompt,
-                })
-            else:
-                enriched_messages.append(msg)
-    else:
-        enriched_messages = messages
+                }
+                break
+        else:
+            enriched_messages = [{"role": "system", "content": tools_prompt}] + enriched_messages
 
-    # Web-search providers should behave like live-web calls, not memory-only calls.
-    if provider in {"hunyuan", "qwen"}:
-        web_prompt = HUNYUAN_WEB_PROMPT if provider == "hunyuan" else QWEN_WEB_PROMPT
-        system_prompt_added = False
+    if web_prompt:
         for idx, msg in enumerate(enriched_messages):
             if msg["role"] == "system":
                 enriched_messages[idx] = {
                     "role": "system",
                     "content": msg["content"] + "\n\n" + web_prompt,
                 }
-                system_prompt_added = True
                 break
-        if not system_prompt_added:
+        else:
             enriched_messages = [{"role": "system", "content": web_prompt}] + enriched_messages
-
-    if provider == "qwen":
-        payload = {
-            "model": model,
-            "input": enriched_messages,
-            "tools": [{"type": "web_search"}],
-            "temperature": temperature,
-            "reasoning": {"effort": HUNYUAN_REASONING_EFFORT},
-        }
-        if extra_body:
-            payload.update(extra_body)
-    else:
-        payload = {
-            "model": model,
-            "messages": enriched_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if extra_body:
-            payload.update(extra_body)
-        if provider == "hunyuan" and "enable_enhancement" not in payload:
-            payload["enable_enhancement"] = True
-        if provider == "hunyuan" and "reasoning_effort" not in payload:
-            payload["reasoning_effort"] = HUNYUAN_REASONING_EFFORT
 
     logger.info(
         "LLM call input | provider=%s | model=%s | temperature=%.2f | max_tokens=%s | messages=%s | extra_body=%s",
@@ -339,46 +293,37 @@ def call_llm(
         _serialize_extra_body_for_log(extra_body),
     )
 
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
     last_error = None
     call_start = time.time()
+    stream_handler = ProgressStreamHandler(request_id, f"{provider}:{model}")
 
     for attempt in range(1 + max_retries):
         try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    api_url, json=payload, headers=headers
-                )
-                response.raise_for_status()
-                data = response.json()
-            content = (
-                _extract_responses_output_text(data)
-                if provider == "qwen"
-                else data["choices"][0]["message"]["content"]
+            chat_model = get_chat_model(provider, model, temperature=temperature)
+            if provider == "qwen" and extra_body:
+                chat_model = chat_model.bind(**extra_body)
+            if provider == "hunyuan" and extra_body:
+                chat_model = chat_model.bind(**extra_body)
+            response = chat_model.invoke(
+                normalize_messages(enriched_messages),
+                config={"callbacks": [stream_handler]},
             )
-            # ── Capture token usage from API response ──────────────
+            content = response.content if isinstance(response, AIMessage) else str(response)
             duration_s = time.time() - call_start
-            usage_raw = data.get("usage", {})
-            input_tokens = usage_raw.get("prompt_tokens", 0) if usage_raw else 0
-            output_tokens = usage_raw.get("completion_tokens", 0) if usage_raw else 0
-
+            usage_metadata = getattr(response, "usage_metadata", {}) or {}
             usage_info = {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
+                "input_tokens": int(usage_metadata.get("input_tokens", 0) or 0),
+                "output_tokens": int(usage_metadata.get("output_tokens", 0) or 0),
                 "duration_s": round(duration_s, 3),
             }
-
-            # Update module-level tracker (for wrapped calls like extraction_pipeline)
             global _last_llm_usage
             _last_llm_usage = dict(usage_info)
-
             logger.info(
                 "LLM call succeeded | model=%s | in=%s | out=%s | dur=%.2fs",
-                model, input_tokens, output_tokens, duration_s,
+                model,
+                usage_info["input_tokens"],
+                usage_info["output_tokens"],
+                duration_s,
             )
             logger.info(
                 "LLM call output | provider=%s | model=%s | content=%s",
@@ -386,21 +331,10 @@ def call_llm(
                 model,
                 _truncate_for_log(str(content)),
             )
-
-            # Parse and return the response with usage attached
-            parsed = parse_llm_response(content)
+            parsed = parse_llm_response(str(content))
             parsed["usage"] = usage_info
             return parsed
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 401 and provider in {"hunyuan", "qwen"}:
-                key_name = "HUNYUAN_API_KEY" if provider == "hunyuan" else "QWEN_API_KEY"
-                url_hint = HUNYUAN_TOKENHUB_API_URL if provider == "hunyuan" else QWEN_API_URL
-                raise ValueError(
-                    f"{provider.capitalize()} authorization failed (401). "
-                    f"Please verify {key_name} and the API URL; web-search requests should use {url_hint}."
-                ) from exc
-            last_error = exc
-        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        except Exception as exc:
             last_error = exc
             logger.warning(
                 "LLM call failed | provider=%s | model=%s | attempt=%s/%s | error=%s",
@@ -410,14 +344,10 @@ def call_llm(
                 max_retries + 1,
                 exc,
             )
-        if attempt < max_retries:
-            time.sleep(1.0 * (attempt + 1))  # Exponential-ish backoff
-            continue
-
-    raise ValueError(
-        f"LLM call failed after {max_retries + 1} attempts. "
-        f"Last error: {last_error}"
-    )
+            if attempt < max_retries:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+    raise ValueError(f"LLM call failed after {max_retries + 1} attempts. Last error: {last_error}")
 
 
 def _extract_responses_output_text(data: dict) -> str:

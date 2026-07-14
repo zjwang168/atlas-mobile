@@ -25,6 +25,10 @@ from dotenv import load_dotenv
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 load_dotenv(dotenv_path)
 
+from backend.services.observability import configure_langsmith
+
+LANGSMITH_ENABLED = configure_langsmith()
+
 # 配置 logging（确保 performance_logger 等的 logger.info() 调用可见）
 logging.basicConfig(
     level=logging.INFO,
@@ -47,10 +51,13 @@ from backend.services import cache, progress
 from backend.services.agent_orchestrator import agent_orchestrator
 from backend.services.atlas_ai_discovery import discover_places_from_query
 from backend.services.conversation_manager import conversation_manager
-from backend.services.gemini_computer_use import extract_web_screenshots, extract_web_text
+from backend.services.gemini_computer_use import (extract_web_screenshots,
+                                                  extract_web_text)
 from backend.services.glm_ocr import ocr_images
 from backend.services.image_scanner import scan_text
 from backend.services.smart_text_service import analyze_smart_text
+from backend.services.translation import translate_to_english
+
 NO_PLACE_INFO = "No Place Information that can be extracted"
 
 app = FastAPI(
@@ -58,6 +65,9 @@ app = FastAPI(
     version="2.0.0",
     description="Agentic URL → Location extraction → Route planning → Chat",
 )
+
+# Store LangSmith state so health endpoints / middleware can inspect it
+app.state.langsmith_enabled = LANGSMITH_ENABLED
 
 # Allow CORS from any origin (for local development)
 app.add_middleware(
@@ -191,26 +201,30 @@ async def scrape_url(req: ScrapeUrlRequest):
 
     try:
         progress.start(req.request_id, "Opening page.") if req.request_id else None
+        progress.stream_note(req.request_id, "Fetching source", {"detail": "Opening the page and preparing to read the source."})
 
         scraped = await extract_web_text(url)
         if not scraped.success or not scraped.text.strip():
             raise ValueError(NO_PLACE_INFO)
 
-        progress.mark(req.request_id, "source_fetched", "Source fetched.", {
+        progress.mark(req.request_id, "source_fetched", "Source prepared.", {
             "title": scraped.title or url,
             "characters": len(scraped.text),
             "source_type": "gemini_computer_use",
             "provider": scraped.provider,
         })
+        scraped_title = await translate_to_english(scraped.title or url, request_id=req.request_id)
+        english_text = await translate_to_english(scraped.text, request_id=req.request_id)
+        progress.stream_note(req.request_id, "Analyzing source", {"detail": "Source content is ready; extracting place clues next."})
 
         result = await agent_orchestrator.run_pipeline_from_text(
-            scraped.text,
+            english_text,
             session,
             request_id=req.request_id,
-            title=scraped.title or url,
+            title=scraped_title or url,
             source_type="web_scrape",
         )
-        result["title"] = scraped.title or result.get("title") or url
+        result["title"] = scraped_title or result.get("title") or url
         result["source_type"] = "web_scrape"
         return ParseResponse(**result)
     except ValueError as e:
@@ -234,31 +248,35 @@ async def scan_url(req: ScanUrlRequest):
 
     try:
         progress.start(req.request_id, "Opening page.") if req.request_id else None
+        progress.stream_note(req.request_id, "Reading screenshots", {"detail": "Opening screenshots and preparing OCR."})
 
         shot_result = await extract_web_screenshots(url)
         if not shot_result.success or not shot_result.screenshots:
             raise ValueError(shot_result.error or "Failed to capture page screenshots.")
 
-        progress.mark(req.request_id, "source_fetched", "Source fetched.", {
+        progress.mark(req.request_id, "source_fetched", "Source prepared.", {
             "title": shot_result.title or url,
             "characters": len(shot_result.screenshots),
             "source_type": "gemini_computer_use",
             "provider": shot_result.provider,
         })
+        translated_title = await translate_to_english(shot_result.title or url, request_id=req.request_id)
+        progress.stream_note(req.request_id, "Reading screenshots", {"detail": "OCR is complete; identifying locations in the scan."})
 
         ocr_text = await ocr_images(shot_result.screenshots)
         if not ocr_text.strip():
             raise ValueError(NO_PLACE_INFO)
+        ocr_text = await translate_to_english(ocr_text, request_id=req.request_id)
 
-        progress.mark(req.request_id, "entity_linking_done", "Location fetched.", {
+        progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
             "location_count": 1,
             "inferred_region": None,
         })
 
         result = await scan_text(ocr_text)
-        result["title"] = shot_result.title or result.get("title") or url
+        result["title"] = translated_title or result.get("title") or url
         result["source_type"] = "any_links"
-        progress.mark(req.request_id, "geocode_done", "Coordinates locked in.", {
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
             "query_count": len(result.get("locations", [])),
             "resolved_count": len(result.get("locations", [])),
         })
@@ -292,6 +310,7 @@ async def parse_link(req: ParseRequest) -> ParseResponse:
 
     try:
         progress.start(req.request_id, "Fetching source content.") if req.request_id else None
+        progress.stream_note(req.request_id, "Fetching source", {"detail": "Fetching and routing the link before parsing."})
         # Run agentic pipeline
         result = await agent_orchestrator.run_pipeline(req.url, session, request_id=req.request_id)
 
@@ -361,7 +380,9 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
 
     try:
         progress.start(req.request_id, "Reading pasted content.") if req.request_id else None
-        result = await analyze_smart_text(text, use_web_search=req.web_search)
+        progress.stream_note(req.request_id, "Analyzing text", {"detail": "Reading pasted text and extracting place references."})
+        english_text = await translate_to_english(text, request_id=req.request_id)
+        result = await analyze_smart_text(english_text, use_web_search=req.web_search, request_id=req.request_id)
         session.title = result["title"]
         session.source_type = result.get("source_type")
         session.locations = result.get("locations", [])
@@ -370,16 +391,16 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
         session.removed_hierarchy = result.get("removed_hierarchy", [])
         session.inferred_region = result.get("inferred_region")
 
-        progress.mark(req.request_id, "source_fetched", "Source fetched.", {
+        progress.mark(req.request_id, "source_fetched", "Source prepared.", {
             "title": session.title,
             "characters": len(text),
             "source_type": session.source_type,
         })
-        progress.mark(req.request_id, "entity_linking_done", "Location fetched.", {
+        progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(result.get("locations", [])),
             "inferred_region": result.get("inferred_region"),
         })
-        progress.mark(req.request_id, "geocode_done", "Coordinates locked in.", {
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
             "query_count": len(result.get("locations", [])),
             "resolved_count": len(result.get("locations", [])),
         })
@@ -437,18 +458,20 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
 
     try:
         progress.start(req.request_id, "Researching places from your request.") if req.request_id else None
-        progress.mark(req.request_id, "source_fetched", "Source fetched.", {
+        progress.stream_note(req.request_id, "Researching places", {"detail": "Researching the request and collecting candidate places."})
+        query = await translate_to_english(query, request_id=req.request_id)
+        progress.mark(req.request_id, "source_fetched", "Source prepared.", {
             "title": query[:80],
             "characters": len(query),
             "source_type": "atlas_ai",
         })
 
         result = await discover_places_from_query(query)
-        progress.mark(req.request_id, "entity_linking_done", "Location fetched.", {
+        progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(result.get("locations", [])),
             "inferred_region": result.get("inferred_region"),
         })
-        progress.mark(req.request_id, "geocode_done", "Coordinates locked in.", {
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
             "query_count": len(result.get("locations", [])),
             "resolved_count": len(result.get("locations", [])),
         })
@@ -476,6 +499,10 @@ async def create_session(req: CreateSessionRequest) -> SessionResponse:
     session.source_url = req.source_url
     session.source_type = req.source_type
     session.locations = req.locations or []
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception:
+        pass
     return SessionResponse(
         session_id=session.session_id,
         title=session.title,

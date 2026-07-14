@@ -86,6 +86,24 @@ export type AtlasChatResponse = {
   partial: boolean;
 };
 
+export type MemoryRecord = {
+  id: string;
+  key: string;
+  value: string;
+  category: string;
+  updated_at?: string;
+};
+
+export type ConversationSummaryRecord = {
+  id: string;
+  conversation_id: string;
+  summary: string;
+  start_message_index: number;
+  end_message_index: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type CreateSessionResponse = {
   session_id: string;
   title: string;
@@ -205,4 +223,42 @@ export async function scanUrl(
   onProgress?: (progress: ParseProgress) => void,
 ): Promise<ParseResult> {
   return postParseWithProgress<ParseResult>('/scan_url', { url }, onProgress);
+}
+
+export async function fetchMemories(): Promise<MemoryRecord[]> {
+  const data = await getJson<{ memories: MemoryRecord[] }>('/memories');
+  return data.memories || [];
+}
+
+export async function fetchConversations(): Promise<Array<{
+  id: string;
+  title: string;
+  source_url?: string | null;
+  location_count?: number;
+  message_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}>> {
+  const data = await getJson<{ conversations: Array<{
+    id: string;
+    title: string;
+    source_url?: string | null;
+    location_count?: number;
+    message_count?: number;
+    created_at?: string;
+    updated_at?: string;
+  }> }>('/conversations');
+  return data.conversations || [];
+}
+
+export async function fetchConversation(conversationId: string): Promise<{
+  session_id: string;
+  conversation_id?: string;
+  title?: string;
+  message_count?: number;
+  summary_message_count?: number;
+  conversation_summary?: string;
+  messages?: Array<{ role: string; content: string }>;
+}> {
+  return getJson(`/conversations/${conversationId}`);
 }
