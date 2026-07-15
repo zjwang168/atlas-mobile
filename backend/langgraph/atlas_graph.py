@@ -145,11 +145,10 @@ async def _atlas_ai_discover(state: AtlasState) -> AtlasState:
 
 
 async def _chat(state: AtlasState) -> AtlasState:
-    from backend.services.agent_orchestrator import agent_orchestrator
-    result = await agent_orchestrator.chat(state.get("session_id", "") or "", state.get("text", "") or "")
+    from backend.langgraph.chat_agent import run_chat
+    result = await run_chat(state.get("session_id", "") or "", state.get("text", "") or "")
     state["result"] = result
     return state
 
 
 app = build_atlas_graph()
-

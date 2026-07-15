@@ -27,6 +27,7 @@ graph TD
 
     subgraph "Atlas AI"
         AA[Natural language query]
+        CH[Chat follow-ups<br/>Multi-turn with tools]
     end
 
     App --> ST
@@ -36,6 +37,7 @@ graph TD
     App --> YT
     App --> IF
     App --> AA
+    App --> CH
 
     RL --> PL[POST /parse_link]
     ST --> PT[POST /parse_text]
@@ -44,6 +46,9 @@ graph TD
     YT --> YP[POST /parse_youtube]
     IF --> FP[POST /find_image_places]
     AA --> DA[POST /atlas_ai/discover]
+    CH --> CE[POST /chat]
+    CE --> LCA[LangChain Tool-Calling Agent<br/>chat_agent.py]
+    LCA --> LG
 
     subgraph "LLM & Vision Services"
         QW[Qwen 3.5 Flash<br/>Live web reasoning]
@@ -119,18 +124,18 @@ graph TD
 
 ## LangChain Agent Runtime
 
-The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **custom Agent Loop** (tool-calling) for dynamic conversational interactions. Memory is managed in three tiers, graph runs are checkpointed by thread, and all LLM calls are traced via LangSmith.
+The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **native LangChain tool-calling agent** for dynamic conversational interactions. Tool calls travel in the API's structured `tool_calls` field (never inside message content), and the loop re-invokes the model with tool results until it produces a plain final answer. Memory is managed in three tiers, graph runs are checkpointed by thread, and all LLM calls are traced via LangSmith.
 
 ```mermaid
 graph TD
-    subgraph "Agent Execution (Tool-Calling Loop)"
-        UI[User Input] --> CB[Context Builder]
-        CB --> LLM[LLM Call with Tools]
-        LLM --> RT{Response Type?}
-        RT -->|tool_call| TREQ[ToolRegistry.execute]
-        TREQ --> LLM
-        RT -->|final_answer| RESP[Structured Response]
-        RT -->|text| RESP
+    subgraph "Agent Execution (Native LangChain Tool Calling)"
+        UI[User Input] --> CB[System Prompt + History + Memory]
+        CB --> LLM[llm.bind_tools TOOLS .ainvoke]
+        LLM --> TC{AIMessage.tool_calls?}
+        TC -->|yes| TREQ[ToolRegistry.execute<br/>+ _apply_tool_result]
+        TREQ --> TM[ToolMessage results]
+        TM --> LLM
+        TC -->|no| RESP[Final answer<br/>clean natural language]
     end
 
     subgraph "Tool Registry"
@@ -181,7 +186,7 @@ graph TD
 **Architecture Reference**:
 - **LangGraph App**: [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) is the Studio-facing entry point. It dispatches `parse_link`, `parse_text`, `scan_url`, `parse_youtube`, `find_image_places`, `atlas_ai_discover`, and `chat` into graph nodes.
 - **StateGraph (DAG Pipeline)**: The parse path still runs as a deterministic graph, but now it is visible to Studio as a graph run with checkpoints and thread state.
-- **Agent Loop**: Defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py). Runs up to 10 steps per turn. Each iteration: build context → `call_llm(tools=TOOLS)` → classify response → `tool_call` triggers `registry.execute()` and continues; `final_answer` or `text` returns.
+- **Chat Agent**: Defined in [`backend/langgraph/chat_agent.py`](backend/langgraph/chat_agent.py). Native LangChain tool calling: the model is bound to the OpenAI-format `TOOLS` schemas via `bind_tools()`, tool calls arrive in `AIMessage.tool_calls` (never in content), each is executed through `ToolRegistry` with side-effects applied to the session, and results are fed back as `ToolMessage`s until the model returns a plain final answer. Runs up to 8 steps per turn with per-tool and total timeouts. Provider/model configurable via `CHAT_PROVIDER` / `CHAT_MODEL` (default DeepSeek).
 - **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), working (extracted places), and long-term (user preferences via Supabase). Checkpoints give you thread-scoped time travel during runs.
 - **Tracing**: [`observability.py`](backend/services/observability.py) — LangSmith tracing is enabled through environment config, with graph runs, agent loop steps, and LLM calls visible in LangSmith.
 - **Studio Entry Point**: [`backend/langgraph_app.py`](backend/langgraph_app.py) + [`langgraph.json`](langgraph.json) expose the graph to LangGraph Studio without changing the FastAPI compatibility layer.
@@ -452,15 +457,17 @@ sequenceDiagram
 ```
 POST /chat (with session_id)
 → backend/langgraph/atlas_graph.py: chat node
-  → agent_orchestrator.py: chat()
-  → conversation_manager.py: get_session_context()
+  → backend/langgraph/chat_agent.py: run_chat()
+  → conversation_manager.py: session lookup + memory injection
     → Short-term: current conversation history
     → Working: extracted places buffer
     → Long-term: user preferences from DB
-  → _agent_loop(): LLM with context + tools
-    → ToolRegistry.execute() for tool calls
-    → conversation_manager.py: update_session()
-  → Structured response
+  → LangChain tool-calling loop: llm.bind_tools(TOOLS).ainvoke()
+    → AIMessage.tool_calls → ToolRegistry.execute()
+    → agent_orchestrator._apply_tool_result() (map/route side-effects)
+    → ToolMessage results fed back → model re-invoked
+  → Plain final answer + rolling summary + memory update
+  → Structured response (same shape as before)
 ```
 
 ```mermaid
@@ -483,16 +490,17 @@ sequenceDiagram
     MEM-->>CM: saved preferences
     CM-->>API: consolidated context
 
-    API->>API: _agent_loop() with context + tools
-    loop Agent Loop (max 10 steps)
-        API->>LLM: prompt with context + tool definitions
-        LLM-->>API: response / tool_call
-        alt tool_call
+    API->>API: chat_agent.run_chat() — native tool calling
+    loop Tool-Calling Loop (max 8 steps)
+        API->>LLM: messages + bind_tools(TOOLS)
+        LLM-->>API: AIMessage (content or tool_calls)
+        alt AIMessage.tool_calls present
             API->>TR: ToolRegistry.execute()
             TR-->>API: tool result
-            API->>CM: update_session()
-        else final_answer / text
-            API-->>API: break loop
+            API->>CM: _apply_tool_result() + session bookkeeping
+            API->>LLM: ToolMessage results (auto-continue)
+        else plain content
+            API-->>API: final answer — break
         end
     end
 
@@ -502,7 +510,7 @@ sequenceDiagram
     API-->>C: structured response + updated context
 ```
 
-**Key files**: [`conversation_manager.py`](backend/services/conversation_manager.py), [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`tool_definitions.py`](backend/services/tool_definitions.py)
+**Key files**: [`chat_agent.py`](backend/langgraph/chat_agent.py), [`conversation_manager.py`](backend/services/conversation_manager.py), [`tool_definitions.py`](backend/services/tool_definitions.py)
 
 ---
 
@@ -562,7 +570,7 @@ For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens
 
 ### 5. YouTube Links — `POST /parse_youtube`
 
-See `Data Flow` Scenario E for the live call chain and diagram.
+See `Data Flow` Scenario G for the live call chain and diagram.
 
 ### 6. Find Image Places — `POST /find_image_places`
 

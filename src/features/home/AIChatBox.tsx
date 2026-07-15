@@ -1,3 +1,4 @@
+import Markdown from 'react-native-markdown-display';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -185,11 +186,26 @@ export default function AIChatBox({
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     return (
+
       <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
         <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-          <Text style={[styles.messageText, isUser ? styles.userText : styles.assistantText]}>
-            {item.text}
-          </Text>
+          {isUser ? (
+            <Text style={[styles.messageText, styles.userText]}>{item.text}</Text>
+          ) : (
+            <Markdown
+              style={{
+                body: { ...styles.messageText, ...styles.assistantText },
+                heading2: { fontSize: 17, fontWeight: '700', marginTop: 8, marginBottom: 4 },
+                heading3: { fontSize: 15, fontWeight: '700', marginTop: 6, marginBottom: 3 },
+                strong: { fontWeight: '700' },
+                table: { borderWidth: 1, borderColor: 'rgba(60,60,67,0.15)', borderRadius: 6, marginVertical: 6 },
+                th: { padding: 4, fontWeight: '700' },
+                td: { padding: 4 },
+              }}
+            >
+              {item.text}
+            </Markdown>
+          )}
         </View>
       </View>
     );
