@@ -27,6 +27,20 @@ load_dotenv(dotenv_path)
 class SupabaseService:
     """Supabase CRUD for conversation persistence."""
 
+    MEMORY_TOTAL_LIMIT = 80
+    MEMORY_PER_CATEGORY_LIMIT = 16
+    MEMORY_ARCHIVE_BATCH = 20
+    MEMORY_PRIORITY = {
+        "profile": 0,
+        "preference": 1,
+        "interest": 2,
+        "constraint": 3,
+        "visited_place": 4,
+        "plan": 5,
+        "disliked": 6,
+        "old_memory": 99,
+    }
+
     def __init__(self):
         self._client = None
         self._initialized = False
@@ -522,6 +536,8 @@ class SupabaseService:
             await asyncio.to_thread(
                 lambda: client.table("long_term_memory").insert(memory_record).execute()
             )
+
+            await self._prune_memory_entries(client)
             return True
         except Exception as e:
             print(f"[SupabaseService] save_memory error: {e}")
@@ -541,10 +557,165 @@ class SupabaseService:
             if user_id:
                 query = query.eq("user_id", user_id)
 
-            query = query.order("updated_at", desc=True).limit(100)
+            query = query.order("updated_at", desc=True).limit(self.MEMORY_TOTAL_LIMIT + 8)
 
             result = await asyncio.to_thread(lambda: query.execute())
-            return result.data or []
+            memories = result.data or []
+            memories.sort(
+                key=lambda item: (
+                    self.MEMORY_PRIORITY.get(str(item.get("category") or "preference"), 50),
+                    -(self._parse_ts(item.get("updated_at"))),
+                    str(item.get("key") or ""),
+                )
+            )
+            old_memories = [m for m in memories if str(m.get("category") or "") == "old_memory"]
+            active_memories = [m for m in memories if str(m.get("category") or "") != "old_memory"]
+            return old_memories[:1] + active_memories[:self.MEMORY_TOTAL_LIMIT - 1]
         except Exception as e:
             print(f"[SupabaseService] list_memories error: {e}")
             return []
+
+    @staticmethod
+    def _parse_ts(value: object) -> float:
+        if not value:
+            return 0.0
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    async def _prune_memory_entries(self, client) -> None:
+        """Keep active long-term memory bounded and archive overflow into old_memory."""
+        import asyncio
+
+        try:
+            result = await asyncio.to_thread(
+                lambda: client.table("long_term_memory")
+                    .select("id, key, value, category, updated_at")
+                    .order("updated_at", desc=True)
+                    .execute()
+            )
+            rows = result.data or []
+            if not rows:
+                return
+
+            old_memory_rows = [row for row in rows if str(row.get("category") or "") == "old_memory"]
+            active_rows = [row for row in rows if str(row.get("category") or "") != "old_memory"]
+
+            if len(active_rows) > self.MEMORY_TOTAL_LIMIT:
+                overflow = active_rows[self.MEMORY_TOTAL_LIMIT:]
+                await self._archive_overflow_memory(client, overflow, existing_old_memory=old_memory_rows[:1])
+                active_rows = active_rows[:self.MEMORY_TOTAL_LIMIT]
+
+            keep_ids: set[str] = set()
+            category_counts: dict[str, int] = {}
+            ordered_rows = sorted(
+                active_rows,
+                key=lambda item: (
+                    self.MEMORY_PRIORITY.get(str(item.get("category") or "preference"), 50),
+                    -(self._parse_ts(item.get("updated_at"))),
+                    str(item.get("key") or ""),
+                ),
+            )
+            for row in ordered_rows:
+                category = str(row.get("category") or "preference")
+                current_count = category_counts.get(category, 0)
+                if current_count >= self.MEMORY_PER_CATEGORY_LIMIT:
+                    continue
+                if len(keep_ids) >= self.MEMORY_TOTAL_LIMIT:
+                    break
+                row_id = row.get("id")
+                if not row_id:
+                    continue
+                keep_ids.add(str(row_id))
+                category_counts[category] = current_count + 1
+
+            drop_ids = [str(row.get("id")) for row in active_rows if str(row.get("id") or "") not in keep_ids and row.get("id")]
+            if drop_ids:
+                await asyncio.to_thread(
+                    lambda: client.table("long_term_memory")
+                        .delete()
+                        .in_("id", drop_ids)
+                        .execute()
+                )
+        except Exception as e:
+            print(f"[SupabaseService] prune_memory_entries warning: {e}")
+
+    async def _archive_overflow_memory(self, client, overflow_rows: list[dict], existing_old_memory: list[dict] | None = None) -> None:
+        """Compress overflow memories into the old_memory bucket."""
+        import asyncio
+
+        if not overflow_rows:
+            return
+
+        existing_summary = ""
+        if existing_old_memory:
+            existing_summary = str(existing_old_memory[0].get("value") or "").strip()
+
+        chunk_lines = []
+        for row in overflow_rows[: self.MEMORY_ARCHIVE_BATCH]:
+            category = str(row.get("category") or "preference")
+            key = str(row.get("key") or "memory")
+            value = str(row.get("value") or "").strip()
+            if not value:
+                continue
+            chunk_lines.append(f"- {category}: {key} = {value}")
+
+        if not chunk_lines:
+            return
+
+        summary_prompt = f"""You are compressing a travel assistant's long-term memory.
+
+Merge the previous archive summary with the new memory items into ONE concise English sentence block.
+Preserve durable user preferences, visited places, dislikes, constraints, and plans.
+Do not invent facts.
+Keep the result compact but useful for future travel recommendations.
+
+Previous archive summary:
+{existing_summary or "N/A"}
+
+New memory items:
+{chr(10).join(chunk_lines)}
+"""
+
+        try:
+            from backend.services.llm_client import call_llm
+
+            result = await asyncio.to_thread(
+                call_llm,
+                messages=[{"role": "system", "content": summary_prompt}],
+                temperature=0.1,
+                max_tokens=220,
+            )
+            compressed = str(result.get("content", "")).strip()
+        except Exception:
+            compressed = ""
+
+        if not compressed:
+            compressed = " ".join(line[2:] for line in chunk_lines[:5])
+
+        if existing_old_memory:
+            old_id = str(existing_old_memory[0].get("id"))
+            try:
+                await asyncio.to_thread(
+                    lambda: client.table("long_term_memory")
+                        .delete()
+                        .eq("id", old_id)
+                        .execute()
+                )
+            except Exception:
+                pass
+
+        record = {
+            "id": str(uuid.uuid4()),
+            "key": "user.old_memory",
+            "value": compressed,
+            "category": "old_memory",
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        try:
+            await asyncio.to_thread(
+                lambda: client.table("long_term_memory").insert(record).execute()
+            )
+        except Exception as e:
+            print(f"[SupabaseService] archive_overflow_memory error: {e}")

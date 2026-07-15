@@ -15,6 +15,7 @@ export type ChatHistoryItem = {
   messageCount?: number;
   places: ParsedPlace[];
   createdAt: string;
+  updatedAt?: string;
   /** Which import flow produced this chat: 'smart_text' | 'image_scan' |
       'reddit_links' | 'any_links' | 'link' | 'text'. Stored in
       conversations.source_type. */

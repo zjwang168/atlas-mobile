@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -98,6 +99,9 @@ export default function AtlasAIHome({
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [totalChats, setTotalChats] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const initialPageLoadedRef = useRef(false);
 
   const cards = useMemo(() => chatHistory, [chatHistory]);
 
@@ -106,16 +110,46 @@ export default function AtlasAIHome({
   }, [setTabBarVisible]);
 
   useEffect(() => {
+    if (initialPageLoadedRef.current) return;
+    initialPageLoadedRef.current = true;
     countChatHistory()
       .then((total) => setTotalChats(total))
       .catch((error) => console.warn('[AtlasAIHome] countChatHistory failed:', error));
   }, []);
 
   const refreshHistory = useCallback(async () => {
-    const [items, total] = await Promise.all([loadChatHistory(), countChatHistory()]);
+    const [items, total] = await Promise.all([loadChatHistory({ limit: 50 }), countChatHistory()]);
     setChatHistory(items);
     setTotalChats(total);
+    setHasMore(items.length >= 50 && total > items.length);
   }, [setChatHistory]);
+
+  const loadOlderHistory = useCallback(async () => {
+    if (loadingMore || !hasMore || chatHistory.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const lastItem = chatHistory[chatHistory.length - 1];
+      const olderItems = await loadChatHistory({
+        limit: 50,
+        beforeUpdatedAt: lastItem.updatedAt || lastItem.createdAt,
+      });
+      if (olderItems.length === 0) {
+        setHasMore(false);
+        return;
+      }
+      const seen = new Set(chatHistory.map((item) => item.id));
+      const merged = [...chatHistory];
+      for (const item of olderItems) {
+        if (!seen.has(item.id)) merged.push(item);
+      }
+      setChatHistory(merged);
+      setHasMore(olderItems.length >= 50);
+    } catch (error) {
+      console.warn('[AtlasAIHome] loadOlderHistory failed:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [chatHistory, hasMore, loadingMore, setChatHistory]);
 
   const handleCreateChat = useCallback(async () => {
     const text = input.trim();
@@ -192,6 +226,8 @@ export default function AtlasAIHome({
             }}
             onScrollBeginDrag={() => setTabBarVisible(true)}
             scrollEventThrottle={16}
+            onEndReachedThreshold={0.35}
+            onEndReached={loadOlderHistory}
             renderItem={({ item }) => {
               const hasPlaces = (item.locationCount ?? 0) > 0;
               const displaySourceType = inferDisplaySourceType(item);
@@ -232,6 +268,12 @@ export default function AtlasAIHome({
               );
             }}
           />
+          {loadingMore ? (
+            <View style={styles.loadingMore}>
+              <ActivityIndicator size="small" color={GREEN.primaryStrong} />
+              <Text style={styles.loadingMoreText}>Loading older chats...</Text>
+            </View>
+          ) : null}
 
         </View>
       )}
@@ -342,5 +384,17 @@ const styles = StyleSheet.create({
   },
   placesPillTextDisabled: {
     color: '#A1A1AA',
+  },
+  loadingMore: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+  },
+  loadingMoreText: {
+    ...typography.bodySmall,
+    color: GREEN.textMuted,
+    fontWeight: '600',
   },
 });

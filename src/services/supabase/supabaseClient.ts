@@ -137,18 +137,29 @@ export async function saveChatHistory(
   return { id, createdAt };
 }
 
+const CHAT_HISTORY_PAGE_SIZE = 50;
+
 /**
- * Load recent chat history items from Supabase `conversations` table.
- * Returns up to 50 items ordered by `updated_at` desc.
- * Each item includes places loaded from `conversation_locations`.
+ * Load chat history items from Supabase `conversations` table.
+ * Supports cursor-based pagination so the UI can fetch older conversations
+ * when the user scrolls down.
  */
-export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
-  // Load conversations
-  const { data: conversations, error: convError } = await supabase
+export async function loadChatHistory(options?: {
+  limit?: number;
+  beforeUpdatedAt?: string;
+}): Promise<ChatHistoryItem[]> {
+  const limit = options?.limit ?? CHAT_HISTORY_PAGE_SIZE;
+  let query = supabase
     .from('conversations')
-    .select('id, title, source_url, source_type, location_count, message_count, created_at')
+    .select('id, title, source_url, source_type, location_count, message_count, created_at, updated_at')
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .limit(limit);
+
+  if (options?.beforeUpdatedAt) {
+    query = query.lt('updated_at', options.beforeUpdatedAt);
+  }
+
+  const { data: conversations, error: convError } = await query;
 
   if (convError) {
     console.error('[loadChatHistory] query error:', convError);
@@ -211,6 +222,7 @@ export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
         longitude: loc.longitude,
       })),
       createdAt: conv.created_at,
+      updatedAt: conv.updated_at,
     };
   });
 }

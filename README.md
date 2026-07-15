@@ -604,9 +604,11 @@ graph TD
 
 **How rolling summary and long-term memory work**
 - `agent_orchestrator._maybe_roll_conversation_summary()` compresses roughly every 10 new messages into `conversation_summaries`.
-- `agent_orchestrator._update_memory()` extracts durable facts such as preferences, visited places, dislikes, and constraints.
-- Those memory items are stored in Supabase `long_term_memory` and also cached back into the active session as `user_memory_summary`.
-- On the next chat turn, the backend reloads the latest long-term memory and injects it into the system prompt so the assistant can adapt to the user consistently.
+- `agent_orchestrator._update_memory()` extracts durable facts such as preferences, visited places, dislikes, constraints, and plans.
+- Those memory items are stored in Supabase `long_term_memory` as a bounded active set plus a recursive `old_memory` archive.
+- When the active set grows beyond the cap, the oldest batch is compressed into one archive sentence, then merged into `old_memory` so the system keeps a very long-lived but increasingly abstract memory trail.
+- The backend reloads the archive entry first, then the bounded active memories in category-aware order, and injects that compact set into the system prompt so the assistant can adapt to the user consistently.
+- The active session also keeps a compact `user_memory_summary` cache so repeat turns do not need to rebuild everything from scratch.
 
 **Tool events in chat**
 - When the assistant identifies a new place the user may want to add, the current implementation uses the `map_operation` tool.
