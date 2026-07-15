@@ -559,26 +559,26 @@ graph TD
     DETAIL --> CHAT[AIChatBox<br/>Restored messages + places]
 
     CHAT --> POSTCHAT[POST /chat<br/>session_id + message + conversation_id]
-    POSTCHAT --> RECOVER[ConversationManager<br/>get_session / load_conversation]
+    POSTCHAT --> RECOVER[ConversationManager<br/>session recovery]
     RECOVER --> SHORT[Short-term session memory<br/>session.messages]
     RECOVER --> WORK[Working chat state<br/>session.locations + pending_place_action]
-    RECOVER --> LONG[Long-term memory preload<br/>conversation_manager.get_all_memories()]
+    RECOVER --> LONG[Long-term memory preload<br/>load durable memories]
 
     SHORT --> PROMPT[Build chat system prompt<br/>history + rolling summary + user memory]
     WORK --> PROMPT
     LONG --> PROMPT
-    PROMPT --> AGENT[LangChain tool-calling loop<br/>chat_agent.run_chat()]
+    PROMPT --> AGENT[LangChain tool-calling loop<br/>chat agent]
 
     AGENT --> TOOL{Tool call?}
     TOOL -->|map_operation| MAP[Pin in Chat / Save to My Places]
-    TOOL -->|other current/future tools| REG[ToolRegistry.execute()]
+    TOOL -->|other current/future tools| REG[ToolRegistry execute]
     REG --> AGENT
     MAP --> STATE[Update session.locations<br/>and pending_place_action]
     AGENT --> MSG[Append assistant/user/tool messages]
 
-    MSG --> SUMMARY[_maybe_roll_conversation_summary()<br/>compress every ~10 new messages]
+    MSG --> SUMMARY[Rolling summary<br/>compress every ~10 new messages]
     SUMMARY --> SUMDB[(conversation_summaries)]
-    MSG --> MEMORY[_update_memory()<br/>extract durable preferences]
+    MSG --> MEMORY[Long-term memory update<br/>extract durable preferences]
     MEMORY --> MEMDB[(long_term_memory)]
     MSG --> SAVE[conversation_manager.save_conversation()]
     SAVE --> CONV[(conversations)]
