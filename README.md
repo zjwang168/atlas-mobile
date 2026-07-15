@@ -472,7 +472,7 @@ POST /chat (with session_id)
 
 On the mobile side, the Atlas AI home screen now merges the old chat-history entry point and the Atlas AI conversation entry point into one history-driven flow:
 - `GET /conversations` populates the Atlas AI history list.
-- Tapping a history item opens `GET /conversations/{id}` and hydrates the chat transcript plus saved places.
+- Tapping a history item opens `GET /conversations/:id` and hydrates the chat transcript plus saved places.
 - The active chat keeps its own `session_id` for turn-by-turn continuation, while the persisted `conversation_id` is used for restore/reload.
 
 ```mermaid
@@ -554,8 +554,8 @@ The conversation system has two layers that work together:
 
 ```mermaid
 graph TD
-    UI[Atlas AI Home<br/>History list + active chat] --> LIST[GET /conversations<br/>Load history cards]
-    LIST --> DETAIL[GET /conversations/{id}<br/>Hydrate a full chat]
+    UI[Atlas AI Home<br/>History list + active chat] --> LIST[Load history list<br/>GET /conversations]
+    LIST --> DETAIL[Hydrate a full chat<br/>GET /conversations/:id]
     DETAIL --> CHAT[AIChatBox<br/>Restored messages + places]
 
     CHAT --> POSTCHAT[POST /chat<br/>session_id + message + conversation_id]
