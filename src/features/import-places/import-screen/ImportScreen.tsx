@@ -7,14 +7,13 @@ import BottomSheet, {
   type BottomSheetFooterProps,
 } from '@gorhom/bottom-sheet';
 import * as ImagePicker from 'expo-image-picker';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Pressable, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions, type TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { typography } from '../../../theme/typography';
 
-export type ImportMode = 'smartText' | 'imageScan' | 'redditLinks' | 'anyLinks';
+export type ImportMode = 'smartText' | 'findTextPlaces' | 'redditLinks' | 'anyLinks' | 'youtubeLinks' | 'findImagePlaces';
 
 // Semantic colors — mirror the SPARC Figma color tokens.
 const COLOR = {
@@ -35,20 +34,23 @@ const RADIUS_BUBBLE = 18;
 type ImportScreenProps = {
   onClose: () => void;
   onSubmit: (text: string, mode: ImportMode, webSearch?: boolean) => void;
-  onSubmitImageScan?: (imagesBase64: string[]) => void;
+  onSubmitImageScan?: (imagesBase64: string[], mode?: ImportMode) => void;
   onScanResult?: (result: any) => void;
 };
 
 const modes: { key: ImportMode; icon: string; title: string; subtitle: string }[] = [
   { key: 'smartText', icon: 'document-text-outline', title: 'Smart Text', subtitle: 'Paste a prompt, note, or itinerary' },
-  { key: 'imageScan', icon: 'image-outline', title: 'Image Scan', subtitle: 'Turn screenshots into places' },
+  { key: 'findTextPlaces', icon: 'image-outline', title: 'Find Text Places', subtitle: 'Scan image text for places' },
   { key: 'redditLinks', icon: 'logo-reddit', title: 'Reddit Links', subtitle: 'Save places from Reddit threads' },
   { key: 'anyLinks', icon: 'link-outline', title: 'Any Links', subtitle: 'Vision scan any web page' },
+  { key: 'youtubeLinks', icon: 'logo-youtube', title: 'YouTube Links', subtitle: 'Extract places from transcripts' },
+  { key: 'findImagePlaces', icon: 'camera-outline', title: 'Find Image Places', subtitle: 'Identify landmarks from photos' },
 ];
 
 const TIPS: { mode: ImportMode; text: string }[] = [
-  { mode: 'imageScan', text: 'Scan screenshots for places' },
-  { mode: 'imageScan', text: 'Screenshot a X post & extract locations' },
+  { mode: 'findTextPlaces', text: 'Scan screenshots for places' },
+  { mode: 'findTextPlaces', text: 'Screenshot a X post & extract locations' },
+  { mode: 'findImagePlaces', text: 'Upload a photo to identify its location' },
   { mode: 'smartText', text: 'Paste any text to extract spots' },
   { mode: 'smartText', text: 'Try "Game of Thrones filming locations"' },
   { mode: 'smartText', text: 'Try "Where did Taylor Swift marry?"' },
@@ -57,6 +59,7 @@ const TIPS: { mode: ImportMode; text: string }[] = [
   { mode: 'anyLinks', text: 'Any Links uses a pure vision model (Gemini 2.5 Compute Use) and may take longer for accuracy' },
   { mode: 'smartText', text: 'Paste a X post to extract locations' },
   { mode: 'smartText', text: 'Paste a Thread post to extract locations' },
+  { mode: 'youtubeLinks', text: 'Paste a YouTube link to extract places from the transcript' },
 ];
 
 /**
@@ -81,17 +84,18 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
   const snapPoints = useMemo(() => ['92%'], []);
 
   const pickImages = useCallback(async () => {
+    const isSingleImage = selectedMode === 'findImagePlaces';
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      selectionLimit: 3,
+      allowsMultipleSelection: !isSingleImage,
+      selectionLimit: isSingleImage ? 1 : 3,
       quality: 0.7,
       base64: true,
     });
     if (!result.canceled && result.assets.length > 0) {
-      setImages(result.assets.slice(0, 3));
+      setImages(result.assets.slice(0, isSingleImage ? 1 : 3));
     }
-  }, []);
+  }, [selectedMode]);
 
   const removeImage = useCallback((index: number) => {
     setImages((prev) => prev.filter((_, i) => i !== index));
@@ -105,7 +109,7 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
 
   const handleSubmit = useCallback(async () => {
     if (!selectedMode) return;
-    if (selectedMode === 'imageScan') {
+    if (selectedMode === 'findTextPlaces' || selectedMode === 'findImagePlaces') {
       if (images.length === 0) return;
       const imageDataList = images
         .map((img) => img.base64)
@@ -116,7 +120,7 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
       }
       // Switch to analyzing immediately so the user sees the waiting screen
       // right away instead of sitting on My Places during sheet animation.
-      onSubmitImageScan?.(imageDataList);
+      onSubmitImageScan?.(imageDataList, selectedMode);
       return;
     }
     if (!text.trim()) return;
@@ -171,29 +175,31 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
       <BottomSheetFooter {...props} bottomInset={0}>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
           {/* Input area — changes based on selectedMode */}
-          {selectedMode === 'imageScan' ? (
-            /* Image Scan mode: show image picker with thumbnails */
+          {selectedMode === 'findTextPlaces' || selectedMode === 'findImagePlaces' ? (
+            /* Image modes: show image picker with thumbnails */
             <View style={styles.imagePickerArea}>
               {images.length > 0 ? (
-                <View>
+                <View style={styles.imagePickerContent}>
                   {/* Image thumbnails row */}
                   <View style={styles.imageThumbRow}>
                     {images.map((img, idx) => {
                       const RNImage = require('react-native').Image;
                       return (
-                        <View key={idx} style={styles.imageThumbWrap}>
-                          <RNImage source={{ uri: img.uri }} style={styles.imageThumb} />
+                        <View key={idx} style={styles.imageThumbWrapper}>
+                          <View style={styles.imageThumbWrap}>
+                            <RNImage source={{ uri: img.uri }} style={styles.imageThumb} />
+                          </View>
                           <TouchableOpacity
                             style={styles.imageRemoveBtn}
                             onPress={() => removeImage(idx)}
-                            hitSlop={6}
+                            hitSlop={8}
                           >
-                            <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                            <Ionicons name="close-circle" size={22} color="#FF3B30" />
                           </TouchableOpacity>
                         </View>
                       );
                     })}
-                    {images.length < 3 && (
+                    {selectedMode === 'findTextPlaces' && images.length < 3 && (
                       <TouchableOpacity style={styles.imageAddBtn} onPress={pickImages} activeOpacity={0.7}>
                         <Ionicons name="add" size={24} color={COLOR.primary} />
                       </TouchableOpacity>
@@ -207,13 +213,17 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
                     activeOpacity={0.8}
                   >
                     <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
-                    <Text style={styles.imageSendText}>Scan {images.length} image{images.length > 1 ? 's' : ''}</Text>
+                    <Text style={styles.imageSendText}>
+                      {selectedMode === 'findImagePlaces' ? 'Find Place' : `Scan ${images.length} image${images.length > 1 ? 's' : ''}`}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               ) : (
                 <TouchableOpacity style={styles.imagePickerButton} onPress={pickImages} activeOpacity={0.7}>
                   <Ionicons name="images-outline" size={32} color={COLOR.primary} />
-                  <Text style={styles.imagePickerText}>Select up to 3 images</Text>
+                  <Text style={styles.imagePickerText}>
+                    {selectedMode === 'findImagePlaces' ? 'Select 1 Image' : 'Select up to 3 images'}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -387,7 +397,8 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
         <Animated.View style={[styles.tipBanner, { opacity: fadeAnim }]}>
           <View style={styles.tipDot} />
           <Text style={styles.tipText}>
-            {TIPS[tipIndex].mode === 'imageScan' ? 'Image Scan' :
+            {TIPS[tipIndex].mode === 'findTextPlaces' ? 'Find Text Places' :
+             TIPS[tipIndex].mode === 'findImagePlaces' ? 'Find Image Places' :
              TIPS[tipIndex].mode === 'smartText' ? 'Smart Text' :
              TIPS[tipIndex].mode === 'redditLinks' ? 'Reddit Links' : 'Any Links'}
             {' · '}
@@ -546,7 +557,8 @@ const styles = StyleSheet.create({
   // Image picker (Image Scan mode)
   imagePickerArea: {
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
   },
   imagePickerButton: {
     flexDirection: 'row',
@@ -563,16 +575,25 @@ const styles = StyleSheet.create({
     ...typography.bodySmallEmphasis,
     color: COLOR.primary,
   },
+  imagePickerContent: {
+    width: '100%',
+    alignItems: 'center',
+  },
   imageThumbRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 14,
+  },
+  imageThumbWrapper: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   imageThumbWrap: {
     width: 72,
     height: 72,
     borderRadius: 14,
-    overflow: 'hidden',
     backgroundColor: '#F0F0ED',
   },
   imageThumb: {
@@ -582,9 +603,11 @@ const styles = StyleSheet.create({
   },
   imageRemoveBtn: {
     position: 'absolute',
-    top: -6,
-    right: -6,
+    top: -8,
+    right: -8,
     zIndex: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 11,
   },
   imageAddBtn: {
     width: 72,
@@ -598,13 +621,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   imageSendBtn: {
-    height: 44,
+    height: 48,
     borderRadius: 999,
     backgroundColor: COLOR.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingHorizontal: 32,
+    minWidth: 200,
+    alignSelf: 'center',
   },
   imageSendText: {
     color: '#FFFFFF',

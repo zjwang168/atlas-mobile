@@ -13,6 +13,7 @@ import time
 from typing import Optional
 
 import json
+import re
 
 from langchain_core.messages import AIMessage
 
@@ -159,6 +160,13 @@ def parse_llm_response(response_text: str) -> dict:
         ]
         cleaned = "\n".join(fence_lines).strip()
 
+    # If the model wrapped a JSON tool call in surrounding prose, try to
+    # recover the first JSON object so the agent loop can continue normally.
+    if not cleaned.startswith("{") and "tool" in cleaned and "arguments" in cleaned:
+        extracted = _extract_first_json_object(cleaned)
+        if extracted:
+            cleaned = extracted
+
     # Try to parse as structured JSON
     try:
         parsed = json.loads(cleaned)
@@ -208,12 +216,67 @@ def parse_llm_response(response_text: str) -> dict:
         }
 
     except json.JSONDecodeError:
+        extracted = _extract_first_json_object(cleaned)
+        if extracted and extracted != cleaned:
+            try:
+                parsed = json.loads(extracted)
+                if isinstance(parsed, dict):
+                    msg_type = parsed.get("type", "text")
+                    if msg_type == "tool_call" or "tool" in parsed:
+                        return {
+                            "type": "tool_call",
+                            "content": extracted,
+                            "tool_calls": [{
+                                "name": parsed.get("tool", ""),
+                                "arguments": parsed.get("arguments", {}),
+                            }],
+                        }
+                    if msg_type == "final_answer":
+                        return {
+                            "type": "final_answer",
+                            "content": parsed.get("content", extracted),
+                            "tool_calls": None,
+                        }
+            except Exception:
+                pass
         # Not JSON — treat as plain text response
         return {
             "type": "text",
             "content": cleaned,
             "tool_calls": None,
         }
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Best-effort extraction of the first JSON object from messy model output."""
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:idx + 1].strip()
+
+    return None
 
 
 def call_llm(

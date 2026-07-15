@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "atlas": "./backend/langgraph_app.py:app"
+  },
+  "env": ".env"
+}

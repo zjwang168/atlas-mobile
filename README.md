@@ -1,6 +1,6 @@
 # OurAtlas — AI-Powered Travel Location Extractor
 
-Extract real-world places from Reddit posts, pasted text, web pages, screenshots, and images — then geocode them, plan optimal routes, and visualize them on an interactive Mapbox map.
+Extract real-world places from Reddit posts, pasted text, web pages, screenshots, YouTube videos, and images — then geocode them, plan optimal routes, and visualize them on an interactive Mapbox map.
 
 Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **LangChain 1.0 / LangGraph** + **DeepSeek V4 Flash** + **Qwen 3.5 Flash** + **Gemini 3.5 Flash** + **GLM-OCR** + **Mapbox**.
 
@@ -10,7 +10,7 @@ Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **LangChain 1
 
 ## Multi-Agent Workflow
 
-The system uses **LangChain 1.0 / LangGraph** to build a multi-agent collaboration system. Import pipelines are orchestrated as deterministic DAGs through a LangGraph StateGraph, while the AI Chat scenario uses a custom LangChain-based Agent Loop (tool-calling) for dynamic tool invocation.
+The system uses **LangChain 1.0 / LangGraph** to build a multi-agent collaboration system. Import pipelines now run through a Studio-visible LangGraph app, while the FastAPI layer stays as a thin compatibility shell for the mobile app.
 
 ```mermaid
 graph TD
@@ -18,9 +18,11 @@ graph TD
 
     subgraph "Import Modes"
         ST[Smart Text<br/>Paste notes / prompts]
-        IS[Image Scan<br/>Upload screenshots]
+        FT[Find Text Places<br/>Upload screenshots]
         RL[Reddit Links<br/>Paste Reddit URLs]
         AL[Any Links<br/>Vision-scan any URL]
+        YT[YouTube Links<br/>Paste YouTube URLs]
+        IF[Find Image Places<br/>Upload a photo]
     end
 
     subgraph "Atlas AI"
@@ -28,34 +30,45 @@ graph TD
     end
 
     App --> ST
-    App --> IS
+    App --> FT
     App --> RL
     App --> AL
+    App --> YT
+    App --> IF
     App --> AA
 
     RL --> PL[POST /parse_link]
     ST --> PT[POST /parse_text]
-    IS --> SI[POST /scan_images_base64]
+    FT --> SI[POST /scan_images_base64]
     AL --> SU[POST /scan_url]
+    YT --> YP[POST /parse_youtube]
+    IF --> FP[POST /find_image_places]
     AA --> DA[POST /atlas_ai/discover]
 
     subgraph "LLM & Vision Services"
         QW[Qwen 3.5 Flash<br/>Live web reasoning]
         DS[DeepSeek V4 Flash<br/>Structured extraction]
+        TV[Tavily API<br/>Web search tool]
+        YTAPI[youtube-transcript-api<br/>Transcript + chapters]
+        RED[Reddit API<br/>Post title + selftext]
         GCU[Gemini Computer Use<br/>Page screenshots]
         OCR[GLM-OCR]
+        GPT4O[GPT-4o Vision<br/>Photo place recognition]
     end
 
-    subgraph "Extraction & Geocoding Pipeline"
+    subgraph "LangGraph Core"
+        LG[LangGraph App<br/>Atlas graph nodes + checkpoints]
         ORCH[Agent Orchestrator<br/>Supervisor coordination]
         EX[Extraction Pipeline<br/>DeepSeek + hierarchy filter]
         EL[Entity Linking<br/>Disambiguation + context]
         GEO[Geocoder<br/>Multi-layer fallback]
         RT[Route Planner<br/>TSP + 2-opt]
+        MEM[Memory / Checkpoints<br/>thread state + session memory]
     end
 
     PT --> QW
     QW --> DS
+    QW --> TV
     DS --> ORCH
     PL --> ORCH
 
@@ -64,13 +77,21 @@ graph TD
     GCU --> OCR
     OCR --> ORCH
 
+    YP --> YTAPI
+    YTAPI --> DS
+    PL --> RED
+    FP --> GPT4O
+    GPT4O --> GEO
+
     DA --> DS2[DeepSeek<br/>Address research]
     DS2 --> GEO
 
-    ORCH --> EX
+    ORCH --> LG
+    LG --> EX
     EX --> EL
     EL --> GEO
     GEO --> RT
+    RT --> MEM
 
     subgraph "Geocoding Fallback Chain"
         G1[Geoapify<br/>3k/day free]
@@ -88,7 +109,6 @@ graph TD
         CACHE[LRU Cache<br/>Disk-persisted]
     end
 
-    RT --> MEM
     MEM --> RESP[ParseResult JSON]
     MEM --> CACHE
 
@@ -99,7 +119,7 @@ graph TD
 
 ## LangChain Agent Runtime
 
-The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **custom Agent Loop** (tool-calling) for dynamic conversational interactions. Memory is managed in three tiers, and all LLM calls are traced via LangSmith.
+The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **custom Agent Loop** (tool-calling) for dynamic conversational interactions. Memory is managed in three tiers, graph runs are checkpointed by thread, and all LLM calls are traced via LangSmith.
 
 ```mermaid
 graph TD
@@ -121,8 +141,8 @@ graph TD
         T5[extract_locations]
         T6[web_search<br/>Tavily API]
         T7[compute_region_cluster ⏳]
-        T8[save_conversation ⏳]
-        T9[load_conversation ⏳]
+        T8[save_conversation]
+        T9[load_conversation]
         T10[map_operation ⏳]
     end
 
@@ -133,7 +153,7 @@ graph TD
     end
 
     subgraph "LangSmith Tracing"
-        LS1[Pipeline: AtlasParseGraph]
+        LS1[Pipeline: AtlasApp]
         LS2[Agent Steps: agent_loop_step]
         LS3[LLM Calls: langsmith_tags]
         LS4[Performance Metrics]
@@ -144,11 +164,27 @@ graph TD
     TREQ --> LS2
 ```
 
+**How to view Studio and traces**
+1. Start the LangGraph Agent Server locally with the repo's `langgraph.json`.
+2. Open Studio from the LangSmith UI and connect it to that local server.
+3. Run a flow from `backend/langgraph/atlas_graph.py`.
+4. Reuse the same `thread_id` to inspect one run across multiple steps.
+5. Open a checkpoint to inspect state, replay from that point, or fork a new branch.
+
+**How to view LangSmith Evaluation**
+1. Open [smith.langchain.com](https://smith.langchain.com).
+2. Create a dataset with input examples and optional reference outputs.
+3. Run an experiment against your graph or chain.
+4. Inspect each row to see the run output, evaluator scores, and latency/cost.
+5. Compare multiple experiments to understand whether a prompt or graph change improved results.
+
 **Architecture Reference**:
-- **StateGraph (DAG Pipeline)**: 7-node DAG defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py): `fetch → classify (conditional branch) → extract → entity_link → geocode → route → persist`
+- **LangGraph App**: [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) is the Studio-facing entry point. It dispatches `parse_link`, `parse_text`, `scan_url`, `parse_youtube`, `find_image_places`, `atlas_ai_discover`, and `chat` into graph nodes.
+- **StateGraph (DAG Pipeline)**: The parse path still runs as a deterministic graph, but now it is visible to Studio as a graph run with checkpoints and thread state.
 - **Agent Loop**: Defined in [`agent_orchestrator.py`](backend/services/agent_orchestrator.py). Runs up to 10 steps per turn. Each iteration: build context → `call_llm(tools=TOOLS)` → classify response → `tool_call` triggers `registry.execute()` and continues; `final_answer` or `text` returns.
-- **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), Working (extracted places), Long-term (user preferences via Supabase).
-- **Tracing**: [`observability.py`](backend/services/observability.py) — Pipeline graph named `AtlasParseGraph`, agent loop steps tagged as `agent_loop_step`, LLM calls tagged with `langsmith_tags`.
+- **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), working (extracted places), and long-term (user preferences via Supabase). Checkpoints give you thread-scoped time travel during runs.
+- **Tracing**: [`observability.py`](backend/services/observability.py) — LangSmith tracing is enabled through environment config, with graph runs, agent loop steps, and LLM calls visible in LangSmith.
+- **Studio Entry Point**: [`backend/langgraph_app.py`](backend/langgraph_app.py) + [`langgraph.json`](langgraph.json) expose the graph to LangGraph Studio without changing the FastAPI compatibility layer.
 
 ---
 
@@ -162,6 +198,7 @@ graph TD
 | **LLM Providers** | DeepSeek V4 Flash | Primary: structured extraction, classification, entity linking |
 | | Qwen 3.5 Flash | Secondary: web search decision, smart text reasoning |
 | | Gemini 3.5 Flash | Vision/OCR: Computer Use, screenshot analysis |
+| | GPT-4o | Vision: single-image place recognition |
 | **LLM Observability** | LangSmith | Full-stack tracing for LangGraph pipelines & agent calls |
 | **OCR** | GLM-OCR | Chinese text extraction from images |
 | **Geocoding** | Geoapify → LocationIQ → Google Maps (5-tier fallback) | Address → coordinates resolution |
@@ -174,21 +211,22 @@ graph TD
 
 ## Data Flow
 
-Data flows are split into five independent pipelines, each with a dedicated processing path.
+Data flows are split into seven independent pipelines, each with a dedicated processing path.
 
 ### Scenario A: Smart Text Pipeline
 
 ```
 POST /parse_text
-→ smart_text_service.py: analyze_smart_text()
-  → web_search_router.py: should_use_web_search()
-  → (optional) web_search() via Tavily
-  → LLM (Qwen for web reasoning, DeepSeek for extraction)
-→ content_classifier.py: classify_content()
-→ extraction_pipeline.py: extract_places()
-→ geocoder.py: geocode()
-→ route_planner.py: plan_route()
-→ supabase_service.py: persist()
+→ backend/langgraph/atlas_graph.py: parse_text node
+  → smart_text_service.py: analyze_smart_text()
+    → web_search_router.py: should_use_web_search()
+    → (optional) web_search() via Tavily
+    → LLM (Qwen for web reasoning, DeepSeek for extraction)
+  → content_classifier.py: classify_content()
+  → extraction_pipeline.py: extract_places()
+  → geocoder.py: geocode()
+  → route_planner.py: plan_route()
+  → supabase_service.py: persist()
 ```
 
 ```mermaid
@@ -202,7 +240,8 @@ sequenceDiagram
     participant DB as Supabase
 
     C->>API: POST /parse_text (pasted text)
-    API->>STS: analyze_smart_text()
+    API->>LG: parse_text node
+    LG->>STS: analyze_smart_text()
     STS->>WSR: should_use_web_search()
     WSR-->>STS: decision (boolean)
     alt web_search enabled
@@ -221,18 +260,19 @@ sequenceDiagram
 
 **Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
 
-### Scenario B: Image Scan Pipeline
+### Scenario B: Find Text Places Pipeline
 
 ```
 POST /scan_images or POST /scan_images_base64
-→ image_scanner.py: scan_images()
-  → gemini_computer_use.py: Gemini screenshot analysis
-  → glm_ocr.py: OCR text extraction
-→ content_classifier.py: classify_content()
-→ extraction_pipeline.py: extract_places()
-→ geocoder.py: geocode()
-→ route_planner.py: plan_route()
-→ supabase_service.py: persist()
+→ backend/langgraph/atlas_graph.py: scan_url / scan_images_base64 path
+  → image_scanner.py: scan_images()
+    → gemini_computer_use.py: Gemini screenshot analysis
+    → glm_ocr.py: OCR text extraction
+  → content_classifier.py: classify_content()
+  → extraction_pipeline.py: extract_places()
+  → geocoder.py: geocode()
+  → route_planner.py: plan_route()
+  → supabase_service.py: persist()
 ```
 
 ```mermaid
@@ -263,12 +303,13 @@ sequenceDiagram
 
 ```
 POST /parse_link (reddit.com URL)
-→ agent_orchestrator.py: run_pipeline()
-→ web_fetch_chain.py: fetch_web_content()
-  → _looks_like_reddit() → true
-  → _scrape_reddit() → reddit_fetcher.py: fetch_reddit_post()
-  → Reddit JSON API (title + selftext)
-→ content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
+→ backend/langgraph/atlas_graph.py: parse_link node
+  → agent_orchestrator.py: run_pipeline()
+  → web_fetch_chain.py: fetch_web_content()
+    → _looks_like_reddit() → true
+    → _scrape_reddit() → reddit_fetcher.py: fetch_reddit_post()
+    → Reddit JSON API (title + selftext)
+  → content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
 ```
 
 ```mermaid
@@ -301,10 +342,11 @@ sequenceDiagram
 
 ```
 POST /parse_link (non-reddit URL) or POST /scrape_url
-→ web_fetch_chain.py: fetch_web_content()
-  → Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX + BeautifulSoup (fallback chain)
-→ (optional) playwright_scraper.py or web_scraper.py for Gemini screenshot extraction
-→ content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
+→ backend/langgraph/atlas_graph.py: parse_link / scan_url path
+  → web_fetch_chain.py: fetch_web_content()
+    → Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX + BeautifulSoup (fallback chain)
+  → (optional) playwright_scraper.py or web_scraper.py for Gemini screenshot extraction
+  → content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
 ```
 
 ```mermaid
@@ -336,19 +378,89 @@ sequenceDiagram
 
 **Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`playwright_scraper.py`](backend/services/playwright_scraper.py), [`web_scraper.py`](backend/services/web_scraper.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
 
-### Scenario E: Conversation Management
+### Scenario E: YouTube Links Pipeline
+
+```
+POST /parse_youtube
+→ backend/langgraph/atlas_graph.py: parse_youtube node
+  → youtube-transcript-api: transcript / subtitles / chapters
+  → DeepSeek extraction: place extraction + dedupe + hierarchy cleanup
+  → geocoder.py: geocode()
+  → route_planner.py: plan_route()
+  → supabase_service.py: persist()
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant LG as LangGraph App
+    participant YT as youtube-transcript-api
+    participant DS as DeepSeek
+    participant GEO as Geocoder
+    participant DB as Supabase
+
+    C->>API: POST /parse_youtube
+    API->>LG: parse_youtube node
+    LG->>YT: fetch transcript + chapters
+    YT-->>LG: transcript / subtitles / chapters
+    LG->>DS: extract places + dedupe + hierarchy cleanup
+    DS-->>LG: structured place candidates
+    LG->>GEO: geocode coordinates
+    GEO-->>LG: resolved locations
+    LG->>DB: persist conversation / session state
+    LG-->>API: ParseResponse
+    API-->>C: map pins + place list
+```
+
+**Key files**: [`youtube_places_service.py`](backend/services/youtube_places_service.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py)
+
+### Scenario F: Find Image Places Pipeline
+
+```
+POST /find_image_places
+→ backend/langgraph/atlas_graph.py: find_image_places node
+  → GPT-4o Vision: landmark / place recognition
+  → geocoder.py: optional coordinate validation / normalization
+  → supabase_service.py: persist()
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Mobile)
+    participant API as FastAPI
+    participant LG as LangGraph App
+    participant GPT as GPT-4o Vision
+    participant GEO as Geocoder
+    participant DB as Supabase
+
+    C->>API: POST /find_image_places
+    API->>LG: find_image_places node
+    LG->>GPT: image + prompt
+    GPT-->>LG: landmark name + coordinates + confidence
+    LG->>GEO: optional coordinate validation / normalization
+    GEO-->>LG: final location payload
+    LG->>DB: persist session or conversation context
+    LG-->>API: ParseResponse
+    API-->>C: map pin + place label
+```
+
+**Key files**: [`find_image_places_service.py`](backend/services/find_image_places_service.py), [`langchain_runtime.py`](backend/services/langchain_runtime.py)
+
+### Scenario G: Conversation Management
 
 ```
 POST /chat (with session_id)
-→ agent_orchestrator.py: chat()
-→ conversation_manager.py: get_session_context()
-  → Short-term: current conversation history
-  → Working: extracted places buffer
-  → Long-term: user preferences from DB
-→ _agent_loop(): LLM with context + tools
-  → ToolRegistry.execute() for tool calls
-  → conversation_manager.py: update_session()
-→ Structured response
+→ backend/langgraph/atlas_graph.py: chat node
+  → agent_orchestrator.py: chat()
+  → conversation_manager.py: get_session_context()
+    → Short-term: current conversation history
+    → Working: extracted places buffer
+    → Long-term: user preferences from DB
+  → _agent_loop(): LLM with context + tools
+    → ToolRegistry.execute() for tool calls
+    → conversation_manager.py: update_session()
+  → Structured response
 ```
 
 ```mermaid
@@ -398,7 +510,7 @@ sequenceDiagram
 | Feature | Implementation | Status |
 |---------|---------------|--------|
 | **Tracing** | LangSmith via [`configure_langsmith()`](backend/services/observability.py) | ✅ Configured via environment |
-| **Pipeline Tracing** | `AtlasParseGraph` named graph in LangGraph | ✅ Active |
+| **Pipeline Tracing** | `AtlasApp` graph in LangGraph + `AtlasParseGraph` legacy inner graph | ✅ Active |
 | **Agent Loop Tracing** | `agent_loop_step` run metadata | ✅ Active |
 | **LLM Call Tracing** | Model metadata with `langsmith_tags` | ✅ Active |
 | **Performance Metrics** | Custom [`performance_logger.py`](backend/services/performance_logger.py) | ✅ Active |
@@ -406,7 +518,19 @@ sequenceDiagram
 
 Configuration in [`observability.py`](backend/services/observability.py) reads `LANGSMITH_API_KEY` from the environment and sets `LANGSMITH_TRACING=true`, `LANGCHAIN_TRACING_V2=true`, and `LANGSMITH_PROJECT=atlas-mobile`. The system degrades gracefully when the key is absent.
 
-**What is LangSmith Evaluation?** LangSmith Evaluation is a feature that allows you to test LLM pipelines against predefined datasets to measure performance (accuracy, latency, cost). To set it up: 1) Create a dataset in the [LangSmith UI](https://smith.langchain.com), 2) Add test cases (inputs + expected outputs), 3) Run evaluators using `langsmith.evaluation.evaluate()` or `run_on_dataset()`. This is an optional enhancement and not required for core functionality.
+**How to use LangGraph Studio**
+1. Start the LangGraph Agent Server locally with the repo's `langgraph.json`.
+2. Open Studio from the LangSmith UI and connect it to that local server.
+3. Run a flow from `backend/langgraph/atlas_graph.py`.
+4. Reuse the same `thread_id` to inspect one run across multiple steps.
+5. Open a checkpoint to inspect state, replay from that point, or fork a new branch.
+
+**How to use LangSmith Evaluation**
+1. Open [smith.langchain.com](https://smith.langchain.com).
+2. Create a dataset with input examples and optional reference outputs.
+3. Run an experiment against your graph or chain.
+4. Inspect each row to see the run output, evaluator scores, and latency/cost.
+5. Compare multiple experiments to see whether a prompt or graph change improved results.
 
 ---
 
@@ -424,7 +548,7 @@ The smart-text pipeline runs a `qwen3.5-flash → deepseek-chat` cascade, then g
 
 **Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`backend/langchain/runtime.py`](backend/langchain/runtime.py)
 
-### 3. Image Scan — `POST /scan_images_base64` / `POST /scan_images`
+### 3. Find Text Places — `POST /scan_images_base64` / `POST /scan_images`
 
 Upload up to 3 images (JPEG/PNG, or HEIC converted to JPEG). GLM-OCR extracts text, then an LLM-based [`content_classifier.py`](backend/services/content_classifier.py) routes the content: named POI → extraction pipeline, address-heavy → address-first geocoding via Atlas AI Discovery.
 
@@ -432,11 +556,19 @@ Upload up to 3 images (JPEG/PNG, or HEIC converted to JPEG). GLM-OCR extracts te
 
 ### 4. Any Links (Vision) — `POST /scan_url`
 
-For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens the page in a Playwright browser, dismisses interstitials, scrolls top-to-bottom, and captures up to 8 screenshots. GLM-OCR reads the screenshots, then reuses the Image Scan extraction path downstream.
+For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens the page in a Playwright browser, dismisses interstitials, scrolls top-to-bottom, and captures up to 8 screenshots. GLM-OCR reads the screenshots, then reuses the Find Text Places extraction path downstream.
 
 **Key files**: [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py)
 
-### 5. Atlas AI Discovery — `POST /atlas_ai/discover`
+### 5. YouTube Links — `POST /parse_youtube`
+
+See `Data Flow` Scenario E for the live call chain and diagram.
+
+### 6. Find Image Places — `POST /find_image_places`
+
+See `Data Flow` Scenario F for the live call chain and diagram.
+
+### 7. Atlas AI Discovery — `POST /atlas_ai/discover`
 
 For natural-language queries that need exact addresses: DeepSeek researches addresses directly (e.g. "Where did Taylor Swift get married?" → Church of St. Patrick, Killarney), then address-first geocoding returns coordinates without going through the full extraction pipeline.
 
@@ -450,13 +582,15 @@ For natural-language queries that need exact addresses: DeepSeek researches addr
 
 | Agent | Responsibility | Implementation |
 |-------|---------------|----------------|
-| **Supervisor Orchestrator** | Routes each import through an explicit LangGraph StateGraph, manages session context, handles follow-up chat with tool-calling | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py) |
+| **Supervisor Orchestrator** | Routes each import through the LangGraph app, manages session context, handles follow-up chat with tool-calling | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) |
 | **Extraction Agent** | Two-stage pipeline: LLM extracts all geographic entities with hierarchy classification → rule engine filters out redundant high-level entities (countries, states, cities) while preserving POIs, neighborhoods, and landmarks | [`extraction_pipeline.py`](backend/services/extraction_pipeline.py) |
 | **Entity Linking Agent** | DeepSeek-based disambiguation: resolves ambiguous names by appending geographic context (ROM → Royal Ontario Museum, Suzhou → Suzhou, Jiangsu, Cambridge → Cambridge, UK), resolves generic terms (monuments → Washington Monument) | Integrated in orchestrator |
 | **Content Classifier** | LLM routes OCR/pasted text to the correct pipeline: named POI content → entity extraction, address-heavy content → address-first geocoding | [`content_classifier.py`](backend/services/content_classifier.py) |
 | **Smart Text Agent** | Parses freeform travel notes, prompts, and itineraries via a fixed Qwen 3.5 Flash → DeepSeek V4 Flash cascade | [`smart_text_service.py`](backend/services/smart_text_service.py) |
 | **Web Search Router** | Retained for compatibility; smart text no longer branches on the toggle | [`web_search_router.py`](backend/services/web_search_router.py) |
-| **Image Scanner** | Orchestrates GLM-OCR → content classification → extraction/discovery pipeline | [`image_scanner.py`](backend/services/image_scanner.py) |
+| **Find Text Places** | Orchestrates GLM-OCR → content classification → extraction/discovery pipeline | [`image_scanner.py`](backend/services/image_scanner.py) |
+| **YouTube Links Parser** | Extracts transcript/subtitles + chapters, then runs DeepSeek extraction and geocoding | [`youtube_places_service.py`](backend/services/youtube_places_service.py) |
+| **Find Image Places** | Uses GPT-4o vision to identify a landmark from a single photo | [`find_image_places_service.py`](backend/services/find_image_places_service.py) |
 | **Vision Browser Agent** | Gemini Computer Use for visual page capture — handles anti-bot, JS-heavy, and login-walled pages | [`gemini_computer_use.py`](backend/services/gemini_computer_use.py) |
 | **OCR Service** | GLM-OCR integration via Zhipu AI's Layout Parsing API, with HEIC → JPEG conversion for iOS compatibility | [`glm_ocr.py`](backend/services/glm_ocr.py) |
 | **Atlas Discovery Agent** | DeepSeek-based direct address research for natural-language queries, bypassing the extraction pipeline | [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py) |

@@ -1,5 +1,5 @@
-import Constants from 'expo-constants';
 import { ParseResult } from '@/types/route';
+import Constants from 'expo-constants';
 
 /**
  * Base URL for the FastAPI backend.
@@ -102,6 +102,45 @@ export type ConversationSummaryRecord = {
   end_message_index: number;
   created_at?: string;
   updated_at?: string;
+};
+
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  source_url?: string | null;
+  location_count?: number;
+  message_count?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ConversationDetailResponse = {
+  status: string;
+  session: {
+    session_id: string;
+    conversation_id?: string | null;
+    source_url?: string | null;
+    source_type?: string | null;
+    title?: string;
+    locations?: Array<{
+      name: string;
+      latitude: number;
+      longitude: number;
+      full_address?: string;
+      sentiment?: 'positive' | 'neutral' | 'negative' | null;
+      description?: string | null;
+      category?: string | null;
+    }>;
+    route?: unknown;
+    removed_noise?: unknown;
+    removed_hierarchy?: unknown;
+    inferred_region?: string | null;
+    is_multi_region?: boolean;
+    message_count?: number;
+    created_at?: number;
+    updated_at?: number;
+  };
+  messages: Array<{ role: string; content: string }>;
 };
 
 export type CreateSessionResponse = {
@@ -225,40 +264,34 @@ export async function scanUrl(
   return postParseWithProgress<ParseResult>('/scan_url', { url }, onProgress);
 }
 
+export async function parseYoutube(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_youtube', { url }, onProgress);
+}
+
+/**
+ * Find image places — identify geographic location from an image.
+ * Uses Google Cloud Vision landmark detection + optional DeepSeek vision fallback.
+ */
+export async function findImagePlace(
+  imageBase64: string,
+  onProgress?: (progress: ParseProgress) => void,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/find_image_places', { image: imageBase64 }, onProgress);
+}
+
 export async function fetchMemories(): Promise<MemoryRecord[]> {
   const data = await getJson<{ memories: MemoryRecord[] }>('/memories');
   return data.memories || [];
 }
 
-export async function fetchConversations(): Promise<Array<{
-  id: string;
-  title: string;
-  source_url?: string | null;
-  location_count?: number;
-  message_count?: number;
-  created_at?: string;
-  updated_at?: string;
-}>> {
-  const data = await getJson<{ conversations: Array<{
-    id: string;
-    title: string;
-    source_url?: string | null;
-    location_count?: number;
-    message_count?: number;
-    created_at?: string;
-    updated_at?: string;
-  }> }>('/conversations');
+export async function fetchConversations(): Promise<ConversationSummary[]> {
+  const data = await getJson<{ conversations: ConversationSummary[] }>('/conversations');
   return data.conversations || [];
 }
 
-export async function fetchConversation(conversationId: string): Promise<{
-  session_id: string;
-  conversation_id?: string;
-  title?: string;
-  message_count?: number;
-  summary_message_count?: number;
-  conversation_summary?: string;
-  messages?: Array<{ role: string; content: string }>;
-}> {
+export async function fetchConversation(conversationId: string): Promise<ConversationDetailResponse> {
   return getJson(`/conversations/${conversationId}`);
 }

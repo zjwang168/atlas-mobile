@@ -18,6 +18,7 @@ import {
   formatParsedPlaceSubtitle,
   parseInput,
   parseText,
+  parseYoutubeLink,
   scanAnyLink,
   type ParseProgressHandler,
   type ParseResult,
@@ -31,7 +32,7 @@ LogBox.ignoreLogs([
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';
 type ImportMeta = {
-  mode?: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape';
+  mode?: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' | 'youtube_links' | 'find_image_places';
   rawInput: string;
   title?: string;
   sourceUrl?: string;
@@ -175,7 +176,7 @@ function AppContent() {
           };
           parseResultRef.current = adaptedResult;
           setParsedPlaces(adaptedResult.places);
-          addChatHistoryItem({
+          const tempHistoryId = addChatHistoryItem({
             title: effectiveTitle,
             sourceUrl,
             locationCount: adaptedResult.places.length,
@@ -195,6 +196,57 @@ function AppContent() {
         });
       return;
       }
+
+    if (importMeta?.mode === 'youtube_links') {
+      const sourceUrl = importMeta?.rawInput || importText;
+      parseYoutubeLink(sourceUrl, handleProgress)
+        .then((result) => {
+          if (cancelled || !result) return;
+          const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
+          const adaptedResult: ParseResult = {
+            ...result,
+            sourceTitle: effectiveTitle,
+          };
+          parseResultRef.current = adaptedResult;
+          setParsedPlaces(adaptedResult.places);
+          const tempHistoryId = addChatHistoryItem({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+          });
+
+          saveChatHistory({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+          })
+            .then(({ id, createdAt }) => {
+              replaceChatHistoryItem(tempHistoryId, {
+                id,
+                title: effectiveTitle,
+                sourceUrl,
+                locationCount: adaptedResult.places.length,
+                places: adaptedResult.places,
+                createdAt,
+              });
+            })
+            .catch((err) => console.warn('[App] saveChatHistory error:', err));
+
+          setTimeout(() => {
+            if (!cancelled) setOverlay('save');
+          }, 2000);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn('YouTube parse failed:', err);
+            Alert.alert('Parse Failed', err.message || 'Failed to parse YouTube URL.');
+            setOverlay('import');
+          }
+        });
+      return;
+    }
 
       // Image scan mode: call scan_images_base64 API
     if (importMeta?.mode === 'image_scan') {
@@ -237,6 +289,69 @@ function AppContent() {
           if (!cancelled) {
             console.warn('Image scan failed:', err);
             Alert.alert('Scan Failed', err.message || 'Failed to scan images.');
+            setOverlay('import');
+          }
+        });
+      return;
+    }
+
+    // Find Image Places mode: call find_image_places API
+    if (importMeta?.mode === 'find_image_places') {
+      const imageData = importMeta?.imageDataList?.[0];
+      if (!imageData) {
+        Alert.alert('Error', 'No image data available.');
+        setOverlay('import');
+        return;
+      }
+      const apiBase = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+      fetch(`${apiBase}/find_image_places`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: imageData }),
+      })
+        .then(async (response) => {
+          if (cancelled) return;
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.detail || `HTTP ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((result) => {
+          if (cancelled || !result) return;
+          const locations = result.locations || [];
+          const firstLoc = locations[0] || {};
+          const isUnknown = !firstLoc.latitude && !firstLoc.longitude;
+          if (isUnknown) {
+            Alert.alert(
+              'Could Not Identify Location',
+              'We were unable to identify the geographic location in this image. Please try a different photo.',
+            );
+            setOverlay('import');
+            return;
+          }
+          const adaptedResult = buildParseResult(
+            result,
+            'find_image',
+            'Identified location from image',
+          );
+          parseResultRef.current = adaptedResult;
+          setParsedPlaces(adaptedResult.places);
+          const effectiveTitle = result.title || 'Identified location from image';
+          addChatHistoryItem({
+            title: effectiveTitle,
+            sourceUrl: 'find_image_places',
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+          });
+          setTimeout(() => {
+            if (!cancelled) setOverlay('save');
+          }, 2000);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn('Find image place failed:', err);
+            Alert.alert('Failed', err.message || 'Failed to identify location.');
             setOverlay('import');
           }
         });
@@ -401,25 +516,28 @@ function AppContent() {
               onSubmit={(text, mode, webSearch) => {
                 parseResultRef.current = null;
                 setActiveHistoryItem(null);
-                const pipelineMode: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' =
+                const pipelineMode: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' | 'youtube_links' | 'find_image_places' =
                   mode === 'smartText' ? 'smart_text' :
-                  mode === 'imageScan' ? 'image_scan' :
+                  mode === 'findTextPlaces' ? 'image_scan' :
+                  mode === 'findImagePlaces' ? 'find_image_places' :
+                  mode === 'youtubeLinks' ? 'youtube_links' :
                   mode === 'anyLinks' ? 'web_scrape' :
                   'parse';
                 setImportMeta({ mode: pipelineMode, rawInput: text, title: text, webSearch });
                 setImportText(text);
                 setOverlay('analyzing');
               }}
-              onSubmitImageScan={(imagesBase64) => {
+              onSubmitImageScan={(imagesBase64, submitMode) => {
                 parseResultRef.current = null;
                 setActiveHistoryItem(null);
+                const isFindImagePlaces = submitMode === 'findImagePlaces';
                 setImportMeta({
-                  mode: 'image_scan',
-                  rawInput: 'image_scan',
-                  title: 'Scanned places from image',
+                  mode: isFindImagePlaces ? 'find_image_places' : 'image_scan',
+                  rawInput: isFindImagePlaces ? 'find_image_places' : 'image_scan',
+                  title: isFindImagePlaces ? 'Find Image Place' : 'Scanned places from image',
                   imageDataList: imagesBase64,
                 });
-                setImportText('image_scan');
+                setImportText(isFindImagePlaces ? 'find_image_places' : 'image_scan');
                 setOverlay('analyzing');
               }}
               onScanResult={(result) => {

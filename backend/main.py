@@ -48,15 +48,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.services import cache, progress
-from backend.services.agent_orchestrator import agent_orchestrator
-from backend.services.atlas_ai_discovery import discover_places_from_query
 from backend.services.conversation_manager import conversation_manager
-from backend.services.gemini_computer_use import (extract_web_screenshots,
-                                                  extract_web_text)
-from backend.services.glm_ocr import ocr_images
-from backend.services.image_scanner import scan_text
-from backend.services.smart_text_service import analyze_smart_text
+from backend.services.gemini_computer_use import extract_web_text
 from backend.services.translation import translate_to_english
+from backend.langgraph.atlas_graph import app as atlas_graph_app
 
 NO_PLACE_INFO = "No Place Information that can be extracted"
 
@@ -181,6 +176,11 @@ class ScanUrlRequest(BaseModel):
     request_id: Optional[str] = None
 
 
+class YouTubeParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     detail: str
 
@@ -249,33 +249,19 @@ async def scan_url(req: ScanUrlRequest):
     try:
         progress.start(req.request_id, "Opening page.") if req.request_id else None
         progress.stream_note(req.request_id, "Reading screenshots", {"detail": "Opening screenshots and preparing OCR."})
-
-        shot_result = await extract_web_screenshots(url)
-        if not shot_result.success or not shot_result.screenshots:
-            raise ValueError(shot_result.error or "Failed to capture page screenshots.")
-
-        progress.mark(req.request_id, "source_fetched", "Source prepared.", {
-            "title": shot_result.title or url,
-            "characters": len(shot_result.screenshots),
-            "source_type": "gemini_computer_use",
-            "provider": shot_result.provider,
-        })
-        translated_title = await translate_to_english(shot_result.title or url, request_id=req.request_id)
-        progress.stream_note(req.request_id, "Reading screenshots", {"detail": "OCR is complete; identifying locations in the scan."})
-
-        ocr_text = await ocr_images(shot_result.screenshots)
-        if not ocr_text.strip():
-            raise ValueError(NO_PLACE_INFO)
-        ocr_text = await translate_to_english(ocr_text, request_id=req.request_id)
-
-        progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
-            "location_count": 1,
-            "inferred_region": None,
-        })
-
-        result = await scan_text(ocr_text)
-        result["title"] = translated_title or result.get("title") or url
-        result["source_type"] = "any_links"
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "scan_url",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:scan_url",
+            },
+        )
+        result = state.get("result", {})
         progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
             "query_count": len(result.get("locations", [])),
             "resolved_count": len(result.get("locations", [])),
@@ -288,6 +274,58 @@ async def scan_url(req: ScanUrlRequest):
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Any Links scan failed: {e}")
+
+
+@app.post("/parse_youtube", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_youtube(req: YouTubeParseRequest):
+    """Identify places from a YouTube video's transcript and chapters."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No YouTube URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+
+    try:
+        progress.start(req.request_id, "Opening video.") if req.request_id else None
+        progress.stream_note(req.request_id, "youtube:fetch", {"detail": "Fetching transcript and chapters."})
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_youtube",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_youtube",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "youtube_links"
+
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+
+        locs = result.get("locations", [])
+        print(f"\n{'='*50}")
+        print(f"📺 YouTube URL: {url[:80]}")
+        print(f"📍 Locations ({len(locs)}):")
+        for i, loc in enumerate(locs):
+            print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
+        print(f"{'='*50}\n")
+
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"YouTube parse failed: {e}")
 
 
 @app.post("/parse_link", response_model=ParseResponse,
@@ -311,8 +349,19 @@ async def parse_link(req: ParseRequest) -> ParseResponse:
     try:
         progress.start(req.request_id, "Fetching source content.") if req.request_id else None
         progress.stream_note(req.request_id, "Fetching source", {"detail": "Fetching and routing the link before parsing."})
-        # Run agentic pipeline
-        result = await agent_orchestrator.run_pipeline(req.url, session, request_id=req.request_id)
+        result_state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_link",
+                "url": req.url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_link",
+            },
+        )
+        result = result_state.get("result", {})
 
         # Build response — backward compatible with old format + new fields
         response_data = {
@@ -381,8 +430,20 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
     try:
         progress.start(req.request_id, "Reading pasted content.") if req.request_id else None
         progress.stream_note(req.request_id, "Analyzing text", {"detail": "Reading pasted text and extracting place references."})
-        english_text = await translate_to_english(text, request_id=req.request_id)
-        result = await analyze_smart_text(english_text, use_web_search=req.web_search, request_id=req.request_id)
+        result_state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_text",
+                "text": text,
+                "web_search": req.web_search,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_text",
+            },
+        )
+        result = result_state.get("result", {})
         session.title = result["title"]
         session.source_type = result.get("source_type")
         session.locations = result.get("locations", [])
@@ -440,8 +501,18 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
 async def chat(req: ChatRequest) -> dict:
     """Continue conversation with the AI agent."""
     try:
-        result = await agent_orchestrator.chat(req.session_id, req.message)
-        return result
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "chat",
+                "session_id": req.session_id,
+                "text": req.message,
+            },
+            config={
+                "configurable": {"thread_id": req.session_id},
+                "run_name": "AtlasApp:chat",
+            },
+        )
+        return state.get("result", {})
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -465,8 +536,18 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
             "characters": len(query),
             "source_type": "atlas_ai",
         })
-
-        result = await discover_places_from_query(query)
+        result_state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "atlas_ai_discover",
+                "query": query,
+                "request_id": req.request_id,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or query[:32]},
+                "run_name": "AtlasApp:atlas_ai_discover",
+            },
+        )
+        result = result_state.get("result", {})
         progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(result.get("locations", [])),
             "inferred_region": result.get("inferred_region"),
@@ -583,6 +664,50 @@ async def health():
 async def parse_progress(request_id: str) -> dict:
     """Return progress events for an in-flight or recent parse request."""
     return progress.get(request_id)
+
+
+# ---- Find Image Places ----
+
+class FindImagePlaceRequest(BaseModel):
+    image: str  # base64-encoded image data
+
+
+@app.post("/find_image_places", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def find_image_place_endpoint(req: FindImagePlaceRequest):
+    """Identify a geographic place from an image using Google Cloud Vision + optional DeepSeek vision fallback.
+
+    Accepts a single base64-encoded image.
+    Returns the identified landmark name, coordinates, and a confidence-based subtitle.
+    """
+    if not req.image:
+        raise HTTPException(status_code=400, detail="No image provided.")
+
+    try:
+        result_state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "find_image_places",
+                "image": req.image,
+            },
+            config={
+                "configurable": {"thread_id": f"find_image_{id(req)}"},
+                "run_name": "AtlasApp:find_image_places",
+            },
+        )
+        result = result_state.get("result", {})
+        loc = (result.get("locations") or [{}])[0]
+        print(
+            f"\n{'='*50}\n"
+            f"🖼️ Find Image Place: {result.get('title', '?')}\n"
+            f"📍 ({loc.get('latitude', 0):.4f}, {loc.get('longitude', 0):.4f})\n"
+            f"🔍 Source: {loc.get('source', '?')}\n"
+            f"{'='*50}\n"
+        )
+        return ParseResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Find image place failed: {e}")
 
 
 # ---- Image Scan ----

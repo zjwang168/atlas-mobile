@@ -278,19 +278,29 @@ async def _tool_extract_locations(text: str, source_type: str = "unknown") -> di
 async def _tool_save_conversation(session_id: str) -> dict:
     """Save conversation to persistent storage.
 
-    Stub — to be implemented when Supabase integration is ready.
+    Wraps ConversationManager.save_conversation so the agent loop can persist
+    the active session when needed.
     """
-    # TODO: Implement Supabase conversation persistence
-    raise NotImplementedError("save_conversation not yet implemented")
+    from backend.services.conversation_manager import conversation_manager
+
+    conversation_id = await conversation_manager.save_conversation(session_id)
+    if not conversation_id:
+        return {"success": False, "error": "Failed to save conversation"}
+    return {"success": True, "conversation_id": conversation_id}
 
 
 async def _tool_load_conversation(conversation_id: str) -> dict:
     """Load a past conversation from persistent storage.
 
-    Stub — to be implemented when Supabase integration is ready.
+    Wraps ConversationManager.load_conversation and returns the serialized
+    session so the caller can resume from it.
     """
-    # TODO: Implement Supabase conversation loading
-    raise NotImplementedError("load_conversation not yet implemented")
+    from backend.services.conversation_manager import conversation_manager
+
+    session = await conversation_manager.load_conversation(conversation_id)
+    if not session:
+        return {"success": False, "error": "Conversation not found"}
+    return {"success": True, "session": session.to_dict()}
 
 
 async def _tool_map_operation(action: str, params: dict | None = None) -> dict:
