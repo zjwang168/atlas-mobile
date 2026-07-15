@@ -151,7 +151,7 @@ function AppContent() {
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [parseProgressEvents, setParseProgressEvents] = useState<ParseProgressEvent[]>([]);
   const parseResultRef = useRef<ParseResult | null>(null);
-  const { setParsedPlaces, refreshSavedPlaces, setOverlay: setHomeOverlay, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setSelectedPlaceCoordinate, setSelectedPlaceId, setActiveSidekick } = useHome();
+  const { chatHistory, setParsedPlaces, refreshSavedPlaces, setOverlay: setHomeOverlay, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setSelectedPlaceCoordinate, setSelectedPlaceId, setActiveSidekick } = useHome();
 
   // Run the parse while the Analyzing screen is showing; advance to the Save
   // screen when it resolves (unless the user cancelled out of analyzing).
@@ -214,13 +214,15 @@ function AppContent() {
             sourceUrl,
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: 'youtube_links',
           });
 
-          saveChatHistory({
+            saveChatHistory({
             title: effectiveTitle,
             sourceUrl,
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: 'youtube_links',
           })
             .then(({ id, createdAt }) => {
               replaceChatHistoryItem(tempHistoryId, {
@@ -230,6 +232,7 @@ function AppContent() {
                 locationCount: adaptedResult.places.length,
                 places: adaptedResult.places,
                 createdAt,
+                sourceType: 'youtube_links',
               });
             })
             .catch((err) => console.warn('[App] saveChatHistory error:', err));
@@ -343,6 +346,7 @@ function AppContent() {
             sourceUrl: 'find_image_places',
             locationCount: adaptedResult.places.length,
             places: adaptedResult.places,
+            sourceType: 'find_image_places',
           });
           setTimeout(() => {
             if (!cancelled) setOverlay('save');
@@ -472,12 +476,23 @@ function AppContent() {
               setParsedPlaces([]);
               // 刷新 MyPlaces 列表
               await refreshSavedPlaces();
+              const sourceUrl = importMeta?.sourceUrl || importText;
+              const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
+              const nextHistoryItem = chatHistory.find(
+                (item) =>
+                  item.sourceUrl === sourceUrl &&
+                  item.title === effectiveTitle &&
+                  item.locationCount === parseResult.places.length,
+              ) ?? chatHistory[0] ?? null;
+              if (nextHistoryItem) {
+                setActiveHistoryItem(nextHistoryItem);
+                setActiveSidekick('aiChat');
+              }
+              setSelectedPlaceCoordinate(parseResult.centerCoordinate);
               console.log(`Saved ${saved.length} places to Supabase`);
             } catch (e) {
               console.error('Save failed:', e);
             }
-            setActiveHistoryItem(null);
-            setSelectedPlaceCoordinate(null);
             setSelectedPlaceId(null);
             setImportMeta(null);
             setOverlay('none');

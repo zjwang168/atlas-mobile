@@ -14,10 +14,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   smart_text: 'Smart Text',
   image_scan: 'Image Scan',
+  find_image_places: 'Find Image Places',
   reddit_links: 'Reddit Links',
   any_links: 'Any Links',
-  link: 'Link',
-  text: 'Text',
+  youtube_links: 'YouTube Links',
 };
 
 import { loadChatHistory } from '../../services/supabase/supabaseClient';

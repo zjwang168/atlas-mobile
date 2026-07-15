@@ -12,6 +12,7 @@ export type ChatHistoryItem = {
   title: string;
   sourceUrl: string;
   locationCount: number;
+  messageCount?: number;
   places: ParsedPlace[];
   createdAt: string;
   /** Which import flow produced this chat: 'smart_text' | 'image_scan' |

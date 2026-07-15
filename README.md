@@ -470,6 +470,11 @@ POST /chat (with session_id)
   → Structured response (same shape as before)
 ```
 
+On the mobile side, the Atlas AI home screen now merges the old chat-history entry point and the Atlas AI conversation entry point into one history-driven flow:
+- `GET /conversations` populates the Atlas AI history list.
+- Tapping a history item opens `GET /conversations/{id}` and hydrates the chat transcript plus saved places.
+- The active chat keeps its own `session_id` for turn-by-turn continuation, while the persisted `conversation_id` is used for restore/reload.
+
 ```mermaid
 sequenceDiagram
     participant C as Client (Mobile)
@@ -539,6 +544,77 @@ Configuration in [`observability.py`](backend/services/observability.py) reads `
 3. Run an experiment against your graph or chain.
 4. Inspect each row to see the run output, evaluator scores, and latency/cost.
 5. Compare multiple experiments to see whether a prompt or graph change improved results.
+
+## Chat History & Memory
+
+The conversation system has two layers that work together:
+
+1. **Frontend conversation history** powers the Atlas AI home screen history list and chat restore flow.
+2. **Backend session memory + long-term memory** powers the active chat, rolling summaries, tool side-effects, and durable preferences.
+
+```mermaid
+graph TD
+    UI[Atlas AI Home<br/>History list + active chat] --> LIST[GET /conversations<br/>Load history cards]
+    LIST --> DETAIL[GET /conversations/{id}<br/>Hydrate a full chat]
+    DETAIL --> CHAT[AIChatBox<br/>Restored messages + places]
+
+    CHAT --> POSTCHAT[POST /chat<br/>session_id + message + conversation_id]
+    POSTCHAT --> RECOVER[ConversationManager<br/>get_session / load_conversation]
+    RECOVER --> SHORT[Short-term session memory<br/>session.messages]
+    RECOVER --> WORK[Working chat state<br/>session.locations + pending_place_action]
+    RECOVER --> LONG[Long-term memory preload<br/>conversation_manager.get_all_memories()]
+
+    SHORT --> PROMPT[Build chat system prompt<br/>history + rolling summary + user memory]
+    WORK --> PROMPT
+    LONG --> PROMPT
+    PROMPT --> AGENT[LangChain tool-calling loop<br/>chat_agent.run_chat()]
+
+    AGENT --> TOOL{Tool call?}
+    TOOL -->|map_operation| MAP[Pin in Chat / Save to My Places]
+    TOOL -->|other current/future tools| REG[ToolRegistry.execute()]
+    REG --> AGENT
+    MAP --> STATE[Update session.locations<br/>and pending_place_action]
+    AGENT --> MSG[Append assistant/user/tool messages]
+
+    MSG --> SUMMARY[_maybe_roll_conversation_summary()<br/>compress every ~10 new messages]
+    SUMMARY --> SUMDB[(conversation_summaries)]
+    MSG --> MEMORY[_update_memory()<br/>extract durable preferences]
+    MEMORY --> MEMDB[(long_term_memory)]
+    MSG --> SAVE[conversation_manager.save_conversation()]
+    SAVE --> CONV[(conversations)]
+    SAVE --> MSGDB[(conversation_messages)]
+    SAVE --> LOCDB[(conversation_locations)]
+    SAVE --> CHAT
+```
+
+**What happens in a single chat**
+- Each turn starts from the active `session_id`; if needed, the backend can recover the session from the saved `conversation_id`.
+- `chat_agent.py` builds the prompt from recent chat messages, the rolling `conversation_summary`, and the cached `user_memory_summary`.
+- If the model emits tool calls, the agent loop executes them through `ToolRegistry`, applies side-effects to the session, and continues until a plain final answer is produced.
+- When the assistant suggests new places, the backend can attach place-action cards so the UI can show `Pin in Chat` / `Save to My Places` inside the chat bubble.
+
+**How chat history is persisted**
+- `conversation_manager.save_conversation()` writes the current session snapshot to Supabase.
+- `supabase_service.py` persists:
+  - `conversations` for the summary row,
+  - `conversation_messages` for the full chat transcript,
+  - `conversation_locations` for the place list and map pins.
+- The front-end history list reads from `src/services/supabase/supabaseClient.ts` via `loadChatHistory()` and `fetchConversation()`.
+- `ChatHistoryPanel` opens a saved conversation, and `AIChatBox` rehydrates the message list plus locations from the conversation detail endpoint.
+
+**How rolling summary and long-term memory work**
+- `agent_orchestrator._maybe_roll_conversation_summary()` compresses roughly every 10 new messages into `conversation_summaries`.
+- `agent_orchestrator._update_memory()` extracts durable facts such as preferences, visited places, dislikes, and constraints.
+- Those memory items are stored in Supabase `long_term_memory` and also cached back into the active session as `user_memory_summary`.
+- On the next chat turn, the backend reloads the latest long-term memory and injects it into the system prompt so the assistant can adapt to the user consistently.
+
+**Tool events in chat**
+- When the assistant identifies a new place the user may want to add, the current implementation uses the `map_operation` tool.
+- The tool can:
+  - Pin the place in the current chat map.
+  - Save the place to My Places.
+  - Keep the chat UI open and continue the conversation.
+- Future tool events can be added to the same tool-calling loop without changing the front-end chat contract.
 
 ---
 

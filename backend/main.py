@@ -150,6 +150,7 @@ class ParseResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    conversation_id: Optional[str] = None
 
 
 class MemoryRequest(BaseModel):
@@ -501,14 +502,38 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
 async def chat(req: ChatRequest) -> dict:
     """Continue conversation with the AI agent."""
     try:
+        from backend.services.conversation_manager import conversation_manager
+
+        async def _recover_session(session_key: str, conversation_key: str | None = None):
+            session = conversation_manager.get_session(session_key)
+            if session:
+                return session
+
+            # Try exact conversation/session id restore first.
+            session = await conversation_manager.load_conversation(session_key)
+            if session:
+                return session
+
+            if conversation_key:
+                session = await conversation_manager.load_conversation(conversation_key)
+                if session:
+                    return session
+            return None
+
+        session = await _recover_session(req.session_id, req.conversation_id)
+        if session:
+            req_session_id = session.session_id
+        else:
+            raise ValueError(f"Session {req.session_id} not found")
+
         state = await atlas_graph_app.ainvoke(
             {
                 "task_type": "chat",
-                "session_id": req.session_id,
+                "session_id": req_session_id,
                 "text": req.message,
             },
             config={
-                "configurable": {"thread_id": req.session_id},
+                "configurable": {"thread_id": req_session_id},
                 "run_name": "AtlasApp:chat",
             },
         )

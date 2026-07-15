@@ -39,7 +39,7 @@ async def find_image_place(image_base64: str) -> dict:
         name = str(place.get("name") or "Unknown Location").strip() or "Unknown Location"
         latitude = float(place.get("latitude", 0) or 0)
         longitude = float(place.get("longitude", 0) or 0)
-        subtitle = f'I have "{confidence:.2f}" confidence this place is {name}. Happy exploring!'
+        subtitle = f'I have {confidence:.0%} confidence this place is {name}. Happy exploring!'
         return _build_response(
             name=name,
             latitude=latitude,

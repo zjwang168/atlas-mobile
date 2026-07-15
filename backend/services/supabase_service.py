@@ -62,13 +62,32 @@ class SupabaseService:
 
         conversation_id = session.conversation_id or str(uuid.uuid4())
 
+        import asyncio
+
+        existing_location_count = None
+        try:
+            existing_result = await asyncio.to_thread(
+                lambda: client.table("conversations")
+                    .select("location_count")
+                    .eq("id", conversation_id)
+                    .execute()
+            )
+            if existing_result.data:
+                existing_location_count = existing_result.data[0].get("location_count")
+        except Exception:
+            existing_location_count = None
+
         # Upsert conversation
         conv_data = {
             "id": conversation_id,
             "title": session.title or "Untitled",
             "source_url": session.source_url,
             "source_type": session.source_type,
-            "location_count": len(session.locations),
+            # Preserve the original location count shown in the chat card.
+            # Chat follow-ups may add more pins to the session, but we do not
+            # want the historical card count to drift upward just because the
+            # user asked for nearby suggestions.
+            "location_count": existing_location_count if existing_location_count is not None else len(session.locations),
             "message_count": len(session.messages),
             "inferred_region": session.inferred_region,
             "updated_at": datetime.utcnow().isoformat(),
@@ -76,7 +95,6 @@ class SupabaseService:
 
         try:
             # Use synchronous client via asyncio.to_thread
-            import asyncio
             await asyncio.to_thread(
                 lambda: client.table("conversations").upsert(conv_data).execute()
             )
@@ -110,6 +128,91 @@ class SupabaseService:
             await self._save_locations(client, conversation_id, session.locations)
 
         return conversation_id
+
+    async def save_places(self, places: list[dict], source_url: str | None = None, region: str | None = None) -> list[dict]:
+        """Persist places to the My Places tables, deduping against existing rows."""
+        client = self._get_client()
+        if not client:
+            raise ConnectionError("Supabase client not available")
+
+        import asyncio
+
+        existing_result = await asyncio.to_thread(
+            lambda: client.table("places")
+                .select("id, name, subtitle, category, latitude, longitude, region, created_at")
+                .execute()
+        )
+        existing = existing_result.data or []
+
+        def normalize(value: str) -> str:
+            return (value or "").strip().lower()
+
+        def same_place(a: dict, b: dict) -> bool:
+            name_a = normalize(a.get("name", ""))
+            name_b = normalize(b.get("name", ""))
+            coord_match = (
+                abs(float(a.get("latitude", 0)) - float(b.get("latitude", 0))) < 0.001
+                and abs(float(a.get("longitude", 0)) - float(b.get("longitude", 0))) < 0.001
+            )
+            name_match = bool(name_a and name_b and (name_a in name_b or name_b in name_a))
+            return name_match or coord_match
+
+        to_insert = []
+        for place in places:
+            if not place.get("name"):
+                continue
+            if any(same_place(place, row) for row in existing):
+                continue
+            to_insert.append({
+                "name": place.get("name", ""),
+                "subtitle": place.get("subtitle") or place.get("full_address") or place.get("description") or None,
+                "category": place.get("category") if place.get("category") not in (None, "", "Place") else None,
+                "latitude": place.get("latitude", 0),
+                "longitude": place.get("longitude", 0),
+                "region": region,
+            })
+
+        if not to_insert:
+            return []
+
+        inserted = await asyncio.to_thread(
+            lambda: client.table("places").insert(to_insert).execute()
+        )
+        rows = inserted.data or []
+
+        if inserted.error:
+            print(f"[SupabaseService] bulk place insert failed, falling back to row-by-row: {inserted.error}")
+            rows = []
+            for row in to_insert:
+                try:
+                    single = await asyncio.to_thread(
+                        lambda row=row: client.table("places").insert(row).execute()
+                    )
+                    if single.error:
+                        print(f"[SupabaseService] row insert failed, skipping row: {single.error} | row={row}")
+                        continue
+                    rows.extend(single.data or [])
+                except Exception as e:
+                    print(f"[SupabaseService] row insert exception, skipping row: {e} | row={row}")
+                    continue
+
+            if not rows:
+                raise ValueError(getattr(inserted.error, "message", str(inserted.error)))
+
+        if source_url and rows:
+            source_rows = [{
+                "place_id": row["id"],
+                "source_type": "chat",
+                "source_url": source_url,
+            } for row in rows]
+            try:
+                await asyncio.to_thread(
+                    lambda: client.table("place_sources").insert(source_rows).execute()
+                )
+            except Exception as e:
+                print(f"[SupabaseService] place_sources insert warning: {e}")
+
+        return rows
 
     async def save_conversation_summary(
         self,
@@ -160,9 +263,16 @@ class SupabaseService:
         )
 
         if not conv_result.data:
-            raise ValueError(f"Conversation {conversation_id} not found")
-
-        conv = conv_result.data[0]
+            # Some deployments can still return the row via the list endpoint
+            # even when the direct id lookup comes back empty. Fall back to a
+            # small in-memory search over the conversation list before giving up.
+            list_result = await self.list_conversations()
+            conv_match = next((row for row in list_result if row.get("id") == conversation_id), None)
+            if not conv_match:
+                raise ValueError(f"Conversation {conversation_id} not found")
+            conv = conv_match
+        else:
+            conv = conv_result.data[0]
 
         # Load messages
         msg_result = await asyncio.to_thread(
@@ -192,13 +302,16 @@ class SupabaseService:
                 .execute()
         )
 
-        # Reconstruct session
-        session = Session(session_id=str(uuid.uuid4()))
+        # Reconstruct session using the conversation id as the stable session id.
+        # This keeps the chat identifier deterministic across reloads and avoids
+        # the frontend/backend id split that caused restore mismatches.
+        session = Session(session_id=conversation_id)
         session.conversation_id = conversation_id
         session.source_url = conv.get("source_url")
         session.source_type = conv.get("source_type")
         session.title = conv.get("title", "")
         session.inferred_region = conv.get("inferred_region")
+        session.pending_place_action = conv.get("pending_place_action")
         if summary_result.data:
             latest_summary = summary_result.data[0]
             session.conversation_summary = latest_summary.get("summary", "")
@@ -256,7 +369,9 @@ class SupabaseService:
 
         import asyncio
 
-        query = client.table("conversations").select("id, title, source_url, location_count, message_count, created_at, updated_at")
+        query = client.table("conversations").select(
+            "id, title, source_url, source_type, location_count, message_count, created_at, updated_at"
+        )
 
         if user_id:
             query = query.eq("user_id", user_id)
