@@ -580,7 +580,7 @@ graph TD
     SUMMARY --> SUMDB[(conversation_summaries)]
     MSG --> MEMORY[Long-term memory update<br/>extract durable preferences]
     MEMORY --> MEMDB[(long_term_memory)]
-    MSG --> SAVE[conversation_manager.save_conversation()]
+    MSG --> SAVE[conversation save]
     SAVE --> CONV[(conversations)]
     SAVE --> MSGDB[(conversation_messages)]
     SAVE --> LOCDB[(conversation_locations)]
