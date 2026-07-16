@@ -1,6 +1,6 @@
 import { Alert, Dimensions, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import PlanDestination from './plan-destination/PlanDestination';
@@ -42,15 +42,15 @@ export default function CreatePlan({ onClose, onPlanCreated, reportScrollY }: Cr
     createPlanCache.places = { free: [], byDate: {} };
   }, []);
 
-  function handleLocationChange(value: string) {
+  const handleLocationChange = useCallback((value: string) => {
     setLocation(value);
     createPlanCache.location = value;
-  }
+  }, []);
 
-  function handleRangeChange(value: DateRange) {
+  const handleRangeChange = useCallback((value: DateRange) => {
     setRange(value);
     createPlanCache.range = value;
-  }
+  }, []);
 
   const stepIndex = STEPS.indexOf(step);
 

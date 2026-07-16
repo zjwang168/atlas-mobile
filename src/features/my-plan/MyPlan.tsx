@@ -4,8 +4,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { supabase } from '@/services/supabase/supabaseClient';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, FlatList, TouchableOpacity, View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import { useHome } from '../home/HomeContext';
 import CreatePlan from './create-plan/CreatePlan';
@@ -71,6 +71,11 @@ export default function MyPlan({
   onCreateModeChange,
 }: MyPlanProps) {
   const [showCreatePlan, setShowCreatePlan] = useState(false);
+  // Delays the list/create-plan swap until the fade-out finishes, so the two
+  // views cross-fade instead of hard-cutting (mirrors ContentPanel's
+  // compact/default crossfade — opacity only, no layout properties, so this
+  // stays fully native-driven and doesn't add JS-thread animation cost).
+  const contentOpacity = useRef(new Animated.Value(1)).current;
   const [dbPlans, setDbPlans] = useState<PlanGridItem[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(true);
   const { plans, editMode, toggleEditMode, requestDelete, addPlan } = usePlanDelete();
@@ -91,16 +96,32 @@ export default function MyPlan({
 
   const displayPlans = dbPlans.length > 0 ? dbPlans : plans;
 
+  function crossFadeTo(next: boolean) {
+    Animated.timing(contentOpacity, {
+      toValue: 0,
+      duration: 160,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setShowCreatePlan(next);
+      Animated.timing(contentOpacity, {
+        toValue: 1,
+        duration: 160,
+        useNativeDriver: true,
+      }).start();
+    });
+  }
+
   function enterCreateMode() {
-    setShowCreatePlan(true);
     onCreateModeChange?.(true);
     setTabBarVisible(false);
+    crossFadeTo(true);
   }
 
   function exitCreateMode() {
-    setShowCreatePlan(false);
     onCreateModeChange?.(false);
     setTabBarVisible(true);
+    crossFadeTo(false);
   }
 
   if (compact) {
@@ -137,16 +158,18 @@ export default function MyPlan({
 
   if (showCreatePlan) {
     return (
-      <CreatePlan
-        onClose={exitCreateMode}
-        onPlanCreated={handlePlanCreated}
-        reportScrollY={onScroll ?? (() => {})}
-      />
+      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+        <CreatePlan
+          onClose={exitCreateMode}
+          onPlanCreated={handlePlanCreated}
+          reportScrollY={onScroll ?? (() => {})}
+        />
+      </Animated.View>
     );
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
       {/* Header */}
       <View
         style={{
@@ -218,6 +241,6 @@ export default function MyPlan({
           }
         />
       )}
-    </View>
+    </Animated.View>
   );
 }

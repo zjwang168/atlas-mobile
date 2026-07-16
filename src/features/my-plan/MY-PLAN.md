@@ -38,7 +38,7 @@ type MyPlanProps = {
 
 ### Create mode
 
-Activated when the user taps the "Create a plan" card. The grid is replaced by the `CreatePlan` wizard inline (no new screen push). `onCreateModeChange(true)` is emitted so `HomePanel` can expand the panel to `PANEL_HEIGHT.createPlan`.
+Activated when the user taps the "Create a plan" card. The grid is replaced by the `CreatePlan` wizard inline (no new screen push), cross-fading between the two via an opacity-only `Animated.Value` (fade out, swap, fade in) rather than a hard cut. `onCreateModeChange(true)` is emitted so `HomePanel` can expand the panel to `PANEL_HEIGHT.createPlan`.
 
 On `onPlanCreated`:
 1. The new plan is prepended to the grid via `usePlanDelete.addPlan()`.
