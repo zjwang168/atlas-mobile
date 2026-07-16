@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
@@ -34,7 +34,6 @@ function HomePanel({
     setSelectedPlaceId,
   } = useHome();
   const [accountOpen, setAccountOpen] = useState(false);
-  const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const handlePlacePress = useCallback((place: Place) => {
     const nextCoordinate: [number, number] | null =
       selectedPlaceId === place.id ? null : [place.longitude, place.latitude];
@@ -48,7 +47,6 @@ function HomePanel({
       initialSnap="default"
       visible={visible}
       height={height}
-      snapState={activeTab === TAB_PLAN && isCreatingPlan ? 'full' : undefined}
       defaultSnapHeight={defaultSnapHeight}
       maxHeight={maxHeight}
       onHeightChange={onHeightChange}
@@ -64,14 +62,14 @@ function HomePanel({
         )
       }
     >
-      {({ reportScrollY }) => (
+      {({ reportScrollY, snapTo }) => (
         <View style={{ flex: 1 }}>
           {activeTab === TAB_PLAN ? (
             <View style={{ flex: 1 }}>
               <MyPlan
                 onScroll={reportScrollY}
                 bottomInset={BOTTOM_BAR_CLEARANCE}
-                onCreateModeChange={setIsCreatingPlan}
+                snapTo={snapTo}
               />
             </View>
           ) : (

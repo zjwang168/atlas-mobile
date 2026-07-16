@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Image, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { GestureDetector } from 'react-native-gesture-handler';
@@ -97,7 +98,9 @@ function FlexiblePlaceCard({ place, slotKey = { kind: 'free' }, onRemove, isGhos
   return <DraggableCard place={place} slotKey={slotKey} onRemove={onRemove} />;
 }
 
-// Register with DndProvider to break the circular import cycle
-registerDragGhostCard(FlexiblePlaceCard);
+const MemoizedFlexiblePlaceCard = memo(FlexiblePlaceCard);
 
-export default FlexiblePlaceCard;
+// Register with DndProvider to break the circular import cycle
+registerDragGhostCard(MemoizedFlexiblePlaceCard);
+
+export default MemoizedFlexiblePlaceCard;

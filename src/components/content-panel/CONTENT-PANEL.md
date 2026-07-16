@@ -83,6 +83,8 @@ On release, the panel always snaps to the nearest snap point by absolute pixel d
 
 The panel intercepts downward drags **only when** `scrollY === 0` (inner scroll is at the top). The drag handle bar always intercepts all directions. Pass `reportScrollY` to inner `ScrollView`/`FlatList` `onScroll` handlers to keep this in sync.
 
+The content-area drag responder also ignores touch-moves while a `snapTo`-driven animation is in flight, so incidental finger movement during a tap (e.g. on a button that triggers `snapTo`) can't get captured mid-animation and resolve to the wrong snap point on release.
+
 ## Visual Behaviour
 
 - Border radius and horizontal margins animate between `default` and `full` via `panelHeight` interpolation, producing a fluid card-to-fullscreen transition.

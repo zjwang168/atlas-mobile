@@ -36,13 +36,21 @@ Top-level wizard component.
 
 ### Props
 
+`CreatePlan` is a `forwardRef` component exposing a `reset()` imperative handle.
+
 ```ts
 type CreatePlanProps = {
   onClose: () => void;                   // user discards the plan
   onPlanCreated?: (plan: SavedPlan) => void; // plan saved successfully
   reportScrollY: (y: number) => void;    // forward to ContentPanel for gesture coordination
 };
+
+export type CreatePlanHandle = {
+  reset: () => void;  // clears wizard state + createPlanCache; call before re-showing a permanently-mounted instance
+};
 ```
+
+Resets automatically on mount (for callers that mount/unmount it normally, e.g. `HomeScreen`'s `createPlan` overlay). `MyPlan` keeps `CreatePlan` permanently mounted for a flicker-free cross-fade with the plan grid, so it calls `ref.current.reset()` explicitly each time the user re-enters create mode instead of relying on mount timing.
 
 ### Steps
 

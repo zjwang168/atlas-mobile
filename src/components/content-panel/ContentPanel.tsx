@@ -184,6 +184,7 @@ export default function ContentPanel({
   const scrollY = useRef(0);
   const gestureStartHeight = useRef(snapHeights.current[initialSnap]);
   const isDragging = useRef(false);
+  const isProgrammaticTransition = useRef(false);
 
   // Stable identity so children re-rendered by unrelated state (e.g. the
   // per-frame panelHeight listener) don't force their own children to
@@ -192,7 +193,10 @@ export default function ContentPanel({
     scrollY.current = y;
   }, []);
 
-  const snapTo = (next: SnapState, animated = true) => {
+  // Stable identity (useCallback) so consumers receiving `snapTo` via the
+  // render prop (e.g. MyPlan) can safely memoize against it instead of
+  // treating it as a new function every ContentPanel render.
+  const snapTo = useCallback((next: SnapState, animated = true) => {
     snapStateRef.current = next;
     setSnapState(next);
     onSnapStateChange?.(next);
@@ -203,14 +207,21 @@ export default function ContentPanel({
       panelHeight.setValue(nextHeight);
       return;
     }
+    // Guards the content pan responder from grabbing a stray touch-move
+    // (e.g. incidental finger drift during a tap) while a snap animation is
+    // already in flight — otherwise it captures the in-flight height as
+    // gestureStartHeight and can resolve to the wrong snap point on release.
+    isProgrammaticTransition.current = true;
     Animated.spring(panelHeight, {
       toValue: nextHeight,
       useNativeDriver: false,
       damping: 22,
       stiffness: 200,
       mass: 0.9,
-    }).start();
-  };
+    }).start(() => {
+      isProgrammaticTransition.current = false;
+    });
+  }, [maxHeight, onSnapStateChange]);
 
   // Respond to controlled snapState changes from the parent
   const prevControlledSnapState = useRef(controlledSnapState);
@@ -320,7 +331,8 @@ export default function ContentPanel({
   const panelPanResponder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gs) => scrollY.current <= 0 && gs.dy > 4,
+        onMoveShouldSetPanResponder: (_, gs) =>
+          !isProgrammaticTransition.current && scrollY.current <= 0 && gs.dy > 4,
         onPanResponderGrant: () => {
           isDragging.current = true;
           gestureStartHeight.current = currentPanelHeight.current;
