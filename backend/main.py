@@ -61,6 +61,23 @@ app = FastAPI(
     description="Agentic URL → Location extraction → Route planning → Chat",
 )
 
+# ---------------------------------------------------------------------------
+# User-identity pass-through: the mobile app sends the user's Supabase JWT in
+# the Authorization header; we stash it per-request so supabase_service can
+# write/read AS that user (RLS: auth.uid() resolves correctly).
+# ---------------------------------------------------------------------------
+from backend.services.request_context import set_user_token
+
+@app.middleware("http")
+async def user_token_middleware(request, call_next):
+    auth = request.headers.get("authorization") or ""
+    token = auth[7:] if auth.lower().startswith("bearer ") else None
+    set_user_token(token)
+    try:
+        return await call_next(request)
+    finally:
+        set_user_token(None)
+
 # Store LangSmith state so health endpoints / middleware can inspect it
 app.state.langsmith_enabled = LANGSMITH_ENABLED
 
