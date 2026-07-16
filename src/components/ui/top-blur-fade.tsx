@@ -1,6 +1,7 @@
 import MaskedView from '@react-native-masked-view/masked-view';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { memo } from 'react';
 import { Animated, StyleSheet } from 'react-native';
 import { easeGradient } from 'react-native-easing-gradient';
 
@@ -40,7 +41,7 @@ const { colors, locations } = easeGradient({
  * Place it above the content, with absolute positioning. Pass `opacity` (an
  * Animated value) to fade it in as content scrolls under it.
  */
-export default function TopBlurFade({
+function TopBlurFade({
   height = 130,
   intensity = 90,
   tint = 'light',
@@ -79,3 +80,5 @@ export default function TopBlurFade({
     </Animated.View>
   );
 }
+
+export default memo(TopBlurFade);

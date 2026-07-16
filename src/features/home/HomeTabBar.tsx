@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Tabs } from 'react-native-screens';
@@ -21,7 +21,7 @@ type HomeTabBarProps = {
   onAddPress: () => void;
 };
 
-export default function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeTabBarProps) {
+function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeTabBarProps) {
   const insets = useSafeAreaInsets();
   const [provenance, setProvenance] = useState(0);
 
@@ -85,6 +85,8 @@ export default function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeT
     </View>
   );
 }
+
+export default memo(HomeTabBar);
 
 const styles = StyleSheet.create({
   host: {

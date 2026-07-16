@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { memo } from 'react';
 import { Image, ScrollView, TouchableOpacity, View } from 'react-native';
 import { Badge } from '@/components/ui/badge';
 import { Text } from '@/components/ui/text';
@@ -14,7 +15,7 @@ type PlaceCardProps = {
   onPress?: () => void;
 };
 
-export default function PlaceCard({
+function PlaceCard({
   name,
   description,
   imageUrl,
@@ -89,3 +90,5 @@ export default function PlaceCard({
     </TouchableOpacity>
   );
 }
+
+export default memo(PlaceCard);

@@ -1,6 +1,6 @@
 import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -37,7 +37,22 @@ interface MapboxMapProps {
   selectedMarkerId?: string | null;
 }
 
-const MapboxMap: React.FC<MapboxMapProps> = ({
+// Small ease applied to every live padding update so the map visibly trails
+// the panel edge by a beat instead of snapping to it 1:1 every frame.
+const PADDING_FOLLOW_DURATION_MS = 300;
+
+export interface MapboxMapHandle {
+  /**
+   * Update bottom camera padding directly via the camera ref, bypassing React
+   * state/re-render entirely. Used for per-frame panel-drag tracking, where
+   * pushing every frame through props would re-render the whole map tree.
+   * Each call re-targets a short (300ms) ease, so rapid successive calls
+   * naturally produce a lagging "follow" motion rather than an instant jump.
+   */
+  setPaddingBottom: (paddingBottom: number, durationMs?: number) => void;
+}
+
+const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap({
   markers,
   centerCoordinate = [-122.3321, 47.6062],
   zoomLevel = 12,
@@ -47,7 +62,7 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
   routeMarkers,
   padding,
   selectedMarkerId,
-}) => {
+}, ref) {
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
   const { top: safeTop } = useSafeAreaInsets();
@@ -94,6 +109,17 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
       padding,
     });
   }, [centerCoordinate, zoomLevel, padding]);
+
+  useImperativeHandle(ref, () => ({
+    setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
+      const nextPadding: MapPadding = { paddingTop: 0, paddingBottom, paddingLeft: 0, paddingRight: 0 };
+      prevPaddingRef.current = nextPadding;
+      cameraRef.current?.setCamera({
+        padding: nextPadding,
+        animationDuration: durationMs,
+      });
+    },
+  }), []);
 
   if (error) {
     return (
@@ -161,7 +187,7 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
       </MapboxGL.MapView>
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -220,4 +246,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default MapboxMap;
+export default React.memo(MapboxMap);

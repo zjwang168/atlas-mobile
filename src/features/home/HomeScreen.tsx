@@ -5,7 +5,7 @@ import TopNav from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
-import MapboxMap, { MapMarker } from '../map/MapboxMap';
+import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
 import AddPlaceToPlan from '../my-plan/add-place-to-plan/AddPlaceToPlan';
 import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
@@ -141,14 +141,27 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
     // 根据屏幕高度估算 ContentPanel 的 default snap 高度 (55%)
     return Dimensions.get('window').height * 0.55;
   }, []);
-  const [bottomPanelHeight, setBottomPanelHeight] = useState(contentPanelHeight);
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
+  // Tracks the live panel height without React state — the panel reports it every
+  // animation frame while dragging/snapping, and nothing else needs to reactively
+  // read it, so pushing it through setState would re-render the whole screen 60x/sec.
+  const bottomPanelHeightRef = useRef(contentPanelHeight);
+  const mapRef = useRef<MapboxMapHandle>(null);
+  // Only recomputed when panel visibility toggles (a rare, discrete event) — this
+  // still goes through MapboxMap's prop-driven, animated camera path so hiding/
+  // showing the panel eases the map padding smoothly.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: panelVisible ? bottomPanelHeight : 0,
+    paddingBottom: panelVisible ? bottomPanelHeightRef.current : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [panelVisible, bottomPanelHeight]);
+  }), [panelVisible]);
+  // Per-frame panel height updates — pushed straight to the map's camera via ref,
+  // bypassing React re-render entirely.
+  const handlePanelHeightChange = useCallback((height: number) => {
+    bottomPanelHeightRef.current = height;
+    mapRef.current?.setPaddingBottom(panelVisible ? height : 0);
+  }, [panelVisible]);
 
   const handleAddPress = useCallback(() => {
     onOpenImport?.();
@@ -182,21 +195,24 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
     setSelectedPlaceId(null);
   }, [setOverlay, setSelectedPlaceCoordinate, setSelectedPlaceId]);
 
+  const handleMarkerPress = useCallback((marker: MapMarker) => {
+    setSelectedPlaceId(marker.id);
+    setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
+  }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
       {/* Single full-screen map behind everything */}
       <MapboxMap
+        ref={mapRef}
         markers={mapMarkers}
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
         padding={mapPadding}
         selectedMarkerId={selectedPlaceId}
-        onMarkerPress={(marker) => {
-          setSelectedPlaceId(marker.id);
-          setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
-        }}
+        onMarkerPress={handleMarkerPress}
       />
 
       <TopBlurFade />
@@ -217,14 +233,14 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
             <HomePanel
               activeTab={TAB_PLACES}
               visible={panelVisible}
-              onHeightChange={setBottomPanelHeight}
+              onHeightChange={handlePanelHeightChange}
             />
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
             <HomePanel
               activeTab={TAB_PLAN}
               visible={panelVisible}
-              onHeightChange={setBottomPanelHeight}
+              onHeightChange={handlePanelHeightChange}
             />
           </View>
         </Animated.View>
@@ -242,7 +258,7 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
         }}
         title={activeHistoryItem?.title}
         visible={activeSidekick === 'aiChat' && panelVisible}
-        onHeightChange={setBottomPanelHeight}
+        onHeightChange={handlePanelHeightChange}
         conversationId={activeHistoryItem?.id ?? null}
         onPlacesCommitted={(newPlaces) => {
           const currentItem = activeHistoryItem;

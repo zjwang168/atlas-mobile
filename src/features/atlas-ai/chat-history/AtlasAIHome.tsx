@@ -59,6 +59,8 @@ type AtlasAIHomeProps = {
   onOpenChat: (item: ChatHistoryItem) => void;
   onOpenPlaces: (item: ChatHistoryItem) => void;
   onLongPressDebug: () => void;
+  /** Called when the user taps the close button — caller hides this component. */
+  onClose?: () => void;
 };
 
 function formatDate(iso: string) {
@@ -87,6 +89,7 @@ export default function AtlasAIHome({
   onOpenChat,
   onOpenPlaces,
   onLongPressDebug,
+  onClose,
 }: AtlasAIHomeProps) {
   const {
     chatHistory,
@@ -213,6 +216,11 @@ export default function AtlasAIHome({
               <Ionicons name="sparkles" size={14} color={GREEN.primaryStrong} />
               <Text style={styles.badgeText}>{totalChats || cards.length} chats</Text>
             </View>
+            {onClose && (
+              <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.75}>
+                <Ionicons name="close" size={20} color={GREEN.text} />
+              </TouchableOpacity>
+            )}
           </Pressable>
 
           <FlatList
@@ -319,6 +327,14 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: GREEN.textMuted,
     fontWeight: '700',
+  },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   listContent: {
     paddingBottom: 120,

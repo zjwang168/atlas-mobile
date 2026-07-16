@@ -6,7 +6,7 @@ import { typography } from '@/theme/typography';
 import { Place } from '@/types/place';
 import { SegmentedControl } from '@expo/ui/community/segmented-control';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { View } from 'react-native';
 import AllPlaces from './all-places/AllPlaces';
 import Atlas from './atlas/Atlas';
@@ -25,7 +25,7 @@ type MyPlacesProps = {
   compact?: boolean;
 };
 
-export default function MyPlaces({
+function MyPlaces({
   onPlacePress,
   onScroll,
   bottomInset = 0,
@@ -36,8 +36,7 @@ export default function MyPlaces({
   compact = false,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
-  const { savedPlaces, refreshSavedPlaces, selectedPlaceId } = useHome();
-  const savedCount = savedPlaces.length;
+  const { refreshSavedPlaces, selectedPlaceId } = useHome();
 
   // Native iOS UISegmentedControl (via @expo/ui). Rendered inside the scroll
   // content so it scrolls away rather than staying pinned.
@@ -113,7 +112,7 @@ export default function MyPlaces({
       }}
     >
       <Text style={[typography.display, { color: '#09090b' }]}>
-        My places{savedCount > 0 ? ` (${savedCount})` : ''}
+        My places
       </Text>
       <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
         <PressableScale
@@ -177,3 +176,5 @@ export default function MyPlaces({
     </View>
   );
 }
+
+export default memo(MyPlaces);

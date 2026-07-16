@@ -36,7 +36,7 @@ type MyPlacesProps = {
 };
 ```
 
-### Modes
+### Status
 
 **Full mode** (default): renders the header row (title + share button + avatar), a segmented control to switch sub-tabs, and the active sub-tab content.
 
@@ -46,7 +46,11 @@ type MyPlacesProps = {
 
 ## `AllPlaces`
 
-Scrollable `FlatList` of `PlaceCard` items sourced from `mockPlaceDetails`. Shows a "Recent pins" header with a chevron.
+Scrollable `FlatList` of `PlaceCard` items sourced from `fetchSavedPlaces` / `HomeContext.savedPlaces`. Shows a "Recent pins" header with a chevron.
+
+### Status
+
+Places are loaded in full from the service/context, but rendered a page at a time (`PAGE_SIZE = 20`): the list only slices in the first page, then reveals more as the user scrolls near the bottom (`onEndReached`), showing a footer spinner while more of the already-fetched data is being paged in. Pull-to-refresh resets back to one page. If `selectedPlaceId` points at a place beyond the currently revealed page, the visible window expands to include it before auto-scrolling.
 
 ### Props
 

@@ -6,8 +6,11 @@ import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
-import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
+
+/** Rows rendered per page — keeps the FlatList light as saved places grow. */
+const PAGE_SIZE = 20;
 
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
@@ -56,10 +59,47 @@ function toPlaceDetail(row: SavedPlace): PlaceDetail {
   };
 }
 
-export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, selectedPlaceId }: AllPlacesProps) {
+type PlaceRowProps = {
+  item: PlaceDetail;
+  isActive: boolean;
+  onPress?: (place: PlaceDetail) => void;
+  onDelete: (id: string) => void;
+};
+
+/** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
+    frames) don't force every visible PlaceCard to re-render — only rows
+    whose own props actually changed do. */
+const PlaceRow = memo(function PlaceRow({ item, isActive, onPress, onDelete }: PlaceRowProps) {
+  return (
+    <View style={[styles.row, { paddingHorizontal: 16 }, isActive && styles.rowActive]}>
+      <View style={{ flex: 1 }}>
+        <PlaceCard
+          name={item.name}
+          description={item.summary}
+          imageUrl={item.thumbnailUrl}
+          tags={item.tags}
+          date={item.savedAt}
+          onPress={() => onPress?.(item)}
+        />
+      </View>
+      <TouchableOpacity onPress={() => onDelete(item.id)} style={{ marginLeft: 8, padding: 8 }}>
+        <Ionicons name="trash-outline" size={20} color="#DC2626" />
+      </TouchableOpacity>
+    </View>
+  );
+});
+
+function ItemSeparator() {
+  return (
+    <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
+  );
+}
+
+function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, selectedPlaceId }: AllPlacesProps) {
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const listRef = useRef<FlatList<PlaceDetail>>(null);
   const { deleteSavedPlace, selectedPlaceId: contextSelectedId, savedPlaces } = useHome();
   // Use the prop if provided, otherwise fall back to context value
@@ -91,15 +131,44 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
     setLoading(false);
   }, [savedPlaces]);
 
-  // Auto-scroll to the selected place when selectedPlaceId changes
+  const visibleData = useMemo(() => places.slice(0, visibleCount), [places, visibleCount]);
+
+  const handleEndReached = useCallback(() => {
+    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, places.length));
+  }, [places.length]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: PlaceDetail }) => (
+      <PlaceRow
+        item={item}
+        isActive={effectiveSelectedId === item.id}
+        onPress={onPlacePress}
+        onDelete={handleDelete}
+      />
+    ),
+    [effectiveSelectedId, onPlacePress, handleDelete],
+  );
+
+  const keyExtractor = useCallback((item: PlaceDetail) => item.id, []);
+
+  // Auto-scroll to the selected place when selectedPlaceId changes. If the
+  // place hasn't been paged into view yet, pull in enough pages first.
   useEffect(() => {
     if (effectiveSelectedId && places.length > 0) {
       const idx = places.findIndex((p) => p.id === effectiveSelectedId);
-      if (idx >= 0) {
-        listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      if (idx >= 0 && idx >= visibleCount) {
+        setVisibleCount(Math.min(places.length, idx + PAGE_SIZE));
       }
     }
-  }, [selectedPlaceId, places]);
+  }, [selectedPlaceId, places, visibleCount]);
+
+  useEffect(() => {
+    if (!effectiveSelectedId) return;
+    const idx = visibleData.findIndex((p) => p.id === effectiveSelectedId);
+    if (idx >= 0) {
+      listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+    }
+  }, [selectedPlaceId, visibleData]);
 
   if (loading) {
     return (
@@ -112,8 +181,8 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
   return (
     <FlatList
       ref={listRef}
-      data={places}
-      keyExtractor={(item) => item.id}
+      data={visibleData}
+      keyExtractor={keyExtractor}
       style={{ flex: 1 }}
       contentContainerStyle={{ paddingBottom: bottomInset + 20 }}
       onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
@@ -121,8 +190,22 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
       refreshing={refreshing}
       onRefresh={() => {
         setRefreshing(true);
+        setVisibleCount(PAGE_SIZE);
         load();
       }}
+      onEndReached={handleEndReached}
+      onEndReachedThreshold={0.5}
+      ListFooterComponent={
+        visibleData.length < places.length ? (
+          <View style={{ paddingVertical: 16 }}>
+            <ActivityIndicator />
+          </View>
+        ) : null
+      }
+      initialNumToRender={PAGE_SIZE}
+      maxToRenderPerBatch={PAGE_SIZE}
+      windowSize={7}
+      removeClippedSubviews
       ListHeaderComponent={
         <View>
           {listHeader}
@@ -141,36 +224,14 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
           </Text>
         </View>
       }
-      ItemSeparatorComponent={() => (
-        <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
-      )}
-      renderItem={({ item }) => {
-        const isActive = effectiveSelectedId === item.id;
-        return (
-          <View style={[styles.row, { paddingHorizontal: 16 }, isActive && styles.rowActive]}>
-            <View style={{ flex: 1 }}>
-              <PlaceCard
-                name={item.name}
-                description={item.summary}
-                imageUrl={item.thumbnailUrl}
-                tags={item.tags}
-                date={item.savedAt}
-                onPress={() => onPlacePress?.(item)}
-              />
-            </View>
-            <TouchableOpacity
-              onPress={() => handleDelete(item.id)}
-              style={{ marginLeft: 8, padding: 8 }}
-            >
-              <Ionicons name="trash-outline" size={20} color="#DC2626" />
-            </TouchableOpacity>
-          </View>
-        );
-      }}
+      ItemSeparatorComponent={ItemSeparator}
+      renderItem={renderItem}
       showsVerticalScrollIndicator={false}
     />
   );
 }
+
+export default memo(AllPlaces);
 
 const styles = StyleSheet.create({
   row: {

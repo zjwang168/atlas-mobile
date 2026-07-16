@@ -111,6 +111,19 @@ setOverlay({ kind: 'addPlaceToPlan', onSelect: (places) => { /* insert */ } });
 
 Never render `<AddPlaceToPlan>` directly — only `HomeScreen` owns that instance.
 
+## Performance: contain re-renders with memo + stable props
+
+Any state update re-renders that component and every descendant by default, whether or not the update is relevant to them. This gets expensive fast when the update fires frequently (animation-frame listeners, scroll/drag handlers, timers, fast-changing context values) or when the subtree is expensive (long `FlatList`s, image-heavy cards, native-view-backed components) — the wasted render work competes with whatever the app is actually trying to do smoothly (an animation, a gesture) and can drop frames.
+
+When adding or touching a component:
+
+- Wrap it in `React.memo` if it's expensive to render (long lists, image grids, heavy native views) **or** it sits under a parent that re-renders frequently for reasons unrelated to that component's own props.
+- `React.memo` only works if every prop passed to it is referentially stable across those re-renders: wrap callback props in `useCallback` and derived objects/arrays in `useMemo` in the parent. An inline arrow function or object literal passed as a prop (`onPress={() => ...}`, `style={{...}}`) silently defeats `memo` — no error, no warning, just no benefit. This includes list `renderItem`/`keyExtractor`/`ItemSeparatorComponent` callbacks and per-row subcomponents.
+- Don't reach for this by default — `React.memo`'s shallow prop comparison has its own small cost, so only apply it where the component is genuinely expensive or sits below a hot re-render source. Cheap, rarely-re-rendering leaves don't need it.
+- Prefer fixing the re-render source over relying purely on downstream memoization when a fast-updating value doesn't actually need to be React state — e.g. throttle/debounce it, or move it to a ref/imperative update instead of `setState` on every frame.
+
+Reference implementation: `AllPlaces.tsx` (memoized list + memoized row + `useCallback` renderItem/keyExtractor), `MyPlaces.tsx`, `HomePanel.tsx`, `HomeTabBar.tsx`, `TopNav.tsx`, `TopBlurFade.tsx`, and `ContentPanel.tsx`'s stabilized `reportScrollY` — added after `ContentPanel`'s per-frame `onHeightChange` listener was found cascading full re-renders into the place list.
+
 ---
 
 # Documentation Maintenance
@@ -163,7 +176,7 @@ One sentence: what this does and when to use it.
 
 ## Behaviour
 
-High-level only: the runtime modes/states *this* component or hook can be in, and the one or two non-obvious rules a caller needs to know to trigger or observe them. Not a walkthrough of every interaction, and not commentary on other components (what exists, what's wired up, what's dead) — that belongs in the Overview's component tree or a note beside it. Skip this section for stateless components.
+High-level only: the runtime status/states *this* component or hook can be in, and the one or two non-obvious rules a caller needs to know to trigger or observe them. Use a `### Status` subheading (not "Modes") when documenting these states. Not a walkthrough of every interaction, and not commentary on other components (what exists, what's wired up, what's dead) — that belongs in the Overview's component tree or a note beside it. Skip this section for stateless components.
 
 Describe what the component **does now**, observed from the current code — not what it *should* do, *used to* do, or a spec/standard it's meant to conform to. If current behaviour looks wrong, that's a bug to fix or flag, not something to document as the target state.
 

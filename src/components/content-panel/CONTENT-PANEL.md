@@ -77,7 +77,7 @@ On release, the panel always snaps to the nearest snap point by absolute pixel d
 
 ## Mount behaviour
 
-`children` and `compactContent` are **always mounted** simultaneously. The panel uses `display: 'none'` (not unmounting) to hide whichever slot is inactive. This preserves the internal state of whichever view is currently hidden — e.g. scroll position, form values, in-progress animations. Do not rely on mount/unmount lifecycle for state resets inside `ContentPanel` children.
+`children` and `compactContent` are **always mounted** simultaneously, stacked absolutely and crossfaded via opacity (not unmounted or `display: 'none'`) — see Visual Behaviour. This preserves the internal state of whichever view is currently faded out — e.g. scroll position, form values, in-progress animations. `pointerEvents` is toggled per-layer (`'auto'`/`'none'`) based on `snapState` so touches only route to the active layer. Do not rely on mount/unmount lifecycle for state resets inside `ContentPanel` children.
 
 ## Gesture Coordination
 
@@ -88,6 +88,7 @@ The panel intercepts downward drags **only when** `scrollY === 0` (inner scroll 
 - Border radius and horizontal margins animate between `default` and `full` via `panelHeight` interpolation, producing a fluid card-to-fullscreen transition.
 - `expo-blur` `BlurView` (iOS system thick material) is the background layer.
 - When `visible` is provided: enters via `translateY 40→0 + opacity 0→1` (280ms), exits via reverse (220ms).
+- `children` and `compactContent` are stacked absolutely on top of each other and crossfade via opacity interpolated from `panelHeight` (over the first 50px above the measured compact height), so the content swap stays in sync with the height spring instead of cutting instantly at the `compact` snap boundary.
 
 ## Usage Examples
 

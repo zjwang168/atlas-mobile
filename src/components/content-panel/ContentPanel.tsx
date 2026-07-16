@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -85,6 +85,9 @@ export default function ContentPanel({
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
   const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
+  // Tracked in state (mirroring snapHeights.current.compact) so the crossfade
+  // interpolation below can be recreated once the real compact height is measured.
+  const [compactHeightTrack, setCompactHeightTrack] = useState(snapHeights.current.compact);
 
   const [snapState, setSnapState] = useState<SnapState>(controlledSnapState ?? initialSnap);
   const snapStateRef = useRef<SnapState>(controlledSnapState ?? initialSnap);
@@ -182,6 +185,13 @@ export default function ContentPanel({
   const gestureStartHeight = useRef(snapHeights.current[initialSnap]);
   const isDragging = useRef(false);
 
+  // Stable identity so children re-rendered by unrelated state (e.g. the
+  // per-frame panelHeight listener) don't force their own children to
+  // re-render just because this callback prop looks new.
+  const reportScrollY = useCallback((y: number) => {
+    scrollY.current = y;
+  }, []);
+
   const snapTo = (next: SnapState, animated = true) => {
     snapStateRef.current = next;
     setSnapState(next);
@@ -223,7 +233,30 @@ export default function ContentPanel({
     if (snapStateRef.current === 'compact' && !isDragging.current) {
       panelHeight.setValue(height);
     }
+    setCompactHeightTrack(prev => (prev === height ? prev : height));
   };
+
+  // Crossfade compact/default content in lockstep with the height spring instead
+  // of a hard display:none cut. Recreated when the measured compact height changes.
+  const COMPACT_CROSSFADE_RANGE = 50;
+  const compactOpacity = useMemo(
+    () =>
+      panelHeight.interpolate({
+        inputRange: [compactHeightTrack, compactHeightTrack + COMPACT_CROSSFADE_RANGE],
+        outputRange: [1, 0],
+        extrapolate: 'clamp',
+      }),
+    [compactHeightTrack],
+  );
+  const defaultOpacity = useMemo(
+    () =>
+      panelHeight.interpolate({
+        inputRange: [compactHeightTrack, compactHeightTrack + COMPACT_CROSSFADE_RANGE],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+    [compactHeightTrack],
+  );
 
   // Slide + fade in/out when `visible` prop changes
   useEffect(() => {
@@ -376,28 +409,43 @@ export default function ContentPanel({
           />
         </View>
 
-        {/* Always mount children so internal state is preserved across compact/default transitions */}
-        <View style={{ display: snapState === 'compact' && compactContent ? 'none' : 'flex', flex: 1 }}>
-          {children({
-            snapState,
-            snapTo,
-            setCompactHeight,
-            reportScrollY: (y) => { scrollY.current = y; },
-            bottomInset: insets.bottom,
-          })}
-        </View>
-        {compactContent && (
-          <View
-            style={{ display: snapState === 'compact' ? 'flex' : 'none' }}
-            onLayout={e => {
-              if (snapState === 'compact') setCompactHeight(e.nativeEvent.layout.height + HANDLE_HEIGHT);
+        {/* Always mount children so internal state is preserved across compact/default transitions.
+            Both layers overlap absolutely and crossfade off panelHeight so the swap stays in
+            lockstep with the height spring instead of a hard display:none cut. */}
+        <View style={{ flex: 1, position: 'relative' }}>
+          <Animated.View
+            pointerEvents={snapState === 'compact' && compactContent ? 'none' : 'auto'}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              opacity: compactContent ? defaultOpacity : 1,
             }}
           >
-            <View style={{ paddingBottom: insets.bottom + 36 }}>
-              {compactContent({ snapTo })}
-            </View>
-          </View>
-        )}
+            {children({
+              snapState,
+              snapTo,
+              setCompactHeight,
+              reportScrollY,
+              bottomInset: insets.bottom,
+            })}
+          </Animated.View>
+          {compactContent && (
+            <Animated.View
+              pointerEvents={snapState === 'compact' ? 'auto' : 'none'}
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, opacity: compactOpacity }}
+              onLayout={e => {
+                setCompactHeight(e.nativeEvent.layout.height + HANDLE_HEIGHT);
+              }}
+            >
+              <View style={{ paddingBottom: insets.bottom + 36 }}>
+                {compactContent({ snapTo })}
+              </View>
+            </Animated.View>
+          )}
+        </View>
       </Animated.View>
     </Animated.View>
   );

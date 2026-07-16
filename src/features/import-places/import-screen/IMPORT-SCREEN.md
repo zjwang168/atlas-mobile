@@ -18,6 +18,7 @@ src/features/import-places/import-screen/
 type ImportScreenProps = {
   onClose: () => void;              // sheet dismissed without submitting
   onSubmit: (text: string) => void; // user tapped send; text is trimmed raw input
+  onOpenChatHistory?: () => void;   // taps the header's chat-history button; omit to hide the button
 };
 ```
 
@@ -30,12 +31,16 @@ type ImportScreenProps = {
 - "Add files" and "Screenshots" source cards are stubbed (no-op presses).
 - The attach button ("+" icon) in the composer is stubbed.
 - Image Scan submits immediately into the analyzing overlay so the user sees the waiting screen right away.
+- The header shows a chat-history (clock) icon button to the left of the close button, only when `onOpenChatHistory` is provided.
 
 ## Integration
 
 Opened by `HomeScreen` via `onOpenImport`. The parent mounts this as a full-screen `absoluteFill` overlay (with `pointerEvents="box-none"`) so the map remains visible behind it.
 
+`App.tsx` passes `onOpenChatHistory={() => setShowChatHistory(true)}`, which mounts `AtlasAIHome` (see `CHAT-HISTORY.md`) on top of this sheet.
+
 ## Related docs
 
 - [IMPORT-PLACES.md](../IMPORT-PLACES.md) — full flow and entry point
 - [ANALYZING-SCREEN.md](../analyzing-screen/ANALYZING-SCREEN.md) — next step after submission
+- [CHAT-HISTORY.md](../../atlas-ai/chat-history/CHAT-HISTORY.md) — `AtlasAIHome`, opened via the header's chat-history button

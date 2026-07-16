@@ -9,6 +9,7 @@ import './global.css';
 import { savePlaces } from '@/services/place/placeService';
 import { HomeProvider, useHome } from './src/features/home/HomeContext';
 import HomeScreen from './src/features/home/HomeScreen';
+import AtlasAIHome from './src/features/atlas-ai/chat-history/AtlasAIHome';
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
 import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
@@ -150,6 +151,7 @@ function AppContent() {
   const [importText, setImportText] = useState('');
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [parseProgressEvents, setParseProgressEvents] = useState<ParseProgressEvent[]>([]);
+  const [showChatHistory, setShowChatHistory] = useState(false);
   const parseResultRef = useRef<ParseResult | null>(null);
   const { chatHistory, setParsedPlaces, refreshSavedPlaces, setOverlay: setHomeOverlay, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setSelectedPlaceCoordinate, setSelectedPlaceId, setActiveSidekick } = useHome();
 
@@ -521,6 +523,7 @@ function AppContent() {
           {overlay === 'import' && (
             <ImportScreen
               onClose={() => setOverlay('none')}
+              onOpenChatHistory={() => setShowChatHistory(true)}
               onSubmit={(text, mode, webSearch) => {
                 parseResultRef.current = null;
                 setActiveHistoryItem(null);
@@ -574,6 +577,29 @@ function AppContent() {
               }
               onCancel={() => {
                 setImportMeta(null);
+                setOverlay('none');
+              }}
+            />
+          )}
+
+          {/* Chat history list — opened from ImportScreen's header button, rendered
+              above it (mounted after in the tree). */}
+          {showChatHistory && (
+            <AtlasAIHome
+              visible={showChatHistory}
+              onClose={() => setShowChatHistory(false)}
+              onLongPressDebug={() => setHomeOverlay({ kind: 'debug' })}
+              onOpenChat={(item) => {
+                setActiveHistoryItem(item);
+                setActiveSidekick('aiChat');
+                setShowChatHistory(false);
+                setOverlay('none');
+              }}
+              onOpenPlaces={(item) => {
+                setActiveHistoryItem(item);
+                setParsedPlaces(item.places);
+                setActiveSidekick('none');
+                setShowChatHistory(false);
                 setOverlay('none');
               }}
             />

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
@@ -19,7 +19,7 @@ type HomePanelProps = {
   onHeightChange?: (height: number) => void;
 };
 
-export default function HomePanel({
+function HomePanel({
   activeTab,
   visible,
   height,
@@ -87,3 +87,5 @@ export default function HomePanel({
     </ContentPanel>
   );
 }
+
+export default memo(HomePanel);

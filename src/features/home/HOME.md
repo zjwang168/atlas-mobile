@@ -8,7 +8,7 @@ The home screen layers a full-screen map, a native tab bar, a two-page draggable
 App.tsx (HomeProvider)
 └── AppContent                 also reads useHome() directly for the import→save→chat flow
     ├── HomeScreen              rendered when overlay === 'none'
-    │   ├── MapboxMap           single instance, full-screen, behind everything
+    │   ├── MapboxMap           full-screen map background
     │   ├── TopBlurFade / TopNav
     │   ├── pager               horizontal Animated pager, 2 pages
     │   │   ├── HomePanel (My Places)
