@@ -514,13 +514,6 @@ function AppContent() {
           <MapErrorBoundary>
             <HomeScreen
               onOpenImport={() => setOverlay('import')}
-              onStartAiImport={(meta) => {
-                parseResultRef.current = null;
-                setActiveHistoryItem(null);
-                setImportMeta(meta);
-                setImportText(meta.rawInput);
-                setOverlay('analyzing');
-              }}
             />
           </MapErrorBoundary>
 

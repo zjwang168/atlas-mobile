@@ -2,11 +2,9 @@ import { useCallback, useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
-import { savePlaces } from '../../services/place/placeService';
 import { Place } from '../../types/place';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import HistoryPlacesPanel from '../atlas-ai/chat-history/HistoryPlacesPanel';
 import { useHome } from './HomeContext';
 import { TAB_PLAN, TAB_PLACES } from './HomeTabBar';
 
@@ -30,13 +28,7 @@ export default function HomePanel({
   onHeightChange,
 }: HomePanelProps) {
   const {
-    activeHistoryItem,
-    activeSidekick,
-    refreshSavedPlaces,
     selectedPlaceId,
-    setActiveHistoryItem,
-    setOverlay,
-    setParsedPlaces,
     setSelectedPlaceCoordinate,
     setSelectedPlaceId,
   } = useHome();
@@ -48,26 +40,6 @@ export default function HomePanel({
     setSelectedPlaceId(selectedPlaceId === place.id ? null : place.id);
   }, [selectedPlaceId, setSelectedPlaceCoordinate, setSelectedPlaceId]);
 
-  const handleHistoryPlacePress = useCallback((placeId: string) => {
-    const place = activeHistoryItem?.places.find((candidate) => candidate.id === placeId);
-    if (!place) return;
-    setSelectedPlaceId(place.id);
-    setSelectedPlaceCoordinate([place.longitude, place.latitude]);
-  }, [activeHistoryItem, setSelectedPlaceCoordinate, setSelectedPlaceId]);
-
-  const handleSaveHistoryPlaces = useCallback(async (selectedIds: string[]) => {
-    if (!activeHistoryItem || selectedIds.length === 0) return;
-    try {
-      const selectedPlaces = activeHistoryItem.places.filter((p) => selectedIds.includes(p.id));
-      await savePlaces(selectedPlaces, {
-        url: activeHistoryItem.sourceUrl,
-      });
-      await refreshSavedPlaces();
-    } catch (error) {
-      console.error('[HomePanel] save history places failed:', error);
-    }
-  }, [activeHistoryItem, refreshSavedPlaces]);
-
   return (
     <ContentPanel
       initialSnap="default"
@@ -77,7 +49,7 @@ export default function HomePanel({
       defaultSnapHeight={defaultSnapHeight}
       maxHeight={maxHeight}
       onHeightChange={onHeightChange}
-      compactContent={activeTab === TAB_PLAN || activeHistoryItem ? undefined : (() =>
+      compactContent={activeTab === TAB_PLAN ? undefined : (() =>
         activeTab !== TAB_PLAN ? (
           <MyPlaces
             compact
@@ -89,7 +61,7 @@ export default function HomePanel({
         )
       )}
     >
-      {({ reportScrollY, bottomInset }) => (
+      {({ reportScrollY }) => (
         <View style={{ flex: 1 }}>
           {activeTab === TAB_PLAN ? (
             <View style={{ flex: 1 }}>
@@ -99,21 +71,6 @@ export default function HomePanel({
                 onCreateModeChange={setIsCreatingPlan}
               />
             </View>
-          ) : activeTab === TAB_PLACES && activeHistoryItem && activeSidekick !== 'aiChat' ? (
-            <HistoryPlacesPanel
-              item={activeHistoryItem}
-              selectedPlaceId={selectedPlaceId}
-              onClose={() => {
-                setActiveHistoryItem(null);
-                setParsedPlaces([]);
-                setSelectedPlaceCoordinate(null);
-                setSelectedPlaceId(null);
-              }}
-              onPlacePress={handleHistoryPlacePress}
-              onSavePlaces={handleSaveHistoryPlaces}
-              onScroll={reportScrollY}
-              bottomInset={bottomInset}
-            />
           ) : (
             <View style={{ flex: 1 }}>
               <MyPlaces
