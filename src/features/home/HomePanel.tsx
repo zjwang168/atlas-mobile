@@ -5,6 +5,8 @@ import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place } from '../../types/place';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
+import HistoryPlacesPanel from './HistoryPlacesPanel';
+import AccountModal from '../auth/AccountModal';
 import { useHome } from './HomeContext';
 import { TAB_PLAN, TAB_PLACES } from './HomeTabBar';
 
@@ -32,6 +34,7 @@ function HomePanel({
     setSelectedPlaceCoordinate,
     setSelectedPlaceId,
   } = useHome();
+  const [accountOpen, setAccountOpen] = useState(false);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const handlePlacePress = useCallback((place: Place) => {
     const nextCoordinate: [number, number] | null =
@@ -41,6 +44,7 @@ function HomePanel({
   }, [selectedPlaceId, setSelectedPlaceCoordinate, setSelectedPlaceId]);
 
   return (
+    <>
     <ContentPanel
       initialSnap="default"
       visible={visible}
@@ -79,12 +83,15 @@ function HomePanel({
                 bottomInset={BOTTOM_BAR_CLEARANCE}
                 avatarUri={mockUser.avatarUri}
                 avatarFallback={mockUser.avatarFallback}
+                onAvatarPress={() => setAccountOpen(true)}
               />
             </View>
           )}
         </View>
       )}
     </ContentPanel>
+    <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
+    </>
   );
 }
 
