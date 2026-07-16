@@ -52,17 +52,17 @@ function HomePanel({
       defaultSnapHeight={defaultSnapHeight}
       maxHeight={maxHeight}
       onHeightChange={onHeightChange}
-      compactContent={activeTab === TAB_PLAN ? undefined : (() =>
-        activeTab !== TAB_PLAN ? (
+      compactContent={() =>
+        activeTab === TAB_PLAN ? (
+          <MyPlan compact />
+        ) : (
           <MyPlaces
             compact
             avatarUri={mockUser.avatarUri}
             avatarFallback={mockUser.avatarFallback}
           />
-        ) : (
-          <MyPlan compact />
         )
-      )}
+      }
     >
       {({ reportScrollY }) => (
         <View style={{ flex: 1 }}>

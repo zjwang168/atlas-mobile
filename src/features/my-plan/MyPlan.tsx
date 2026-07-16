@@ -186,6 +186,7 @@ export default function MyPlan({
       ) : (
         /* 2-column plan grid */
         <FlatList
+          style={{ flex: 1 }}
           data={buildGridData(displayPlans)}
           keyExtractor={(item) => item.id}
           numColumns={2}
