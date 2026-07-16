@@ -8,6 +8,8 @@ import './global.css';
 
 import { savePlaces } from '@/services/place/placeService';
 import { HomeProvider, useHome } from './src/features/home/HomeContext';
+import { signInAnonymously, supabase } from './src/services/supabase/supabaseClient';
+import type { Session } from '@supabase/supabase-js';
 import HomeScreen from './src/features/home/HomeScreen';
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
@@ -594,15 +596,49 @@ function AppContent() {
 // ---- Root — wraps everything with HomeProvider so context is available
 //      even while SaveScreen (which replaces HomeScreen) is shown. ----
 
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data }: { data: { session: Session | null } }) => {
+      if (data.session) {
+        setSession(data.session);
+      } else {
+        // No stored session: silently create an anonymous identity so the
+        // app is usable without a login wall and every row gets a user_id.
+        try {
+          const anon = await signInAnonymously();
+          setSession(anon.session ?? null);
+        } catch (e) {
+          console.warn('[AuthGate] anonymous sign-in failed:', e);
+        }
+      }
+      setReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event: string, newSession: Session | null) => {
+      setSession(newSession);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (!ready) return null; // splash moment while restoring/creating session
+  // Anonymous flow: never block the app. AuthScreen is opened on demand
+  // (avatar tap) for upgrading to a permanent account.
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <HomeProvider>
-        <StatusBar style="dark" />
-        <AppContent />
-        <PortalHost />
-      </HomeProvider>
+      <AuthGate>
+        <HomeProvider>
+          <StatusBar style="dark" />
+          <AppContent />
+          <PortalHost />
+        </HomeProvider>
+      </AuthGate>
     </GestureHandlerRootView>
     </SafeAreaProvider>
   );

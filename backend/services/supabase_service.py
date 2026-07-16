@@ -46,7 +46,14 @@ class SupabaseService:
         self._initialized = False
 
     def _get_client(self):
-        """Lazy initialize Supabase client."""
+        """Lazy initialize Supabase client, then act as the calling user.
+
+        If the request carries a user JWT (see request_context / the FastAPI
+        middleware), PostgREST calls run with that identity so RLS policies
+        (user_id = auth.uid()) resolve to the real user. Without a token we
+        fall back to the anon role — reads/writes on RLS-protected tables
+        will then be refused, which is the intended fail-closed behavior.
+        """
         if not self._initialized:
             try:
                 from supabase import create_client
@@ -66,6 +73,15 @@ class SupabaseService:
                 print(f"[SupabaseService] Init error: {e}")
                 self._client = None
 
+        if self._client is not None:
+            try:
+                from backend.services.request_context import get_user_token
+                token = get_user_token()
+                key = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
+                # Use the user's JWT when present; otherwise reset to anon.
+                self._client.postgrest.auth(token or key)
+            except Exception:
+                pass
         return self._client
 
     async def save_conversation(self, session) -> str:

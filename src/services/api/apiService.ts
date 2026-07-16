@@ -1,4 +1,5 @@
 import { ParseResult } from '@/types/route';
+import { supabase } from '../supabase/supabaseClient';
 import Constants from 'expo-constants';
 
 /**
@@ -14,6 +15,18 @@ const API_BASE_URL: string =
 const REQUEST_TIMEOUT_MS = 180_000;
 
 /** Shared POST helper with timeout + error normalization. */
+/** Authorization header carrying the user's Supabase JWT, so the backend
+    can act on the user's behalf under RLS. */
+async function authHeaders(): Promise<Record<string, string>> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -21,7 +34,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -47,7 +60,9 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: await authHeaders(),
+  });
   if (!response.ok) {
     const errorBody = await response.text();
     throw new Error(`API error (${response.status}): ${errorBody || response.statusText}`);

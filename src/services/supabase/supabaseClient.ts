@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
 
@@ -11,7 +12,52 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    storage: AsyncStorage,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Auth helpers — email/password for now (placeholder UI until Qihang's design;
+// Apple Sign-In can be added later as another provider).
+// ---------------------------------------------------------------------------
+
+export async function signUpWithEmail(email: string, password: string) {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function signInWithEmail(email: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Silent anonymous sign-in — every device gets a stable identity so rows
+    always have a user_id and RLS holds. Called by AuthGate when no session. */
+export async function signInAnonymously() {
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Upgrade the current anonymous user to a permanent email account.
+    Keeps the same user id, so all existing rows stay owned by this user. */
+export async function upgradeToEmailAccount(email: string, password: string) {
+  const { data, error } = await supabase.auth.updateUser({ email, password });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw new Error(error.message);
+}
 
 export const CHAT_SOURCE_TYPES = [
   'smart_text',
