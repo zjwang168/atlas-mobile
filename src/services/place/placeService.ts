@@ -35,6 +35,12 @@ function makeStableKey(place: { name: string; latitude: number; longitude: numbe
   });
 }
 
+function truncate(value: string | null | undefined, maxLength: number): string | null {
+  const text = (value ?? '').trim();
+  if (!text) return null;
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
 /** Normalize a place name for fuzzy comparison. */
 const normalizePlaceName = (s: string) =>
   s.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
@@ -101,16 +107,47 @@ export async function savePlaces(
   }
 
   const rows = placesToInsert.map((p) => ({
-    name: p.name,
-    subtitle: p.subtitle || null,
-    category: p.type && p.type !== 'Place' ? p.type : null,
+    name: truncate(p.name, 255) ?? 'Unknown place',
+    subtitle: truncate(p.subtitle, 255),
+    category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
-    region: source?.region ?? null,
+    region: truncate(source?.region, 100),
   }));
 
-  const { data, error } = await supabase.from('places').insert(rows).select();
-  if (error) throw new Error(`Failed to save places: ${error.message}`);
+  let data = null as SavedPlace[] | null;
+  let error: { message?: string } | null = null;
+
+  const bulk = await supabase.from('places').insert(rows).select();
+  data = (bulk.data ?? null) as SavedPlace[] | null;
+  error = bulk.error;
+
+  if (error) {
+    console.warn('[placeService] bulk insert failed, falling back to row-by-row:', {
+      message: error.message,
+      rows,
+    });
+
+    const insertedRows: SavedPlace[] = [];
+    for (const row of rows) {
+      const single = await supabase.from('places').insert(row).select();
+      if (single.error) {
+        console.warn('[placeService] row insert failed, skipping row:', {
+          message: single.error.message,
+          row,
+        });
+        continue;
+      }
+      if (single.data?.[0]) {
+        insertedRows.push(single.data[0] as SavedPlace);
+      }
+    }
+
+    if (insertedRows.length === 0) {
+      throw new Error(`Failed to save places: ${error.message}`);
+    }
+    data = insertedRows;
+  }
 
   // Record provenance (best-effort; a failure here shouldn't lose the places).
   if (source?.url && data) {

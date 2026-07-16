@@ -176,7 +176,7 @@ TOOLS: list[dict] = [
         "name": "map_operation",
         "description": (
             "Perform operations on map pins and route. "
-            "Actions: add_pin, remove_pin, reorder_route, optimize_route."
+            "Actions: add_pin, remove_pin, reorder_route, optimize_route, save_to_my_places."
         ),
         "parameters": {
             "type": "object",
@@ -188,6 +188,7 @@ TOOLS: list[dict] = [
                         "remove_pin",
                         "reorder_route",
                         "optimize_route",
+                        "save_to_my_places",
                     ],
                 },
                 "params": {
@@ -306,10 +307,89 @@ async def _tool_load_conversation(conversation_id: str) -> dict:
 async def _tool_map_operation(action: str, params: dict | None = None) -> dict:
     """Perform operations on map pins and route.
 
-    Stub — to be implemented when frontend integration is ready.
+    Supports adding pins to the active session map and persisting selected
+    places into the user's My Places collection without leaving the chat UI.
     """
-    # TODO: Implement map operation logic
-    raise NotImplementedError("map_operation not yet implemented")
+    params = params or {}
+    from backend.services.conversation_manager import conversation_manager
+
+    session_id = str(params.get("session_id") or "").strip()
+    if not session_id:
+        return {"success": False, "error": "session_id is required"}
+
+    session = conversation_manager.get_session(session_id)
+    if not session:
+        return {"success": False, "error": f"Session {session_id} not found"}
+
+    if action == "add_pin":
+        places = params.get("places") or []
+        if not isinstance(places, list) or not places:
+            return {"success": False, "error": "places must be a non-empty list"}
+
+        added = 0
+        for place in places:
+            name = str(place.get("name", "")).strip()
+            if not name:
+                continue
+            location = {
+                "name": name,
+                "latitude": float(place.get("latitude", 0) or 0),
+                "longitude": float(place.get("longitude", 0) or 0),
+                "full_address": str(place.get("full_address", place.get("description", "")) or ""),
+                "description": str(place.get("description", place.get("full_address", "")) or ""),
+                "category": str(place.get("category", "Place") or "Place"),
+                "confidence": place.get("confidence"),
+                "source": str(place.get("source", "chat") or "chat"),
+            }
+
+            duplicate = any(
+                existing.get("name") == location["name"]
+                and abs(float(existing.get("latitude", 0)) - location["latitude"]) < 0.0002
+                and abs(float(existing.get("longitude", 0)) - location["longitude"]) < 0.0002
+                for existing in session.locations
+            )
+            if duplicate:
+                continue
+            session.locations.append(location)
+            added += 1
+
+        if len(session.locations) >= 2:
+            from backend.services.route_planner import plan_route
+            session.route = plan_route(session.locations)
+
+        return {
+            "success": True,
+            "action": action,
+            "added_count": added,
+            "location_count": len(session.locations),
+            "locations": session.locations,
+        }
+
+    if action == "save_to_my_places":
+        places = params.get("places") or []
+        source_url = params.get("source_url")
+        region = params.get("region")
+        if not isinstance(places, list) or not places:
+            return {"success": False, "error": "places must be a non-empty list"}
+
+        try:
+            from backend.services.supabase_service import SupabaseService
+
+            supabase = SupabaseService()
+            saved = await supabase.save_places(places, source_url=source_url, region=region)
+            return {
+                "success": True,
+                "action": action,
+                "saved_count": len(saved),
+                "saved_places": saved,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    if action in {"remove_pin", "reorder_route", "optimize_route"}:
+        return {"success": False, "error": f"Unsupported action in this flow: {action}"}
+
+    return {"success": False, "error": f"Unknown action: {action}"}
 
 
 # ---------------------------------------------------------------------------

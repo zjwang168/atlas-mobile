@@ -71,6 +71,29 @@ export type ParseProgress = {
 export type AtlasChatResponse = {
   session_id: string;
   response: string;
+  place_cards?: Array<{
+    places: Array<{
+      name: string;
+      latitude: number;
+      longitude: number;
+      subtitle?: string;
+      category?: string;
+      description?: string;
+    }>;
+    status: 'pending' | 'pin_done' | 'save_done' | 'done';
+  }>;
+  pending_action?: {
+    action: 'pin_in_chat' | 'save_to_my_places' | 'both';
+    places: Array<{
+      name: string;
+      latitude: number;
+      longitude: number;
+      subtitle?: string;
+      category?: string;
+      description?: string;
+      confidence?: number;
+    }>;
+  } | null;
   locations: Array<{
     name: string;
     latitude: number;
@@ -243,10 +266,15 @@ export async function createChatSession(payload?: {
   return postJson<CreateSessionResponse>('/sessions', payload ?? {});
 }
 
-export async function chatWithAtlas(sessionId: string, message: string): Promise<AtlasChatResponse> {
+export async function chatWithAtlas(
+  sessionId: string,
+  message: string,
+  conversationId?: string | null,
+): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>('/chat', {
     session_id: sessionId,
     message,
+    conversation_id: conversationId ?? undefined,
   });
 }
 

@@ -29,6 +29,7 @@ class Session:
     summary_message_count: int = 0
     last_summary_at: float = 0.0
     user_memory_summary: str = ""
+    pending_place_action: Optional[dict] = None
 
     # Extracted data
     locations: list = field(default_factory=list)  # GeocodedLocation dicts
@@ -70,6 +71,7 @@ class Session:
             "conversation_summary": self.conversation_summary,
             "summary_message_count": self.summary_message_count,
             "user_memory_summary": self.user_memory_summary,
+            "pending_place_action": self.pending_place_action,
             "removed_noise": self.removed_noise,
             "removed_hierarchy": self.removed_hierarchy,
             "inferred_region": self.inferred_region,

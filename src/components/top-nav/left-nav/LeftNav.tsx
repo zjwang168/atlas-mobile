@@ -4,7 +4,6 @@ import { TouchableOpacity, View } from 'react-native';
 
 type LeftNavProps = {
   onSearchPress?: () => void;
-  onHistoryPress?: () => void;
 };
 
 const glassShadow = {
@@ -27,7 +26,7 @@ const blurStyle = {
   justifyContent: 'center' as const,
 };
 
-export default function LeftNav({ onSearchPress, onHistoryPress }: LeftNavProps) {
+export default function LeftNav({ onSearchPress }: LeftNavProps) {
   return (
     <View className="flex-col items-center gap-2">
       {/* 搜索按钮 */}
@@ -38,17 +37,6 @@ export default function LeftNav({ onSearchPress, onHistoryPress }: LeftNavProps)
       >
         <BlurView intensity={40} tint="light" style={blurStyle}>
           <Ionicons name="search" size={24} color="#000" />
-        </BlurView>
-      </TouchableOpacity>
-
-      {/* Chat History 按钮（新） */}
-      <TouchableOpacity
-        onPress={onHistoryPress}
-        activeOpacity={0.8}
-        style={buttonStyle}
-      >
-        <BlurView intensity={40} tint="light" style={blurStyle}>
-          <Ionicons name="chatbubbles" size={24} color="#000" />
         </BlurView>
       </TouchableOpacity>
     </View>

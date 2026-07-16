@@ -13,6 +13,61 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+export const CHAT_SOURCE_TYPES = [
+  'smart_text',
+  'image_scan',
+  'find_image_places',
+  'reddit_links',
+  'youtube_links',
+  'any_links',
+] as const;
+
+export type ChatSourceType = (typeof CHAT_SOURCE_TYPES)[number];
+
+function normalizeChatSourceType(value?: string | null): ChatSourceType | undefined {
+  if (!value) return undefined;
+  if ((CHAT_SOURCE_TYPES as readonly string[]).includes(value)) return value as ChatSourceType;
+  return undefined;
+}
+
+function inferChatSourceType(item: { sourceUrl?: string; title?: string; sourceType?: string | null }): ChatSourceType {
+  const explicit = normalizeChatSourceType(item.sourceType);
+  if (explicit) return explicit;
+
+  const sourceUrl = (item.sourceUrl || '').toLowerCase();
+  const title = (item.title || '').toLowerCase();
+  const haystack = `${sourceUrl} ${title}`;
+
+  if (title === 'atlas ai chat' || title.includes('atlas ai chat')) {
+    return 'smart_text';
+  }
+  if (title.includes('youtube')) {
+    return 'youtube_links';
+  }
+  if (title.includes('reddit')) {
+    return 'reddit_links';
+  }
+  if (haystack.includes('find_image_places') || haystack.includes('find image place') || haystack.includes('photo')) {
+    return 'find_image_places';
+  }
+  if (haystack.includes('image_scan') || haystack.includes('scan image') || haystack.includes('scan_images')) {
+    return 'image_scan';
+  }
+  if (haystack.includes('youtube.com') || haystack.includes('youtu.be') || haystack.includes('youtube')) {
+    return 'youtube_links';
+  }
+  if (haystack.includes('reddit.com') || haystack.includes('reddit')) {
+    return 'reddit_links';
+  }
+  if (haystack.includes('http://') || haystack.includes('https://') || haystack.includes('www.')) {
+    return 'any_links';
+  }
+  if (haystack.includes('smart text') || haystack.includes('smart_text') || haystack.includes('atlas ai')) {
+    return 'smart_text';
+  }
+  return 'smart_text';
+}
+
 function createUuidV4(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
     const random = Math.floor(Math.random() * 16);
@@ -32,14 +87,16 @@ export async function saveChatHistory(
 ): Promise<{ id: string; createdAt: string }> {
   const id = createUuidV4();
   const createdAt = new Date().toISOString();
+  const sourceType = inferChatSourceType(item);
 
   // Upsert conversation record
   const convRecord = {
     id,
     title: item.title,
     source_url: item.sourceUrl,
-    source_type: item.sourceType ?? null,
+    source_type: sourceType,
     location_count: item.locationCount,
+    message_count: item.messageCount ?? 0,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -80,18 +137,29 @@ export async function saveChatHistory(
   return { id, createdAt };
 }
 
+const CHAT_HISTORY_PAGE_SIZE = 50;
+
 /**
- * Load recent chat history items from Supabase `conversations` table.
- * Returns up to 50 items ordered by `updated_at` desc.
- * Each item includes places loaded from `conversation_locations`.
+ * Load chat history items from Supabase `conversations` table.
+ * Supports cursor-based pagination so the UI can fetch older conversations
+ * when the user scrolls down.
  */
-export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
-  // Load conversations
-  const { data: conversations, error: convError } = await supabase
+export async function loadChatHistory(options?: {
+  limit?: number;
+  beforeUpdatedAt?: string;
+}): Promise<ChatHistoryItem[]> {
+  const limit = options?.limit ?? CHAT_HISTORY_PAGE_SIZE;
+  let query = supabase
     .from('conversations')
-    .select('id, title, source_url, source_type, location_count, created_at')
+    .select('id, title, source_url, source_type, location_count, message_count, created_at, updated_at')
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .limit(limit);
+
+  if (options?.beforeUpdatedAt) {
+    query = query.lt('updated_at', options.beforeUpdatedAt);
+  }
+
+  const { data: conversations, error: convError } = await query;
 
   if (convError) {
     console.error('[loadChatHistory] query error:', convError);
@@ -132,8 +200,13 @@ export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
       id: conv.id,
       title: conv.title || 'Untitled',
       sourceUrl: conv.source_url || '',
-      sourceType: conv.source_type ?? undefined,
+      sourceType: normalizeChatSourceType(conv.source_type) ?? inferChatSourceType({
+        sourceUrl: conv.source_url || '',
+        title: conv.title || '',
+        sourceType: conv.source_type ?? undefined,
+      }),
       locationCount: conv.location_count || convLocations.length,
+      messageCount: conv.message_count || 0,
       places: convLocations.map((loc: any, index: number) => ({
         id: String(index + 1),
         stableKey: buildPlaceStableKey({
@@ -149,6 +222,20 @@ export async function loadChatHistory(): Promise<ChatHistoryItem[]> {
         longitude: loc.longitude,
       })),
       createdAt: conv.created_at,
+      updatedAt: conv.updated_at,
     };
   });
+}
+
+export async function countChatHistory(): Promise<number> {
+  const { count, error } = await supabase
+    .from('conversations')
+    .select('id', { count: 'exact', head: true });
+
+  if (error) {
+    console.error('[countChatHistory] query error:', error);
+    return 0;
+  }
+
+  return count ?? 0;
 }

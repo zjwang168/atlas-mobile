@@ -867,24 +867,24 @@ Output ONLY a JSON object with this exact structure:
 
         # Add user message
         session.add_message("user", user_message)
-        try:
-            memories = await conversation_manager.get_all_memories()
-            if memories:
-                summary_lines = []
-                for memory in memories[:20]:
-                    key = memory.get("key", "memory")
-                    value = memory.get("value", "")
-                    category = memory.get("category", "preference")
-                    summary_lines.append(f"- {key} ({category}): {value}")
-                session.user_memory_summary = "\n".join(summary_lines)
-        except Exception:
-            pass
+        if not session.user_memory_summary:
+            try:
+                memories = await conversation_manager.get_all_memories()
+                if memories:
+                    summary_lines = []
+                    for memory in memories[:20]:
+                        key = memory.get("key", "memory")
+                        value = memory.get("value", "")
+                        category = memory.get("category", "preference")
+                        summary_lines.append(f"- {key} ({category}): {value}")
+                    session.user_memory_summary = "\n".join(summary_lines)
+            except Exception:
+                pass
 
         # Run agent loop
         result = await self._agent_loop(session)
         try:
-            await self._maybe_roll_conversation_summary(session)
-            await self._update_memory(session)
+            asyncio.create_task(self._post_chat_maintenance(session))
         except Exception:
             pass
 
@@ -967,6 +967,8 @@ Output ONLY a JSON object with this exact structure:
                 for tc in tool_calls:
                     tool_name = tc.get("name", "")
                     tool_args = tc.get("arguments", {})
+                    if tool_name == "map_operation":
+                        tool_args = {**tool_args, "session_id": session.session_id}
                     total_tool_calls.append(tool_name)
 
                     # Execute tool with timeout
@@ -994,7 +996,6 @@ Output ONLY a JSON object with this exact structure:
             elif response_type == "final_answer":
                 answer = llm_result.get("content", "")
                 session.add_message("assistant", answer)
-                await self._maybe_roll_conversation_summary(session)
                 return {
                     "status": "success",
                     "answer": answer,
@@ -1007,7 +1008,6 @@ Output ONLY a JSON object with this exact structure:
                 content = llm_result.get("content", "")
                 if content:
                     session.add_message("assistant", content)
-                    await self._maybe_roll_conversation_summary(session)
                     return {
                         "status": "success",
                         "answer": content,
@@ -1022,6 +1022,15 @@ Output ONLY a JSON object with this exact structure:
             "tool_calls_used": total_tool_calls,
             "partial": True,
         }
+
+    async def _post_chat_maintenance(self, session: Session) -> None:
+        """Run summary, memory, and persistence after the response is returned."""
+        try:
+            await self._maybe_roll_conversation_summary(session)
+            await self._update_memory(session)
+            await conversation_manager.save_conversation(session.session_id)
+        except Exception:
+            pass
 
     async def _maybe_roll_conversation_summary(self, session: Session) -> None:
         """Compress every ~10 new chat messages into a persisted summary."""
@@ -1078,6 +1087,7 @@ Keep names and facts precise. Do not invent anything.
 
 Current session state:
 - Locations on map: {len(session.locations)}
+- Location names: {", ".join(loc.get("name", "") for loc in session.locations[:12]) or "N/A"}
 - Route planned: {'Yes' if session.route else 'No'}
 - Total distance: {session.route.get('total_distance_km', 'N/A') if session.route else 'N/A'} km
 - Source: {session.source_type or 'N/A'}
@@ -1244,6 +1254,16 @@ Conversation summary:
                         session.route = plan_route(session.locations)
                     else:
                         session.route = None
+            elif action == "add_pin":
+                added_locations = result.get("locations") or []
+                if added_locations:
+                    session.locations = added_locations
+                    if len(session.locations) >= 2:
+                        from backend.services.route_planner import plan_route
+                        session.route = plan_route(session.locations)
+            elif action == "save_to_my_places":
+                # No direct session state change needed; persistence handled by tool.
+                pass
 
 
 
