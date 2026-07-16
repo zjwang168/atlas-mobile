@@ -3,10 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 
 import { Text } from '@/components/ui/text';
-import { typography } from '../../theme/typography';
-import type { ChatHistoryItem } from './HomeContext';
-import { useHome } from './HomeContext';
-import { isSamePlace } from '../../services/place/placeService';
+import { typography } from '@/theme/typography';
+import type { ChatHistoryItem } from '@/features/home/HomeContext';
+import { useHome } from '@/features/home/HomeContext';
+import { isSamePlace } from '@/services/place/placeService';
 
 type HistoryPlacesPanelProps = {
   item: ChatHistoryItem;

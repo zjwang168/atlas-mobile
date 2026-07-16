@@ -2,8 +2,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { fetchConversations, fetchMemories } from '../../services/api/apiService';
-import { typography } from '../../theme/typography';
+import { fetchConversations, fetchMemories } from '@/services/api/apiService';
+import { typography } from '@/theme/typography';
 
 type DebugPanelProps = {
   onClose: () => void;

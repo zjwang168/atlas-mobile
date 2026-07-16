@@ -6,7 +6,7 @@ import { savePlaces } from '../../services/place/placeService';
 import { Place } from '../../types/place';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import HistoryPlacesPanel from './HistoryPlacesPanel';
+import HistoryPlacesPanel from '../atlas-ai/chat-history/HistoryPlacesPanel';
 import { useHome } from './HomeContext';
 import { TAB_PLAN, TAB_PLACES } from './HomeTabBar';
 

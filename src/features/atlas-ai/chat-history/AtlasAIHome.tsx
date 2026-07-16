@@ -10,11 +10,11 @@ import {
 } from 'react-native';
 
 import { Text } from '@/components/ui/text';
-import ContentPanel from '../../components/content-panel/ContentPanel';
-import { parseInput } from '../../services/import/importService';
-import { countChatHistory, loadChatHistory, saveChatHistory } from '../../services/supabase/supabaseClient';
-import { typography } from '../../theme/typography';
-import { useHome, type ChatHistoryItem } from './HomeContext';
+import ContentPanel from '@/components/content-panel/ContentPanel';
+import { parseInput } from '@/services/import/importService';
+import { countChatHistory, loadChatHistory, saveChatHistory } from '@/services/supabase/supabaseClient';
+import { typography } from '@/theme/typography';
+import { useHome, type ChatHistoryItem } from '@/features/home/HomeContext';
 
 const GREEN = {
   primary: '#12C170',

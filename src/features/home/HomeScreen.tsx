@@ -12,13 +12,13 @@ import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
-import AtlasAIHome from './AtlasAIHome';
-import AIChatBox from './AIChatBox';
-import DebugPanel from './DebugPanel';
+import AtlasAIHome from '../atlas-ai/chat-history/AtlasAIHome';
+import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
+import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
 import HomeTabBar, { TAB_ATLAS_AI, TAB_PLACES, TAB_PLAN } from './HomeTabBar';
-import SearchPanel from './SearchPanel';
+import SearchPanel from '../search/SearchPanel';
 import type { ChatHistoryItem } from './HomeContext';
 
 // ---- Types ----
