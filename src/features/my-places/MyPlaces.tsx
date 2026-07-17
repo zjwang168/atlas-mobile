@@ -36,7 +36,7 @@ function MyPlaces({
   compact = false,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
-  const { refreshSavedPlaces, selectedPlaceId } = useHome();
+  const { refreshSavedPlaces } = useHome();
 
   // Native iOS UISegmentedControl (via @expo/ui). Rendered inside the scroll
   // content so it scrolls away rather than staying pinned.
@@ -168,7 +168,6 @@ function MyPlaces({
           onScroll={onScroll}
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
-          selectedPlaceId={selectedPlaceId}
         />
       ) : (
         <Atlas />

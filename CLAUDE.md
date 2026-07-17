@@ -132,6 +132,8 @@ Reference implementation: `AllPlaces.tsx` (memoized list + memoized row + `useCa
 
 Internal implementation details — local variables, private helpers, internal control flow — belong in code comments, not docs.
 
+**Never transcribe code into docs.** A doc update is a summary of what changed for a caller (a new state, a new prop, a new contract) — not a restatement of the diff. Concrete values that tune *how* something behaves rather than *what* it does — spring/animation configs, friction/threshold/duration numbers, magic numbers, easing curves — never appear in prose. If you catch yourself copying a prop value or config object out of the code and into a sentence, stop: that belongs in the code (it's already there), not in the doc.
+
 ## What requires a doc update
 
 | Change | What to update |
@@ -153,6 +155,7 @@ Internal implementation details — local variables, private helpers, internal c
 - Renaming or refactoring internal implementation (no public API change)
 - Adding code comments
 - Bug fixes that preserve existing behaviour and props
+- Tuning an existing behavior — adjusting a spring config, friction, threshold, duration, or other constant — as long as the states/rules a caller observes don't change (e.g. "bounces back on release" is still true, only the speed changed)
 
 ## Update rules
 
@@ -160,6 +163,8 @@ Internal implementation details — local variables, private helpers, internal c
 - **No changelog prose** — docs describe current state, not history. History belongs in git commits.
 - **Accuracy over completeness** — if uncertain about a detail, omit it rather than guess.
 - **Conform to the Doc Template as you touch a doc** — the template below isn't just for new docs. Any time you update an existing doc, bring the section(s) you're touching in line with it: collapse verbose Overview paragraphs to one sentence, fold Props/Exports/Integration content into a single **API** block with inline one-sentence comments, and delete any "Usage Examples" section you encounter (fold a genuinely load-bearing example into **Behaviour** or **API** instead). Don't do a wholesale rewrite of unrelated sections in the same doc just to reformat them — conform incrementally as you pass through.
+- **New interaction/state detail never lands in Overview** — if a change adds or edits behavior, states, or interaction detail (animation, gesture thresholds, visible/hidden logic, etc.), it goes in **Behaviour**, not appended to the Overview sentence. If the doc has no Behaviour section yet, create one in the same edit rather than tacking detail onto Overview "for now." Before editing Overview, check it's still one sentence; if your change would make it longer, that's the signal the content belongs in Behaviour instead.
+- **Before editing Behaviour, ask what actually changed for the caller.** A new state, a new way to trigger/observe one, or a changed contract → update it, one sentence, no numbers. A tuning pass (values changed, shape of the behavior didn't) → the doc is still accurate as written; don't touch it. When in doubt, write the sentence you'd say out loud to another engineer, not the line you'd write in a commit diff — if that sentence doesn't change, the doc doesn't need to either.
 
 ---
 

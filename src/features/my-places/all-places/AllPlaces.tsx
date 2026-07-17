@@ -5,7 +5,7 @@ import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, View } from 'react-native';
 import { PlaceCard } from './PlaceCard';
 
@@ -17,8 +17,6 @@ type AllPlacesProps = {
   bottomInset?: number;
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
-  /** ID of the currently selected place (for highlighting & auto-scroll). */
-  selectedPlaceId?: string | null;
 };
 
 const MAPBOX_TOKEN: string =
@@ -62,14 +60,12 @@ function ItemSeparator() {
   );
 }
 
-function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, selectedPlaceId }: AllPlacesProps) {
+function AllPlaces({ onPlacePress, bottomInset = 0, onScroll }: AllPlacesProps) {
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const listRef = useRef<FlatList<PlaceDetail>>(null);
-  const { deleteSavedPlace, selectedPlaceId: contextSelectedId, savedPlaces } = useHome();
-  const effectiveSelectedId = selectedPlaceId ?? contextSelectedId;
+  const { deleteSavedPlace, savedPlaces } = useHome();
 
   const handleDelete = useCallback((id: string) => {
     deleteSavedPlace(id);
@@ -105,33 +101,12 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, selectedPlaceId }:
 
   const renderItem = useCallback(
     ({ item }: { item: PlaceDetail }) => (
-      <PlaceCard
-        item={item}
-        isActive={effectiveSelectedId === item.id}
-        onPress={onPlacePress}
-        onDelete={handleDelete}
-      />
+      <PlaceCard item={item} onPress={onPlacePress} onDelete={handleDelete} />
     ),
-    [effectiveSelectedId, onPlacePress, handleDelete],
+    [onPlacePress, handleDelete],
   );
 
   const keyExtractor = useCallback((item: PlaceDetail) => item.id, []);
-
-  useEffect(() => {
-    if (!effectiveSelectedId || places.length === 0) return;
-    const idx = places.findIndex((p) => p.id === effectiveSelectedId);
-    if (idx >= 0 && idx >= visibleCount) {
-      setVisibleCount(Math.min(places.length, idx + PAGE_SIZE));
-    }
-  }, [effectiveSelectedId, places, visibleCount]);
-
-  useEffect(() => {
-    if (!effectiveSelectedId) return;
-    const idx = visibleData.findIndex((p) => p.id === effectiveSelectedId);
-    if (idx >= 0) {
-      listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-    }
-  }, [effectiveSelectedId, visibleData]);
 
   if (loading) {
     return (
@@ -143,7 +118,6 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, selectedPlaceId }:
 
   return (
     <FlatList
-      ref={listRef}
       data={visibleData}
       keyExtractor={keyExtractor}
       style={{ flex: 1 }}
@@ -168,7 +142,6 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, selectedPlaceId }:
       initialNumToRender={PAGE_SIZE}
       maxToRenderPerBatch={PAGE_SIZE}
       windowSize={7}
-      removeClippedSubviews
       ListHeaderComponent={
         <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
           <Text className="text-text-secondary" style={typography.subheader}>
