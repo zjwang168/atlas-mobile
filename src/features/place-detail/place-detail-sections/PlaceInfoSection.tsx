@@ -1,9 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, useColorScheme, View } from 'react-native';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
+import { useHome } from '../../home/HomeContext';
 import { PlaceDetail, PlaceLink, PlaceTag } from '../../../types/place';
 
 type PlaceInfoSectionProps = {
@@ -73,6 +76,76 @@ function LinkRow({ link }: { link: PlaceLink }) {
   );
 }
 
+function NoteSection({ place }: { place: PlaceDetail }) {
+  const { updateSavedPlaceNote } = useHome();
+  const colorScheme = useColorScheme();
+  const foreground = colorScheme === 'dark' ? '#fafafa' : '#18181B';
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(place.note ?? '');
+  const [saving, setSaving] = useState(false);
+
+  // Reset the draft (and drop out of edit mode) whenever the underlying place changes.
+  useEffect(() => {
+    setDraft(place.note ?? '');
+    setIsEditing(false);
+  }, [place.id, place.note]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateSavedPlaceNote(place.id, draft);
+      setIsEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setDraft(place.note ?? '');
+    setIsEditing(false);
+  };
+
+  return (
+    <View className="pt-2">
+      <View className="flex-row items-center justify-between">
+        <Text className="text-lg font-semibold text-foreground">Note</Text>
+        {isEditing ? (
+          <View className="flex-row items-center gap-1">
+            <Button accessibilityLabel="Cancel note edit" onPress={handleCancel} size="icon" variant="ghost" disabled={saving}>
+              <Ionicons name="close" size={20} color={foreground} />
+            </Button>
+            <Button accessibilityLabel="Save note" onPress={handleSave} size="icon" variant="ghost" disabled={saving}>
+              <Ionicons name="checkmark" size={20} color={foreground} />
+            </Button>
+          </View>
+        ) : (
+          <Button accessibilityLabel="Edit note" onPress={() => setIsEditing(true)} size="icon" variant="ghost">
+            <Ionicons name="pencil-outline" size={16} color={foreground} />
+          </Button>
+        )}
+      </View>
+      {isEditing ? (
+        <Input
+          className="mt-2 h-auto min-h-24 items-start py-2"
+          multiline
+          textAlignVertical="top"
+          autoFocus
+          placeholder="Add a note..."
+          value={draft}
+          onChangeText={setDraft}
+          editable={!saving}
+        />
+      ) : (
+        place.note && (
+          <View className="mt-2">
+            <Paragraphs text={place.note} />
+          </View>
+        )
+      )}
+    </View>
+  );
+}
+
 export default function PlaceInfoSection({ place }: PlaceInfoSectionProps) {
   const hasSummary = place.summary.trim().length > 0;
   const hasVisitStrategy = place.visitStrategy.trim().length > 0;
@@ -130,14 +203,7 @@ export default function PlaceInfoSection({ place }: PlaceInfoSectionProps) {
         </View>
       )}
 
-      <View className="pt-2">
-        <SectionHeader label="Note" action={{ icon: 'pencil-outline', iconSize: 16 }} />
-        {place.note && (
-          <View className="mt-2">
-            <Paragraphs text={place.note} />
-          </View>
-        )}
-      </View>
+      <NoteSection place={place} />
     </View>
   );
 }

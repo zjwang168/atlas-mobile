@@ -28,9 +28,19 @@ type DeletePlaceWrite = {
   placeId: string;
 };
 
-export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite;
+type UpdateNoteWrite = {
+  kind: 'updateNote';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  placeId: string;
+  note: string;
+};
+
+export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite | UpdateNoteWrite;
 type NewQueuedWrite = Omit<SavePlacesWrite, 'id' | 'attempts' | 'createdAt'>
-  | Omit<DeletePlaceWrite, 'id' | 'attempts' | 'createdAt'>;
+  | Omit<DeletePlaceWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>;
 
 export type DeadLetterWrite = QueuedWrite & {
   failedAt: string;
@@ -133,7 +143,7 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   }));
 
   const { data, error } = await withTimeout(
-    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
   );
   if (error) throw new Error(`Failed to save queued places: ${error.message}`);
 
@@ -158,6 +168,11 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
 async function deletePlaceOnline(placeId: string): Promise<void> {
   const { error } = await withTimeout(supabase.from('places').delete().eq('id', placeId));
   if (error) throw new Error(`Failed to delete queued place: ${error.message}`);
+}
+
+async function updateNoteOnline(placeId: string, note: string): Promise<void> {
+  const { error } = await withTimeout(supabase.from('places').update({ note: note || null }).eq('id', placeId));
+  if (error) throw new Error(`Failed to update queued place note: ${error.message}`);
 }
 
 async function reconcileSavedPlaces(userId: string, localRows: SavedPlace[], remoteRows: SavedPlace[]): Promise<void> {
@@ -186,7 +201,7 @@ async function reconcileSavedPlaces(userId: string, localRows: SavedPlace[], rem
 
   const queue = await readQueue(userId);
   await writeQueue(userId, queue.map((write) => {
-    if (write.kind === 'deletePlace') {
+    if (write.kind === 'deletePlace' || write.kind === 'updateNote') {
       return { ...write, placeId: idMap.get(write.placeId) ?? write.placeId };
     }
     return write;
@@ -213,6 +228,10 @@ async function replayWrite(userId: string, write: QueuedWrite): Promise<void> {
   if (write.kind === 'savePlaces') {
     const remoteRows = await insertPlacesOnline(write);
     await reconcileSavedPlaces(userId, write.localRows, remoteRows);
+    return;
+  }
+  if (write.kind === 'updateNote') {
+    await updateNoteOnline(write.placeId, write.note);
     return;
   }
   await deletePlaceOnline(write.placeId);

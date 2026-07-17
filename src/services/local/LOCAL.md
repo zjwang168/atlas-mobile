@@ -11,7 +11,7 @@
 ## Current Domains
 
 - Places are cache-then-revalidate. `fetchSavedPlaces()` returns cached rows immediately when available, refreshes Supabase in the background, and updates subscribers when fresh rows land.
-- Place saves/deletes are optimistic. Retryable failures are queued and replayed on foreground or the next fetch/save.
+- Place saves/deletes/note edits are optimistic. Retryable failures are queued and replayed on foreground or the next fetch/save.
 - Plans use local storage as their persistence layer until a server-backed plans API exists.
 
 ## Public API

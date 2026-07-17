@@ -4,7 +4,7 @@ import type { ParsedPlace } from '../../services/import/importService';
 import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
 import { flushQueue } from '../../services/local/syncQueue';
 import type { SavedPlace } from '../../services/place/placeService';
-import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces } from '../../services/place/placeService';
+import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } from '../../services/place/placeService';
 import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
 import type { PlannedPlace } from '../my-plan/create-plan/plan-place/types';
 
@@ -81,6 +81,8 @@ type HomeContextValue = {
   } | null) => void;
   /** 从 Supabase 删除一个已保存地点 */
   deleteSavedPlace: (id: string) => Promise<void>;
+  /** 更新已保存地点的备注（本地立即生效，联网后同步到 Supabase） */
+  updateSavedPlaceNote: (id: string, note: string) => Promise<void>;
   /** 当前激活的 sidekick */
   activeSidekick: 'none' | 'aiChat' | 'places';
   setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
@@ -114,6 +116,7 @@ const HomeContext = createContext<HomeContextValue>({
   importNotification: null,
   setImportNotification: () => {},
   deleteSavedPlace: async () => {},
+  updateSavedPlaceNote: async () => {},
   activeSidekick: 'none',
   setActiveSidekick: () => {},
   userLocation: [-122.3321, 47.6062],
@@ -276,6 +279,15 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateSavedPlaceNote = useCallback(async (id: string, note: string) => {
+    try {
+      await updatePlaceNote(id, note);
+      setSavedPlaces((prev) => prev.map((p) => (p.id === id ? { ...p, note: note.trim() || null } : p)));
+    } catch (e) {
+      console.error('[HomeContext] updateSavedPlaceNote failed:', e);
+    }
+  }, []);
+
   const deleteChatHistoryItem = useCallback((id: string) => {
     setChatHistory((prev) => {
       const item = prev.find((entry) => entry.id === id);
@@ -314,6 +326,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       addChatHistoryItem,
       replaceChatHistoryItem,
       deleteSavedPlace,
+      updateSavedPlaceNote,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       setChatHistory,
@@ -339,6 +352,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       addChatHistoryItem,
       replaceChatHistoryItem,
       deleteSavedPlace,
+      updateSavedPlaceNote,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       selectedPlaceCoordinate,

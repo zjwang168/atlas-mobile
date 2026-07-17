@@ -30,6 +30,7 @@ export type SavedPlace = {
   longitude: number;
   region: string | null;
   photo_url?: string | null;
+  note?: string | null;
   created_at: string;
 };
 
@@ -146,7 +147,7 @@ export async function savePlaces(
     const { data: existing, error: existingError } = await withTimeout(
       supabase
         .from('places')
-        .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+        .select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
       'Checking existing places timed out',
     );
     if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
@@ -207,7 +208,7 @@ export async function savePlaces(
 
   try {
     const bulk = await withTimeout(
-      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
       'Saving places timed out',
     );
     data = (bulk.data ?? null) as SavedPlace[] | null;
@@ -235,7 +236,7 @@ export async function savePlaces(
     const insertedRows: SavedPlace[] = [];
     for (const row of rows) {
       const single = await withTimeout(
-        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
         'Saving place timed out',
       ).catch((singleError) => {
         if (!isRetryableError(singleError)) throw singleError;
@@ -306,7 +307,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before fetch failed:', error));
     const { data, error } = await supabase
       .from('places')
-      .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at')
+      .select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at')
       .order('created_at', { ascending: false });
     if (error) throw new Error(`Failed to fetch places: ${error.message}`);
     const fresh = ((data ?? []) as SavedPlace[]).map(withStableKey);
@@ -353,6 +354,7 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
     summary: row.subtitle ?? '',
     visitStrategy: '',
+    note: row.note ?? undefined,
     savedAt: new Date(row.created_at).toLocaleDateString(),
   };
 }
@@ -378,5 +380,39 @@ export async function deletePlace(id: string): Promise<void> {
   } catch (error) {
     if (!isRetryableError(error)) throw error;
     await enqueueWrite(userId, { kind: 'deletePlace', placeId: id });
+  }
+}
+
+/**
+ * Update a saved place's note. Writes to the local cache immediately so the
+ * UI reflects the change offline, then syncs to Supabase — queued for retry
+ * via syncQueue when offline or the request fails.
+ *
+ * @param id    The ID of the place to update.
+ * @param note  The new note text (empty string clears the note).
+ */
+export async function updatePlaceNote(id: string, note: string): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot update place note before auth is ready');
+  const trimmed = note.trim();
+
+  await updateSavedPlacesCache(userId, (current) =>
+    current.map((place) => (place.id === id ? { ...place, note: trimmed || null } : place)),
+  );
+
+  if (id.startsWith('local-')) {
+    await enqueueWrite(userId, { kind: 'updateNote', placeId: id, note: trimmed });
+    return;
+  }
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('places').update({ note: trimmed || null }).eq('id', id),
+      'Updating place note timed out',
+    );
+    if (error) throw new Error(`Failed to update place note: ${error.message}`);
+  } catch (error) {
+    if (!isRetryableError(error)) throw error;
+    await enqueueWrite(userId, { kind: 'updateNote', placeId: id, note: trimmed });
   }
 }

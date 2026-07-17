@@ -38,6 +38,7 @@ function useHome(): {
   savedPlaces: SavedPlace[]; setSavedPlaces: (p: SavedPlace[]) => void;     // places persisted to Supabase
   refreshSavedPlaces: () => Promise<void>;                          // re-fetches savedPlaces
   deleteSavedPlace: (id: string) => Promise<void>;                  // deletes a saved place
+  updateSavedPlaceNote: (id: string, note: string) => Promise<void>; // updates a saved place's note; local cache first, syncs to Supabase
   chatHistory: ChatHistoryItem[]; setChatHistory: (i: ChatHistoryItem[]) => void;  // cached past import/chat sessions (max 50)
   deletedChatHistory: ChatHistoryItem[];                            // soft-deleted items
   activeHistoryItem: ChatHistoryItem | null; setActiveHistoryItem: (i: ChatHistoryItem | null) => void;  // session shown by AIChatBox
