@@ -1,6 +1,6 @@
 import { Alert, Dimensions, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useEffect, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import PlanDestination from './plan-destination/PlanDestination';
@@ -29,28 +29,51 @@ type CreatePlanProps = {
   reportScrollY: (y: number) => void;
 };
 
+/** Imperative handle so the parent (which now keeps CreatePlan permanently
+    mounted for a flicker-free cross-fade) can force a clean wizard each time
+    the user re-enters create mode, instead of relying on mount timing. */
+export type CreatePlanHandle = {
+  reset: () => void;
+};
+
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
-export default function CreatePlan({ onClose, onPlanCreated, reportScrollY }: CreatePlanProps) {
+const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function CreatePlan(
+  { onClose, onPlanCreated, reportScrollY },
+  ref,
+) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
 
-  useEffect(() => {
+  const reset = useCallback(() => {
     createPlanCache.location = '';
     createPlanCache.range = { start: null, end: null };
     createPlanCache.places = { free: [], byDate: {} };
+    setStep('destination');
+    setLocation('');
+    setRange({ start: null, end: null });
   }, []);
 
-  function handleLocationChange(value: string) {
+  useImperativeHandle(ref, () => ({ reset }), [reset]);
+
+  // Covers callers that mount/unmount CreatePlan normally (e.g. HomeScreen's
+  // 'createPlan' overlay) — MyPlan's inline flow keeps this permanently
+  // mounted and calls `reset` imperatively instead, since mount only fires once.
+  useEffect(() => {
+    reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleLocationChange = useCallback((value: string) => {
     setLocation(value);
     createPlanCache.location = value;
-  }
+  }, []);
 
-  function handleRangeChange(value: DateRange) {
+  const handleRangeChange = useCallback((value: DateRange) => {
     setRange(value);
     createPlanCache.range = value;
-  }
+  }, []);
 
   const stepIndex = STEPS.indexOf(step);
 
@@ -112,4 +135,6 @@ export default function CreatePlan({ onClose, onPlanCreated, reportScrollY }: Cr
       )}
     </View>
   );
-}
+});
+
+export default CreatePlan;

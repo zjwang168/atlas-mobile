@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { Dimensions, FlatList, View } from 'react-native';
 import { useAnimatedReaction, runOnJS } from 'react-native-reanimated';
 import { useDndContext } from '../dnd/DndProvider';
@@ -18,7 +18,7 @@ export type DateRangeFieldProps = {
   onRemove: (date: string, id: string) => void;
 };
 
-export default function DateRangeField({ range, byDate, onAdd, onRemove }: DateRangeFieldProps) {
+function DateRangeField({ range, byDate, onAdd, onRemove }: DateRangeFieldProps) {
   const dates = useMemo(() => enumerateDates(range), [range.start, range.end]);
   const { isDragging } = useDndContext();
 
@@ -67,3 +67,5 @@ export default function DateRangeField({ range, byDate, onAdd, onRemove }: DateR
     />
   );
 }
+
+export default memo(DateRangeField);

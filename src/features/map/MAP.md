@@ -39,6 +39,8 @@ interface MapboxMapProps {
   onMarkerPress?: (marker: MapMarker) => void;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>; // draws a polyline when provided
   routeMarkers?: MapMarker[];                        // replaces markers when a route is active
+  padding?: MapPadding;                              // camera padding; discrete changes animate over 500ms
+  selectedMarkerId?: string | null;
 }
 
 interface MapMarker {
@@ -48,7 +50,15 @@ interface MapMarker {
   title?: string;
   description?: string;
 }
+
+interface MapboxMapHandle {
+  setPaddingBottom: (paddingBottom: number, durationMs?: number) => void; // imperative camera padding update via ref, bypassing React re-render; default 300ms ease
+}
 ```
+
+`MapboxMap` is wrapped in `React.memo` and exposes `MapboxMapHandle` via `forwardRef`. Callers that need to track a fast-changing value (e.g. a draggable panel's height, reported every animation frame) should call `ref.current.setPaddingBottom(value)` directly instead of feeding it through the `padding` prop — pushing a per-frame value through props would re-render the whole component tree and fight the `padding` prop's own 500ms-animated `setCamera` call. See `HomeScreen.tsx`'s `handlePanelHeightChange` for the reference usage: it keeps the panel height in a ref (not state) and only recomputes the `padding` prop on the rare, discrete event of the panel's visibility toggling.
+
+`setPaddingBottom`'s default 300ms ease is intentional: called on every animation frame during a panel drag, each call re-targets the in-flight camera animation before the previous one finishes, so the map visibly trails the panel edge by a beat rather than snapping to it instantly. Pass `durationMs: 0` for an immediate, non-lagging update if a future caller needs 1:1 tracking.
 
 ## Access Token
 

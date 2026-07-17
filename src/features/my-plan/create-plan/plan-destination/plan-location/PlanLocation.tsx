@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Input } from '@/components/ui/input';
 
 type PlanLocationProps = {
@@ -5,14 +6,18 @@ type PlanLocationProps = {
   onChangeText: (value: string) => void;
 };
 
-export default function PlanLocation({ value, onChangeText }: PlanLocationProps) {
+const INPUT_STYLE = { paddingVertical: 0 };
+
+function PlanLocation({ value, onChangeText }: PlanLocationProps) {
   return (
     <Input
       placeholder="Where are you going?"
       value={value}
       onChangeText={onChangeText}
       className="mb-3 rounded-xl"
-      style={{ paddingVertical: 0 }}
+      style={INPUT_STYLE}
     />
   );
 }
+
+export default memo(PlanLocation);

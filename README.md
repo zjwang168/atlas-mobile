@@ -814,6 +814,13 @@ For subsequent runs:
 npx expo start --dev-client
 ```
 
+If you encounter errors when running `npx expo run:ios`, try:
+```bash
+npx expo prebuild --clean
+cd ios
+pod install
+```
+
 ### Verify
 
 ```bash

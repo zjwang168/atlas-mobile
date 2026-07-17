@@ -36,6 +36,8 @@ type ImportScreenProps = {
   onSubmit: (text: string, mode: ImportMode, webSearch?: boolean) => void;
   onSubmitImageScan?: (imagesBase64: string[], mode?: ImportMode) => void;
   onScanResult?: (result: any) => void;
+  /** Opens the Atlas AI chat history list (AtlasAIHome) over this sheet. */
+  onOpenChatHistory?: () => void;
 };
 
 const modes: { key: ImportMode; icon: string; title: string; subtitle: string }[] = [
@@ -68,7 +70,7 @@ const TIPS: { mode: ImportMode; text: string }[] = [
  * Users pick a mode (Smart Text, Image Scan, Reddit Links, Any Links),
  * then provide input via text field or image picker accordingly.
  */
-export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onScanResult }: ImportScreenProps) {
+export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onScanResult, onOpenChatHistory }: ImportScreenProps) {
   const insets = useSafeAreaInsets();
   const sheetRef = useRef<BottomSheet>(null);
   const inputRef = useRef<TextInput>(null);
@@ -349,13 +351,24 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
         {/* Title + close */}
         <View style={styles.headerRow}>
           <Text style={styles.title}>Add places</Text>
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => sheetRef.current?.close()}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="close" size={20} color={COLOR.textPrimary} />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            {onOpenChatHistory && (
+              <TouchableOpacity
+                style={styles.headerIconButton}
+                onPress={onOpenChatHistory}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="time-outline" size={20} color={COLOR.textPrimary} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.headerIconButton}
+              onPress={() => sheetRef.current?.close()}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={20} color={COLOR.textPrimary} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         
@@ -440,7 +453,12 @@ const styles = StyleSheet.create({
     color: COLOR.foreground,
     letterSpacing: -0.28,
   },
-  closeButton: {
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerIconButton: {
     width: 40,
     height: 40,
     borderRadius: 999,

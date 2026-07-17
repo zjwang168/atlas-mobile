@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react';
 import { Calendar, DateData } from 'react-native-calendars';
 import type { DateRange } from '../../CreatePlan';
 
@@ -32,7 +33,24 @@ function buildMarkedDates(range: DateRange): Record<string, object> {
   return marks;
 }
 
-export default function PlanDate({ range, onRangeChange }: PlanDateProps) {
+const CALENDAR_THEME = {
+  calendarBackground: '#fafafa',
+  selectedDayBackgroundColor: '#09090b',
+  selectedDayTextColor: '#fff',
+  todayTextColor: '#09090b',
+  dayTextColor: '#09090b',
+  textDisabledColor: '#c7c7cc',
+  arrowColor: '#09090b',
+  monthTextColor: '#09090b',
+  textMonthFontWeight: '600' as const,
+  textDayFontSize: 13,
+  textMonthFontSize: 15,
+  textDayHeaderFontSize: 12,
+};
+
+const CALENDAR_STYLE = { borderRadius: 14, overflow: 'hidden' as const };
+
+function PlanDate({ range, onRangeChange }: PlanDateProps) {
   function handleDayPress(day: DateData) {
     const { start, end } = range;
     if (!start || (start && end) || day.dateString < start) {
@@ -42,27 +60,19 @@ export default function PlanDate({ range, onRangeChange }: PlanDateProps) {
     }
   }
 
+  const markedDates = useMemo(() => buildMarkedDates(range), [range]);
+  const minDate = useMemo(() => new Date().toISOString().split('T')[0], []);
+
   return (
     <Calendar
       onDayPress={handleDayPress}
       markingType="period"
-      markedDates={buildMarkedDates(range)}
-      minDate={new Date().toISOString().split('T')[0]}
-      style={{ borderRadius: 14, overflow: 'hidden' }}
-      theme={{
-        calendarBackground: '#fafafa',
-        selectedDayBackgroundColor: '#09090b',
-        selectedDayTextColor: '#fff',
-        todayTextColor: '#09090b',
-        dayTextColor: '#09090b',
-        textDisabledColor: '#c7c7cc',
-        arrowColor: '#09090b',
-        monthTextColor: '#09090b',
-        textMonthFontWeight: '600',
-        textDayFontSize: 13,
-        textMonthFontSize: 15,
-        textDayHeaderFontSize: 12,
-      }}
+      markedDates={markedDates}
+      minDate={minDate}
+      style={CALENDAR_STYLE}
+      theme={CALENDAR_THEME}
     />
   );
 }
+
+export default memo(PlanDate);

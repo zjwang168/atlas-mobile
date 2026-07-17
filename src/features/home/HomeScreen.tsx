@@ -1,51 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, PanResponder, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, StatusBar, StyleSheet, View } from 'react-native';
 
-import Ionicons from '@expo/vector-icons/Ionicons';
 import TopNav from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
-import MapboxMap, { MapMarker } from '../map/MapboxMap';
+import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
 import AddPlaceToPlan from '../my-plan/add-place-to-plan/AddPlaceToPlan';
 import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
-import AtlasAIHome from './AtlasAIHome';
-import AIChatBox from './AIChatBox';
-import DebugPanel from './DebugPanel';
+import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
+import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
-import HomeTabBar, { TAB_ATLAS_AI, TAB_PLACES, TAB_PLAN } from './HomeTabBar';
-import SearchPanel from './SearchPanel';
-import type { ChatHistoryItem } from './HomeContext';
+import HomeTabBar, { TAB_PLACES, TAB_PLAN } from './HomeTabBar';
+import SearchPanel from '../search/SearchPanel';
 
 // ---- Types ----
 
-interface PlaceData {
-  id: string;
-  name: string;
-  subtitle: string;
-  latitude: number;
-  longitude: number;
-}
-
 interface HomeScreenProps {
   onOpenImport?: () => void;
-  onStartAiImport?: (meta: { mode?: 'parse' | 'atlas_discover'; rawInput: string; title?: string; sourceUrl?: string }) => void;
 }
 
 // ---- Helpers ----
-
-const toMapMarkers = (places: PlaceData[]): MapMarker[] =>
-  places.map((p) => ({
-    id: p.id,
-    latitude: p.latitude,
-    longitude: p.longitude,
-    title: p.name,
-    description: p.subtitle,
-  }));
 
 const toMapMarkersFromParsed = (places: ParsedPlace[]): MapMarker[] =>
   places.map((p) => ({
@@ -76,22 +55,15 @@ const medianCenter = (places: ParsedPlace[]): [number, number] => {
   return [mid(places.map((p) => p.longitude)), mid(places.map((p) => p.latitude))];
 };
 
-const centerFromChat = (item: ChatHistoryItem): [number, number] => {
-  if (item.places.length === 0) return [-122.3321, 47.6062];
-  const lng = item.places.reduce((sum, place) => sum + place.longitude, 0) / item.places.length;
-  const lat = item.places.reduce((sum, place) => sum + place.latitude, 0) / item.places.length;
-  return [lng, lat];
-};
-
 // ---- Root export — HomeProvider is now in App.tsx ----
 
-export default function HomeScreen({ onOpenImport, onStartAiImport }: HomeScreenProps) {
-  return <HomeScreenContent onOpenImport={onOpenImport} onStartAiImport={onStartAiImport} />;
+export default function HomeScreen({ onOpenImport }: HomeScreenProps) {
+  return <HomeScreenContent onOpenImport={onOpenImport} />;
 }
 
 // ---- Inner component — consumes the context ----
 
-function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
+function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
   const {
     overlay,
     setOverlay,
@@ -125,7 +97,7 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
   }, [tabBarVisible]);
 
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
-  const tabOrder = useMemo(() => [TAB_ATLAS_AI, TAB_PLACES, TAB_PLAN], []);
+  const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN], []);
 
   // Use parsedPlaces from HomeContext (set by App.tsx after parse)
   const hasParsedPlaces = parsedPlaces.length > 0;
@@ -169,14 +141,27 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
     // 根据屏幕高度估算 ContentPanel 的 default snap 高度 (55%)
     return Dimensions.get('window').height * 0.55;
   }, []);
-  const [bottomPanelHeight, setBottomPanelHeight] = useState(contentPanelHeight);
-  const panelVisible = overlay.kind === 'none' || overlay.kind === 'search' || overlay.kind === 'chatHistory';
+  const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
+  // Tracks the live panel height without React state — the panel reports it every
+  // animation frame while dragging/snapping, and nothing else needs to reactively
+  // read it, so pushing it through setState would re-render the whole screen 60x/sec.
+  const bottomPanelHeightRef = useRef(contentPanelHeight);
+  const mapRef = useRef<MapboxMapHandle>(null);
+  // Only recomputed when panel visibility toggles (a rare, discrete event) — this
+  // still goes through MapboxMap's prop-driven, animated camera path so hiding/
+  // showing the panel eases the map padding smoothly.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: panelVisible ? bottomPanelHeight : 0,
+    paddingBottom: panelVisible ? bottomPanelHeightRef.current : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [panelVisible, bottomPanelHeight]);
+  }), [panelVisible]);
+  // Per-frame panel height updates — pushed straight to the map's camera via ref,
+  // bypassing React re-render entirely.
+  const handlePanelHeightChange = useCallback((height: number) => {
+    bottomPanelHeightRef.current = height;
+    mapRef.current?.setPaddingBottom(panelVisible ? height : 0);
+  }, [panelVisible]);
 
   const handleAddPress = useCallback(() => {
     onOpenImport?.();
@@ -198,14 +183,6 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
   useEffect(() => {
     animateToTab(activeTab);
   }, []);
-  const pagerResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: () => false,
-      }),
-    [],
-  );
   // --- Search & History handlers ---
   const handleSearchPress = useCallback(() => {
     setOverlay({ kind: 'search' });
@@ -218,21 +195,24 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
     setSelectedPlaceId(null);
   }, [setOverlay, setSelectedPlaceCoordinate, setSelectedPlaceId]);
 
+  const handleMarkerPress = useCallback((marker: MapMarker) => {
+    setSelectedPlaceId(marker.id);
+    setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
+  }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
       {/* Single full-screen map behind everything */}
       <MapboxMap
+        ref={mapRef}
         markers={mapMarkers}
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
         padding={mapPadding}
         selectedMarkerId={selectedPlaceId}
-        onMarkerPress={(marker) => {
-          setSelectedPlaceId(marker.id);
-          setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
-        }}
+        onMarkerPress={handleMarkerPress}
       />
 
       <TopBlurFade />
@@ -250,41 +230,17 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
           pointerEvents="box-none"
         >
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
-            {activeSidekick === 'aiChat' ? null : (
-              <AtlasAIHome
-                visible={panelVisible}
-                onHeightChange={setBottomPanelHeight}
-                onOpenChat={(item) => {
-                  setParsedPlaces(item.places);
-                  setActiveHistoryItem(item);
-                  setSelectedPlaceCoordinate(centerFromChat(item));
-                  setSelectedPlaceId(null);
-                  setActiveSidekick('aiChat');
-                }}
-                onOpenPlaces={(item) => {
-                  setParsedPlaces(item.places);
-                  setActiveHistoryItem(item);
-                  setSelectedPlaceCoordinate(centerFromChat(item));
-                  setSelectedPlaceId(null);
-                  setActiveSidekick('none');
-                  animateToTab(TAB_PLACES);
-                }}
-                onLongPressDebug={() => setOverlay({ kind: 'debug' })}
-              />
-            )}
-          </View>
-          <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
             <HomePanel
               activeTab={TAB_PLACES}
               visible={panelVisible}
-              onHeightChange={setBottomPanelHeight}
+              onHeightChange={handlePanelHeightChange}
             />
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
             <HomePanel
               activeTab={TAB_PLAN}
               visible={panelVisible}
-              onHeightChange={setBottomPanelHeight}
+              onHeightChange={handlePanelHeightChange}
             />
           </View>
         </Animated.View>
@@ -302,7 +258,7 @@ function HomeScreenContent({ onOpenImport, onStartAiImport }: HomeScreenProps) {
         }}
         title={activeHistoryItem?.title}
         visible={activeSidekick === 'aiChat' && panelVisible}
-        onHeightChange={setBottomPanelHeight}
+        onHeightChange={handlePanelHeightChange}
         conversationId={activeHistoryItem?.id ?? null}
         onPlacesCommitted={(newPlaces) => {
           const currentItem = activeHistoryItem;

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { View } from 'react-native';
 import { useAnimatedStyle } from 'react-native-reanimated';
 import { NativeOnlyAnimatedView } from '@/components/ui/native-only-animated-view';
@@ -21,7 +21,7 @@ const COLOR_BORDER_ACTIVE = '#12c170';
 const COLOR_BG = '#ffffff';
 const COLOR_BG_ACTIVE = '#e9fbf1';
 
-export default function FlexiblePlaceField({ places, onAdd, onRemove }: FlexiblePlaceFieldProps) {
+function FlexiblePlaceField({ places, onAdd, onRemove }: FlexiblePlaceFieldProps) {
   const fieldRef = useRef<View>(null);
   const { registerDropZone, unregisterDropZone, activeZoneKey } = useDndContext();
 
@@ -55,3 +55,5 @@ export default function FlexiblePlaceField({ places, onAdd, onRemove }: Flexible
     </NativeOnlyAnimatedView>
   );
 }
+
+export default memo(FlexiblePlaceField);

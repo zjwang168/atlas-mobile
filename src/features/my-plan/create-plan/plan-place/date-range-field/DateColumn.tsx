@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useAnimatedReaction, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
 import { NativeOnlyAnimatedView } from '@/components/ui/native-only-animated-view';
@@ -32,7 +32,7 @@ type SlotSectionProps = {
   scrollable?: boolean;
 };
 
-function SlotSection({ date, timeSlot, places, onAdd, onRemove, scrollable = true }: SlotSectionProps) {
+const SlotSection = memo(function SlotSection({ date, timeSlot, places, onAdd, onRemove, scrollable = true }: SlotSectionProps) {
   const ref = useRef<View>(null);
   const { registerDropZone, unregisterDropZone, activeZoneKey } = useDndContext();
   const slotKey: SlotKey = { kind: 'dated', date, timeSlot };
@@ -69,7 +69,7 @@ function SlotSection({ date, timeSlot, places, onAdd, onRemove, scrollable = tru
       />
     </NativeOnlyAnimatedView>
   );
-}
+});
 
 function VerticalDivider() {
   return (
@@ -90,7 +90,7 @@ export type DateColumnProps = {
   onRemove: (id: string) => void;
 };
 
-export default function DateColumn({ date, places, onAdd, onRemove }: DateColumnProps) {
+function DateColumn({ date, places, onAdd, onRemove }: DateColumnProps) {
   const [columnHeight, setColumnHeight] = useState<number | null>(null);
   const { month, day } = formatColumnHeader(date);
   const isCompact = columnHeight !== null && columnHeight < COMPACT_THRESHOLD;
@@ -172,3 +172,5 @@ export default function DateColumn({ date, places, onAdd, onRemove }: DateColumn
     </View>
   );
 }
+
+export default memo(DateColumn);

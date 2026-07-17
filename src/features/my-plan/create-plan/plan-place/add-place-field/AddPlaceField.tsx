@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAnimatedReaction, runOnJS } from 'react-native-reanimated';
@@ -43,7 +43,7 @@ type AddPlaceFieldProps = {
   scrollable?: boolean;
 };
 
-export default function AddPlaceField({ places, onAdd, onRemove, slotKey, scrollable = true }: AddPlaceFieldProps) {
+function AddPlaceField({ places, onAdd, onRemove, slotKey, scrollable = true }: AddPlaceFieldProps) {
   const { isDragging } = useDndContext();
   const [scrollLocked, setScrollLocked] = useState(false);
 
@@ -77,3 +77,5 @@ export default function AddPlaceField({ places, onAdd, onRemove, slotKey, scroll
     </ScrollView>
   );
 }
+
+export default memo(AddPlaceField);

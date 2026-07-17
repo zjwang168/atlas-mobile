@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { memo } from 'react';
 import { Image, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
@@ -15,7 +16,7 @@ type PlanCardProps = {
   onDeletePress?: () => void;
 };
 
-export default function PlanCard({ title, placeCount, imageUrl, create = false, deletionMode = false, onPress, onDeletePress }: PlanCardProps) {
+function PlanCard({ title, placeCount, imageUrl, create = false, deletionMode = false, onPress, onDeletePress }: PlanCardProps) {
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.75} style={{ flex: 1, gap: 10 }}>
       {/* Thumbnail wrapper — relative so the delete badge can be positioned over it */}
@@ -92,3 +93,5 @@ export default function PlanCard({ title, placeCount, imageUrl, create = false, 
     </TouchableOpacity>
   );
 }
+
+export default memo(PlanCard);

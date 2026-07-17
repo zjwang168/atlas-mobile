@@ -41,6 +41,7 @@ export default function AccountModal({ visible, onClose }: Props) {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isAnonymous, setIsAnonymous] = useState(true);
   const [mode, setMode] = useState<'upgrade' | 'signIn'>('upgrade');
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -131,14 +132,23 @@ export default function AccountModal({ visible, onClose }: Props) {
                 value={email}
                 onChangeText={setEmail}
               />
-              <TextInput
-                style={styles.input}
-                placeholder="Password (min 6 characters)"
-                placeholderTextColor="#9CA3AF"
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-              />
+              <View style={styles.passwordWrapper}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="Password (min 6 characters)"
+                  placeholderTextColor="#9CA3AF"
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword((v) => !v)}
+                  hitSlop={12}
+                  style={styles.showPasswordButton}
+                >
+                  <Text style={styles.showPasswordText}>{showPassword ? 'Hide' : 'Show'}</Text>
+                </TouchableOpacity>
+              </View>
               {error ? <Text style={styles.error}>{error}</Text> : null}
               {info ? <Text style={styles.info}>{info}</Text> : null}
               <TouchableOpacity style={styles.button} onPress={submit} disabled={busy}>
@@ -194,6 +204,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
+  passwordWrapper: { position: 'relative', justifyContent: 'center' },
+  passwordInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    paddingRight: 56,
+    fontSize: 15,
+    color: '#111827',
+  },
+  showPasswordButton: { position: 'absolute', right: 14 },
+  showPasswordText: { color: '#16A34A', fontSize: 13, fontWeight: '600' },
   error: { color: '#DC2626', fontSize: 13 },
   info: { color: '#16A34A', fontSize: 13 },
   button: {

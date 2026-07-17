@@ -21,8 +21,10 @@ type MyPlanProps = {
   bottomInset?: number;                  // safe-area + bottom-bar clearance for scroll padding
   /** Renders a condensed header only — used when the panel is in compact snap state */
   compact?: boolean;
-  /** Called when create-plan mode is entered or exited, so the parent can adjust panel height */
-  onCreateModeChange?: (active: boolean) => void;
+  /** ContentPanel's imperative snap function, threaded down from HomePanel — called
+      directly so the panel-height animation starts in the same tick as the content
+      cross-fade rather than behind a state/prop round trip */
+  snapTo?: (state: SnapState, animated?: boolean) => void;
 };
 ```
 
@@ -38,7 +40,9 @@ type MyPlanProps = {
 
 ### Create mode
 
-Activated when the user taps the "Create a plan" card. The grid is replaced by the `CreatePlan` wizard inline (no new screen push). `onCreateModeChange(true)` is emitted so `HomePanel` can expand the panel to `PANEL_HEIGHT.createPlan`.
+Activated when the user taps the "Create a plan" card. The grid and the `CreatePlan` wizard are both permanently mounted as overlapping absolute-positioned layers (mirroring `ContentPanel`'s own compact/default crossfade), each with its own opacity, so there's never an unmount/remount at the swap point. The transition is a strict timeline rather than a simultaneous crossfade: 160ms fade out → 60ms pause → content swap (+ `CreatePlan`'s `reset()` imperative handle, since it no longer remounts to pick up a fresh mount-effect reset) → 60ms pause → 160ms fade in.
+
+The panel-height change (`snapTo('full')` / `snapTo('default')`) is called directly and synchronously alongside the fade — not via a state prop into `ContentPanel` — so both animations start in the same tick instead of the height change lagging a render behind. They still run on independent timelines (fixed 160ms fade vs. `ContentPanel`'s spring, whose settle time depends on distance) and aren't synchronized to finish together.
 
 On `onPlanCreated`:
 1. The new plan is prepended to the grid via `usePlanDelete.addPlan()`.

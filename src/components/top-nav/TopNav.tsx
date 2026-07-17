@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LeftNav from './left-nav/LeftNav';
@@ -9,7 +10,7 @@ type TopNavProps = {
   onNavigatePress?: () => void;
 };
 
-export default function TopNav({ onSearchPress, onGlobePress, onNavigatePress }: TopNavProps) {
+function TopNav({ onSearchPress, onGlobePress, onNavigatePress }: TopNavProps) {
   const { top } = useSafeAreaInsets();
 
   return (
@@ -23,3 +24,5 @@ export default function TopNav({ onSearchPress, onGlobePress, onNavigatePress }:
     </View>
   );
 }
+
+export default memo(TopNav);

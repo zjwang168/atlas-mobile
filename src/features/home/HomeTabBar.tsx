@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Tabs } from 'react-native-screens';
@@ -9,7 +9,6 @@ const ICON_PLAN = require('../../../assets/tabs/tab-plan.png');
 const ICON_PLAN_FILL = require('../../../assets/tabs/tab-plan-fill.png');
 const ICON_ADD = require('../../../assets/tabs/tab-add.png');
 
-export const TAB_ATLAS_AI = 'atlasAI';
 export const TAB_PLACES = 'myPlaces';
 export const TAB_PLAN = 'travelPlan';
 export const TAB_ADD = 'add';
@@ -22,7 +21,7 @@ type HomeTabBarProps = {
   onAddPress: () => void;
 };
 
-export default function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeTabBarProps) {
+function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeTabBarProps) {
   const insets = useSafeAreaInsets();
   const [provenance, setProvenance] = useState(0);
 
@@ -52,17 +51,6 @@ export default function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeT
         nativeContainerStyle={{ backgroundColor: 'transparent' }}
         ios={{ tabBarMinimizeBehavior: 'onScrollDown', tabBarTintColor: '#12C170' }}
       >
-        <Tabs.Screen
-          screenKey={TAB_ATLAS_AI}
-          title="Atlas AI"
-          ios={{
-            icon: { type: 'sfSymbol', name: 'sparkles' },
-            selectedIcon: { type: 'sfSymbol', name: 'sparkles' },
-          }}
-        >
-          <View style={styles.screen} pointerEvents="none" />
-        </Tabs.Screen>
-
         <Tabs.Screen
           screenKey={TAB_PLACES}
           title="My Places"
@@ -97,6 +85,8 @@ export default function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeT
     </View>
   );
 }
+
+export default memo(HomeTabBar);
 
 const styles = StyleSheet.create({
   host: {

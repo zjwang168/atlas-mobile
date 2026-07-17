@@ -13,10 +13,10 @@ import {
 import Markdown from 'react-native-markdown-display';
 
 import { Text } from '@/components/ui/text';
-import ContentPanel from '../../components/content-panel/ContentPanel';
-import { chatWithAtlas, createChatSession, fetchConversation } from '../../services/api/apiService';
-import type { ParsedPlace } from '../../services/import/importService';
-import { typography } from '../../theme/typography';
+import ContentPanel from '@/components/content-panel/ContentPanel';
+import { chatWithAtlas, createChatSession, fetchConversation } from '@/services/api/apiService';
+import type { ParsedPlace } from '@/services/import/importService';
+import { typography } from '@/theme/typography';
 
 type Message = {
   id: string;
@@ -284,7 +284,7 @@ function extractPlaceActionCards(text: string): { text: string; cards: PlaceActi
   };
 }
 
-function normalizeBackendPlaceCards(cards: NonNullable<import('../../services/api/apiService').AtlasChatResponse['place_cards']>): PlaceActionCard[] {
+function normalizeBackendPlaceCards(cards: NonNullable<import('@/services/api/apiService').AtlasChatResponse['place_cards']>): PlaceActionCard[] {
   return cards
     .map((card) => ({
       status: card.status,

@@ -29,7 +29,6 @@ const MAX_CHAT_HISTORY = 50;
 export type Overlay =
   | { kind: 'none' }
   | { kind: 'search' }
-  | { kind: 'chatHistory' }
   | { kind: 'debug' }
   | { kind: 'placeDetail'; placeName: string }
   | { kind: 'planDetail'; planId: string }

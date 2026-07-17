@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/components/ui/text';
@@ -38,24 +38,28 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
   const insets = useSafeAreaInsets();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
 
-  function updatePlaces(updater: (prev: PlacesState) => PlacesState) {
+  // Stable callback identities so the memoized FlexiblePlaceField/DateRangeField
+  // below can actually skip re-rendering when the *other* slice of `places`
+  // changes (e.g. dragging into a dated slot no longer re-renders the
+  // Flexible section, since neither its `places` nor its callbacks changed).
+  const updatePlaces = useCallback((updater: (prev: PlacesState) => PlacesState) => {
     setPlaces((prev) => {
       const next = updater(prev);
       createPlanCache.places = next;
       return next;
     });
-  }
+  }, []);
 
-  function openForFree() {
+  const openForFree = useCallback(() => {
     setOverlay({
       kind: 'addPlaceToPlan',
       onSelect: (newPlaces) => {
         updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
       },
     });
-  }
+  }, [setOverlay, updatePlaces]);
 
-  function openForDate(date: string, timeSlot: TimeSlot) {
+  const openForDate = useCallback((date: string, timeSlot: TimeSlot) => {
     setOverlay({
       kind: 'addPlaceToPlan',
       onSelect: (newPlaces) => {
@@ -66,13 +70,13 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
         });
       },
     });
-  }
+  }, [setOverlay, updatePlaces]);
 
-  function handleRemoveFree(id: string) {
+  const handleRemoveFree = useCallback((id: string) => {
     updatePlaces((prev) => ({ ...prev, free: prev.free.filter((p) => p.id !== id) }));
-  }
+  }, [updatePlaces]);
 
-  function handleRemoveDated(date: string, id: string) {
+  const handleRemoveDated = useCallback((date: string, id: string) => {
     updatePlaces((prev) => ({
       ...prev,
       byDate: {
@@ -80,9 +84,9 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
         [date]: (prev.byDate[date] ?? []).filter((p) => p.id !== id),
       },
     }));
-  }
+  }, [updatePlaces]);
 
-  function handleDrop(from: SlotKey, to: SlotKey, place: PlannedPlace) {
+  const handleDrop = useCallback((from: SlotKey, to: SlotKey, place: PlannedPlace) => {
     updatePlaces((prev) => {
       let next = { ...prev };
 
@@ -116,12 +120,12 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
       return next;
     });
-  }
+  }, [updatePlaces]);
 
-  async function handleConfirm() {
+  const handleConfirm = useCallback(async () => {
     const plan = await savePlan({ location, range, places });
     onConfirm?.(plan);
-  }
+  }, [location, range, places, onConfirm]);
 
   const summary = formatRangeSummary(location, range);
 
