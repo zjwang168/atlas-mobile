@@ -6,6 +6,8 @@
 
 Rows are adapted from DB shape (`SavedPlace`) to `PlaceDetail` in `toPlaceDetail()`; fields we don't persist yet (schedule, visitStrategy, …) get sensible defaults.
 
+Each row is rendered by this directory's own `PlaceCard` (`PlaceCard.tsx`) — a memoized wrapper around the shared `PlaceCard` (`@/components/place-card/PlaceCard`, imported there as `BasePlaceCard`) plus a delete button and active-row highlight.
+
 ## Props
 
 ```ts
@@ -25,4 +27,4 @@ Read side: this component → `placeService.fetchSavedPlaces()` → Supabase `pl
 ## Related docs
 
 - [MY-PLACES.md](../MY-PLACES.md) — parent feature that renders this tab
-- [PLACE-CARD.md](../../../components/place-card/PLACE-CARD.md) — list row component used here
+- [PLACE-CARD.md](../../../components/place-card/PLACE-CARD.md) — shared card component this directory's `PlaceCard` wraps

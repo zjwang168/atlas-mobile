@@ -6,6 +6,8 @@
  */
 
 import { mockPlans } from '../../../../mock-data/mockPlans';
+import { LOCAL_CACHE_KEYS } from '../../../services/local/cacheKeys';
+import { getCached, getCurrentUserId, setCached } from '../../../services/local/localStore';
 import type { DateRange } from './CreatePlan';
 import type { PlacesState, PlannedPlace } from './plan-place/types';
 
@@ -36,10 +38,10 @@ export type SavedPlan = {
 };
 
 // ---------------------------------------------------------------------------
-// Mock store (replace with server state when ready)
+// Local store (replace with server state when ready)
 // ---------------------------------------------------------------------------
 
-const savedPlans = new Map<string, SavedPlan>();
+const seededPlans = new Map<string, SavedPlan>();
 
 function generateId(): string {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -57,13 +59,27 @@ function buildSchedule(byDate: PlacesState['byDate']): PlanDateSlot[] {
     .filter((day) => day.places.length > 0);
 }
 
+async function readPlans(): Promise<SavedPlan[]> {
+  const userId = await getCurrentUserId();
+  const cached = userId ? await getCached<SavedPlan[]>(userId, LOCAL_CACHE_KEYS.plans) : null;
+  const merged = new Map<string, SavedPlan>();
+  for (const plan of seededPlans.values()) merged.set(plan.id, plan);
+  for (const plan of cached ?? []) merged.set(plan.id, plan);
+  return [...merged.values()];
+}
+
+async function writePlans(plans: SavedPlan[]): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (!userId) return;
+  await setCached<SavedPlan[]>(userId, LOCAL_CACHE_KEYS.plans, plans);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /** Persist a new plan. Returns the saved plan with a generated id. */
 export async function savePlan(input: PlanInput): Promise<SavedPlan> {
-  // --- swap this block for fetch('/api/plans', { method: 'POST', body: JSON.stringify(input) }) ---
   const id = generateId();
   const plan: SavedPlan = {
     id,
@@ -75,23 +91,27 @@ export async function savePlan(input: PlanInput): Promise<SavedPlan> {
     schedule: buildSchedule(input.places.byDate),
   };
 
-  savedPlans.set(id, plan);
+  const plans = await readPlans();
+  await writePlans([plan, ...plans.filter((existing) => existing.id !== id)]);
 
   // Keep the card list in sync
   mockPlans.push({ id, title: plan.title, placeCount: plan.placeCount, imageUrl: plan.imageUrl });
 
   return plan;
-  // --- end mock block ---
 }
 
 /** Look up a saved plan by id. Returns undefined if not found. */
 export async function findSavedPlan(id: string): Promise<SavedPlan | undefined> {
-  // --- swap for fetch(`/api/plans/${id}`) ---
-  return savedPlans.get(id);
-  // --- end mock block ---
+  const plans = await readPlans();
+  return plans.find((plan) => plan.id === id);
+}
+
+/** List saved plans for local plan grids until the server-backed plans API is ready. */
+export async function listSavedPlans(): Promise<SavedPlan[]> {
+  return readPlans();
 }
 
 /** Directly seed a plan into the store (used by mock data initialisation). */
 export function seedPlan(plan: SavedPlan): void {
-  savedPlans.set(plan.id, plan);
+  seededPlans.set(plan.id, plan);
 }

@@ -36,6 +36,12 @@ export async function parseInput(input: string): Promise<ParseResult>
 
 `parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape.
 
+## Planned
+
+### `local/` — on-device cache + offline write queue
+
+Not yet implemented — see [PLAN.md](local/PLAN.md) for the full design (AsyncStorage-backed cache-then-revalidate wrapper around `placeService`/chat history, namespaced by user id, with an offline write queue flushed on reconnect).
+
 ## Stub Services (not yet implemented)
 
 These files are empty placeholders. Implement here when the feature is ready — **do not create new service files**:

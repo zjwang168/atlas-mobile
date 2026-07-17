@@ -1,8 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, AppState } from 'react-native';
 import type { ParsedPlace } from '../../services/import/importService';
+import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
+import { flushQueue } from '../../services/local/syncQueue';
 import type { SavedPlace } from '../../services/place/placeService';
-import { deletePlace, fetchSavedPlaces } from '../../services/place/placeService';
-import { loadChatHistory } from '../../services/supabase/supabaseClient';
+import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces } from '../../services/place/placeService';
+import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
 import type { PlannedPlace } from '../my-plan/create-plan/plan-place/types';
 
 // --- Chat History ---
@@ -147,6 +150,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   } | null>(null);
   const [activeSidekick, setActiveSidekick] = useState<'none' | 'aiChat' | 'places'>('none');
   const [userLocation] = useState<[number, number]>([-122.3321, 47.6062]);
+  const currentUserIdRef = useRef<string | null>(null);
 
   const refreshSavedPlaces = useCallback(async () => {
     try {
@@ -161,6 +165,65 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refreshSavedPlaces();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => subscribeSavedPlaces(setSavedPlaces), []);
+
+  useEffect(() => {
+    let mounted = true;
+    getCurrentUserId()
+      .then((userId) => {
+        if (mounted) currentUserIdRef.current = userId;
+      })
+      .catch((error) => console.warn('[HomeContext] failed to read current user:', error));
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      const nextUserId = session?.user.id ?? null;
+      const previousUserId = currentUserIdRef.current;
+      if (previousUserId === nextUserId) return;
+      currentUserIdRef.current = nextUserId;
+
+      if (previousUserId) {
+        flushQueue(previousUserId)
+          .then((result) => {
+            if (!result.success || result.remaining > 0) {
+              Alert.alert(
+                'Unsynced local changes discarded',
+                `${result.remaining} queued change${result.remaining === 1 ? '' : 's'} could not be synced before switching accounts.`,
+              );
+            }
+          })
+          .catch((error) => {
+            console.warn('[HomeContext] final queue flush failed:', error);
+            Alert.alert('Unsynced local changes discarded', 'Some queued local changes could not be synced before switching accounts.');
+          })
+          .finally(() => {
+            clearUserCache(previousUserId).catch((error) => console.warn('[HomeContext] clearUserCache failed:', error));
+          });
+      }
+
+      setSavedPlaces([]);
+      refreshSavedPlaces();
+    });
+
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
+  }, [refreshSavedPlaces]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      getCurrentUserId()
+        .then((userId) => {
+          if (!userId) return;
+          return flushQueue(userId).then(() => refreshSavedPlaces());
+        })
+        .catch((error) => console.warn('[HomeContext] foreground queue flush failed:', error));
+    });
+
+    return () => subscription.remove();
+  }, [refreshSavedPlaces]);
 
   useEffect(() => {
     let cancelled = false;

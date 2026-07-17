@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { fetchConversations, fetchMemories } from '@/services/api/apiService';
+import { getCurrentUserId } from '@/services/local/localStore';
+import { getLocalSyncDebug } from '@/services/local/syncQueue';
 import { typography } from '@/theme/typography';
 
 type DebugPanelProps = {
@@ -12,14 +14,16 @@ type DebugPanelProps = {
 export default function DebugPanel({ onClose }: DebugPanelProps) {
   const [memories, setMemories] = useState<any[]>([]);
   const [conversations, setConversations] = useState<any[]>([]);
+  const [localSync, setLocalSync] = useState<{ queue: any[]; deadLetters: any[] }>({ queue: [], deadLetters: [] });
   const [refreshing, setRefreshing] = useState(false);
 
   const load = async () => {
     setRefreshing(true);
     try {
-      const [mems, convs] = await Promise.all([fetchMemories(), fetchConversations()]);
+      const [mems, convs, userId] = await Promise.all([fetchMemories(), fetchConversations(), getCurrentUserId()]);
       setMemories(mems);
       setConversations(convs);
+      setLocalSync(userId ? await getLocalSyncDebug(userId) : { queue: [], deadLetters: [] });
     } finally {
       setRefreshing(false);
     }
@@ -42,10 +46,36 @@ export default function DebugPanel({ onClose }: DebugPanelProps) {
       </View>
 
       <FlatList
-        data={[{ key: 'memories' }, { key: 'conversations' }]}
+        data={[{ key: 'localSync' }, { key: 'memories' }, { key: 'conversations' }]}
         keyExtractor={(item) => item.key}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
         renderItem={({ item }) => {
+          if (item.key === 'localSync') {
+            return (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Local sync</Text>
+                <View style={styles.card}>
+                  <Text style={styles.cardKey}>Queue</Text>
+                  <Text style={styles.cardMeta}>{localSync.queue.length} pending writes</Text>
+                  {localSync.queue.slice(0, 5).map((write) => (
+                    <Text key={write.id} style={styles.cardValue} numberOfLines={3}>
+                      {write.kind} · attempts {write.attempts}
+                    </Text>
+                  ))}
+                </View>
+                <View style={styles.card}>
+                  <Text style={styles.cardKey}>Dead letters</Text>
+                  <Text style={styles.cardMeta}>{localSync.deadLetters.length} failed writes</Text>
+                  {localSync.deadLetters.slice(0, 5).map((write) => (
+                    <Text key={write.id} style={styles.cardValue} numberOfLines={3}>
+                      {write.kind} · {write.reason}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            );
+          }
+
           if (item.key === 'memories') {
             return (
               <View style={styles.section}>

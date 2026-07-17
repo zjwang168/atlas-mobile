@@ -1,4 +1,3 @@
-import PlaceCard from '@/components/place-card/PlaceCard';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
 import { fetchSavedPlaces, SavedPlace } from '@/services/place/placeService';
@@ -7,7 +6,8 @@ import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
 import { memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, View } from 'react-native';
+import { PlaceCard } from './PlaceCard';
 
 /** Rows rendered per page — keeps the FlatList light as saved places grow. */
 const PAGE_SIZE = 20;
@@ -50,7 +50,7 @@ function toPlaceDetail(row: SavedPlace): PlaceDetail {
     latitude: row.latitude,
     longitude: row.longitude,
     address: row.region ?? '',
-    thumbnailUrl: staticMapThumb(row.latitude, row.longitude),
+    thumbnailUrl: row.photo_url || staticMapThumb(row.latitude, row.longitude),
     schedule: [],
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
     summary: row.subtitle ?? '',
@@ -58,36 +58,6 @@ function toPlaceDetail(row: SavedPlace): PlaceDetail {
     savedAt: new Date(row.created_at).toLocaleDateString(),
   };
 }
-
-type PlaceRowProps = {
-  item: PlaceDetail;
-  isActive: boolean;
-  onPress?: (place: PlaceDetail) => void;
-  onDelete: (id: string) => void;
-};
-
-/** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
-    frames) don't force every visible PlaceCard to re-render — only rows
-    whose own props actually changed do. */
-const PlaceRow = memo(function PlaceRow({ item, isActive, onPress, onDelete }: PlaceRowProps) {
-  return (
-    <View style={[styles.row, { paddingHorizontal: 16 }, isActive && styles.rowActive]}>
-      <View style={{ flex: 1 }}>
-        <PlaceCard
-          name={item.name}
-          description={item.summary}
-          imageUrl={item.thumbnailUrl}
-          tags={item.tags}
-          date={item.savedAt}
-          onPress={() => onPress?.(item)}
-        />
-      </View>
-      <TouchableOpacity onPress={() => onDelete(item.id)} style={{ marginLeft: 8, padding: 8 }}>
-        <Ionicons name="trash-outline" size={20} color="#DC2626" />
-      </TouchableOpacity>
-    </View>
-  );
-});
 
 function ItemSeparator() {
   return (
@@ -102,7 +72,6 @@ function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, select
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const listRef = useRef<FlatList<PlaceDetail>>(null);
   const { deleteSavedPlace, selectedPlaceId: contextSelectedId, savedPlaces } = useHome();
-  // Use the prop if provided, otherwise fall back to context value
   const effectiveSelectedId = selectedPlaceId ?? contextSelectedId;
 
   const handleDelete = useCallback((id: string) => {
@@ -139,7 +108,7 @@ function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, select
 
   const renderItem = useCallback(
     ({ item }: { item: PlaceDetail }) => (
-      <PlaceRow
+      <PlaceCard
         item={item}
         isActive={effectiveSelectedId === item.id}
         onPress={onPlacePress}
@@ -151,16 +120,13 @@ function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, select
 
   const keyExtractor = useCallback((item: PlaceDetail) => item.id, []);
 
-  // Auto-scroll to the selected place when selectedPlaceId changes. If the
-  // place hasn't been paged into view yet, pull in enough pages first.
   useEffect(() => {
-    if (effectiveSelectedId && places.length > 0) {
-      const idx = places.findIndex((p) => p.id === effectiveSelectedId);
-      if (idx >= 0 && idx >= visibleCount) {
-        setVisibleCount(Math.min(places.length, idx + PAGE_SIZE));
-      }
+    if (!effectiveSelectedId || places.length === 0) return;
+    const idx = places.findIndex((p) => p.id === effectiveSelectedId);
+    if (idx >= 0 && idx >= visibleCount) {
+      setVisibleCount(Math.min(places.length, idx + PAGE_SIZE));
     }
-  }, [selectedPlaceId, places, visibleCount]);
+  }, [effectiveSelectedId, places, visibleCount]);
 
   useEffect(() => {
     if (!effectiveSelectedId) return;
@@ -168,7 +134,7 @@ function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, select
     if (idx >= 0) {
       listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
     }
-  }, [selectedPlaceId, visibleData]);
+  }, [effectiveSelectedId, visibleData]);
 
   if (loading) {
     return (
@@ -232,14 +198,3 @@ function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, select
 }
 
 export default memo(AllPlaces);
-
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  rowActive: {
-    backgroundColor: '#F2FBF6',
-    borderRadius: 18,
-  },
-});
