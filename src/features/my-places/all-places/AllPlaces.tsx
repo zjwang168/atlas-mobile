@@ -5,7 +5,7 @@ import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
-import { memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, View } from 'react-native';
 import { PlaceCard } from './PlaceCard';
 
@@ -15,9 +15,6 @@ const PAGE_SIZE = 20;
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
   bottomInset?: number;
-  /** Rendered at the very top of the scroll content (e.g. the segmented control)
-      so it scrolls away with the list instead of staying pinned. */
-  listHeader?: ReactNode;
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
   /** ID of the currently selected place (for highlighting & auto-scroll). */
@@ -65,7 +62,7 @@ function ItemSeparator() {
   );
 }
 
-function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, selectedPlaceId }: AllPlacesProps) {
+function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, selectedPlaceId }: AllPlacesProps) {
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -173,14 +170,11 @@ function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, select
       windowSize={7}
       removeClippedSubviews
       ListHeaderComponent={
-        <View>
-          {listHeader}
-          <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-            <Text className="text-text-secondary" style={typography.subheader}>
-              Recent pins
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color="#717171" />
-          </View>
+        <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
+          <Text className="text-text-secondary" style={typography.subheader}>
+            Recent pins
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color="#717171" />
         </View>
       }
       ListEmptyComponent={

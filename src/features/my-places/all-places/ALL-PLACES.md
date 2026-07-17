@@ -14,8 +14,8 @@ Each row is rendered by this directory's own `PlaceCard` (`PlaceCard.tsx`) — a
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
   bottomInset?: number;   // default: 0 — extra bottom padding for safe area
-  listHeader?: ReactNode; // rendered at the top of the scroll content (e.g. segmented control)
   onScroll?: (y: number) => void; // reports scroll offset so the panel can gate its drag gesture
+  selectedPlaceId?: string | null; // for highlighting & auto-scroll
 };
 ```
 

@@ -155,23 +155,23 @@ function MyPlaces({
     </View>
   );
 
-  // Title pinned at the top of the panel; the segment + list scroll below it.
+  // Title and segment are pinned above the tab body — kept in one stable tree
+  // position so the native SegmentedControl never unmounts/remounts when
+  // switching tabs (it used to live inside AllPlaces's FlatList header for one
+  // tab and as a plain sibling for the other, causing a remount + height jump).
   return (
     <View style={{ flex: 1 }}>
       {titleRow}
+      {segment}
       {activeTab === 'allPlaces' ? (
         <AllPlaces
-          listHeader={segment}
           onScroll={onScroll}
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
           selectedPlaceId={selectedPlaceId}
         />
       ) : (
-        <View style={{ flex: 1 }}>
-          {segment}
-          <Atlas />
-        </View>
+        <Atlas />
       )}
     </View>
   );
