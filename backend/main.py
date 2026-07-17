@@ -91,7 +91,7 @@ app.add_middleware(
 )
 
 
-# ---- Pydantic models ----
+# ----Pydantic 模型 ----
 
 
 class ParseRequest(BaseModel):
@@ -206,8 +206,7 @@ class ErrorResponse(BaseModel):
 # ---- Endpoints ----
 
 
-@app.post("/scrape_url", response_model=ParseResponse,
-          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+@app.post("/scrape_url", response_model=ParseResponse,responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def scrape_url(req: ScrapeUrlRequest):
     """Extract a URL with Gemini computer use, then parse the extracted text."""
     url = req.url.strip()
