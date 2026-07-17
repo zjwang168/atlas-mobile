@@ -69,6 +69,36 @@ function withStableKey(place: SavedPlace): SavedPlace {
   };
 }
 
+/**
+ * Looks up photos for freshly-saved rows and patches them into the local
+ * cache (and the remote row, if it's already synced) once found. Matched by
+ * stableKey rather than id, since the row's id may flip from a local-* id to
+ * its real Supabase id (via syncQueue reconciliation) while this is in flight.
+ */
+async function backfillPlacePhotos(userId: string, seedRows: SavedPlace[]): Promise<void> {
+  const targets = seedRows.filter((row) => !row.photo_url && row.stableKey);
+  if (targets.length === 0) return;
+
+  const photos = await fetchPhotosForPlaces(targets);
+  const photoByKey = new Map<string, string>();
+  targets.forEach((row, i) => {
+    const photo = photos[i];
+    if (photo && row.stableKey) photoByKey.set(row.stableKey, photo);
+  });
+  if (photoByKey.size === 0) return;
+
+  const updatedRows = await updateSavedPlacesCache(userId, (current) => current.map((row) => {
+    const photo = row.stableKey ? photoByKey.get(row.stableKey) : undefined;
+    return photo ? { ...row, photo_url: photo } : row;
+  }));
+
+  const remoteUpdates = updatedRows.filter((row) => row.stableKey && photoByKey.has(row.stableKey) && !row.id.startsWith('local-'));
+  await Promise.all(remoteUpdates.map(async (row) => {
+    const { error } = await supabase.from('places').update({ photo_url: row.photo_url }).eq('id', row.id);
+    if (error) console.warn('[placeService] photo backfill remote update failed:', error.message);
+  }));
+}
+
 async function setSavedPlacesCache(userId: string, places: SavedPlace[]): Promise<void> {
   const normalized = places.map(withStableKey);
   await setCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces, normalized);
@@ -174,19 +204,14 @@ export async function savePlaces(
       .filter((place): place is SavedPlace => Boolean(place));
   }
 
-  // Best-effort photo lookup (free Wikipedia layer). Bounded: ~2.5s per
-  // request, 4 in flight; misses are simply null and the UI falls back to
-  // the static map thumbnail. Fetched once here, cached forever in the row.
-  const photos = await fetchPhotosForPlaces(placesToInsert);
-
-  const rows = placesToInsert.map((p, i) => ({
+  const rows = placesToInsert.map((p) => ({
     name: truncate(p.name, 255) ?? 'Unknown place',
     subtitle: truncate(p.subtitle, 255),
     category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
     region: truncate(source?.region, 100),
-    photo_url: photos[i],
+    photo_url: null as string | null,
   }));
 
   const localRows: SavedPlace[] = rows.map((row) => withStableKey({
@@ -202,6 +227,15 @@ export async function savePlaces(
   }));
 
   await updateSavedPlacesCache(userId, (current) => [...localRows, ...current]);
+
+  // Fire-and-forget: the place is already visible via the cache update above;
+  // don't make the save wait on a third-party photo lookup. Backfills by
+  // stableKey so it still finds the row after its id is reconciled from
+  // local-* to a real one (or updates the remote row directly, if that
+  // already happened).
+  backfillPlacePhotos(userId, localRows).catch((error) => (
+    console.warn('[placeService] photo backfill failed:', error)
+  ));
 
   let data = null as SavedPlace[] | null;
   let error: { message?: string } | null = null;

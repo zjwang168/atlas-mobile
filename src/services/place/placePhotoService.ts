@@ -1,7 +1,8 @@
-import type { ParsedPlace } from '../import/importService';
-
 const PHOTO_TIMEOUT_MS = 2500;
 const MAX_CONCURRENT_REQUESTS = 4;
+
+/** Minimal shape needed to search for a photo — decoupled from any one place type. */
+export type PhotoQueryTarget = { name: string; subtitle?: string };
 
 type WikiSearchPage = {
   title?: string;
@@ -26,9 +27,12 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   });
 }
 
-async function fetchPhotoForPlace(place: ParsedPlace): Promise<string | null> {
-  const query = [place.name, place.subtitle].filter(Boolean).join(' ');
-  if (!query.trim()) return null;
+async function fetchPhotoForPlace(place: PhotoQueryTarget): Promise<string | null> {
+  // Name only: subtitle is often a full street address (see importService's
+  // formatSubtitle), and appending it makes Wikipedia's search return zero
+  // results instead of the place's own page.
+  const query = place.name.trim();
+  if (!query) return null;
 
   const params = new URLSearchParams({
     action: 'query',
@@ -52,7 +56,7 @@ async function fetchPhotoForPlace(place: ParsedPlace): Promise<string | null> {
   }
 }
 
-export async function fetchPhotosForPlaces(places: ParsedPlace[]): Promise<Array<string | null>> {
+export async function fetchPhotosForPlaces(places: PhotoQueryTarget[]): Promise<Array<string | null>> {
   const results: Array<string | null> = new Array(places.length).fill(null);
   let nextIndex = 0;
 
