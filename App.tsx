@@ -618,6 +618,15 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event: string, newSession: Session | null) => {
       setSession(newSession);
+      // Signed out (or session lost): immediately re-establish an anonymous
+      // identity so the app never runs without auth.uid() under RLS —
+      // otherwise upgrades ("Auth session missing") and all RLS-protected
+      // reads/writes fail until the next app restart.
+      if (!newSession) {
+        signInAnonymously()
+          .then((anon) => setSession(anon.session ?? null))
+          .catch((e) => console.warn('[AuthGate] re-anonymize failed:', e));
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
