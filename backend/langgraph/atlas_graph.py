@@ -74,7 +74,7 @@ def build_atlas_graph():
     ]:
         graph.add_edge(node, END)
 
-    return graph.compile(name="AtlasApp", checkpointer=MemorySaver())
+    return graph.compile(name="AtlasApp") 
 
 
 async def _dispatch(state: AtlasState) -> AtlasState:
