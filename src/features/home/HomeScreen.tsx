@@ -142,26 +142,29 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
     return Dimensions.get('window').height * 0.55;
   }, []);
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
+  // Any bottom panel that should push the map center up — the main pager panel
+  // or the PlaceDetail overlay — drives the same padding-tracking path.
+  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail';
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
   const bottomPanelHeightRef = useRef(contentPanelHeight);
   const mapRef = useRef<MapboxMapHandle>(null);
-  // Only recomputed when panel visibility toggles (a rare, discrete event) — this
-  // still goes through MapboxMap's prop-driven, animated camera path so hiding/
-  // showing the panel eases the map padding smoothly.
+  // Only recomputed when the active bottom panel toggles (a rare, discrete event) —
+  // this still goes through MapboxMap's prop-driven, animated camera path so
+  // hiding/showing the panel eases the map padding smoothly.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: panelVisible ? bottomPanelHeightRef.current : 0,
+    paddingBottom: bottomPanelActive ? bottomPanelHeightRef.current : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [panelVisible]);
+  }), [bottomPanelActive]);
   // Per-frame panel height updates — pushed straight to the map's camera via ref,
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
-    mapRef.current?.setPaddingBottom(panelVisible ? height : 0);
-  }, [panelVisible]);
+    mapRef.current?.setPaddingBottom(bottomPanelActive ? height : 0);
+  }, [bottomPanelActive]);
 
   const handleAddPress = useCallback(() => {
     onOpenImport?.();
@@ -191,9 +194,7 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
   // --- PlaceDetail back handler ---
   const handlePlaceDetailBack = useCallback(() => {
     setOverlay({ kind: 'none' });
-    setSelectedPlaceCoordinate(null);
-    setSelectedPlaceId(null);
-  }, [setOverlay, setSelectedPlaceCoordinate, setSelectedPlaceId]);
+  }, [setOverlay]);
 
   const handleMarkerPress = useCallback((marker: MapMarker) => {
     setSelectedPlaceId(marker.id);
@@ -332,14 +333,11 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
       )}
 
       <PlaceDetail
-        placeName={overlay.kind === 'placeDetail' ? overlay.placeName : null}
-        onDismiss={() => {
-          setOverlay({ kind: 'none' });
-          setSelectedPlaceCoordinate(null);
-          setSelectedPlaceId(null);
-        }}
+        placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
         onBack={handlePlaceDetailBack}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+        onHeightChange={handlePanelHeightChange}
       />
 
       <PlanDetail

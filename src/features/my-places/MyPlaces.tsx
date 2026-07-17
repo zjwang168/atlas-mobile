@@ -159,19 +159,26 @@ function MyPlaces({
   // position so the native SegmentedControl never unmounts/remounts when
   // switching tabs (it used to live inside AllPlaces's FlatList header for one
   // tab and as a plain sibling for the other, causing a remount + height jump).
+  //
+  // Both tab bodies stay mounted permanently (toggled via `display` rather than
+  // conditional rendering) so switching tabs never re-triggers AllPlaces's
+  // fetch/FlatList mount — that remount was showing up as a multi-second delay
+  // with no spinner (savedPlaces is already cached, so `loading` clears before
+  // the first frame paints; the delay was the remount itself, not a fetch).
   return (
     <View style={{ flex: 1 }}>
       {titleRow}
       {segment}
-      {activeTab === 'allPlaces' ? (
+      <View style={{ flex: 1, display: activeTab === 'allPlaces' ? 'flex' : 'none' }}>
         <AllPlaces
           onScroll={onScroll}
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
         />
-      ) : (
+      </View>
+      <View style={{ flex: 1, display: activeTab === 'atlas' ? 'flex' : 'none' }}>
         <Atlas />
-      )}
+      </View>
     </View>
   );
 }

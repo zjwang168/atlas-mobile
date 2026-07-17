@@ -20,8 +20,7 @@ src/features/place-detail/
 Related files outside this directory:
 ```
 src/types/place.ts                         ← canonical types: Place, PlaceDetail, DaySchedule, PlaceTag, PlaceLink
-mock-data/mockPlaces.ts                    ← Place[] used for map markers
-mock-data/mockPlaceDetails.ts              ← PlaceDetail[] + findPlaceDetail(name) + findPlaceDetailById(id)
+src/services/place/placeService.ts         ← toPlaceDetail(row) adapts a saved-place DB row to PlaceDetail
 ```
 
 ## Data Model
@@ -72,20 +71,26 @@ PlaceDetail (ContentPanel)
     ├── PlaceHeader            ← name + dismiss button
     └── ScrollView
         ├── PlaceOverviewSection   ← thumbnail, address, open status, action row
-        └── PlaceInfoSection       ← tags, collections, summary, visit strategy, links, note
+        └── PlaceInfoSection       ← tags, summary, collections, visit strategy, links, note
 ```
+
+## Behaviour
+
+In `PlaceInfoSection`, **Tags** and **Note** always render their section header regardless of content; every other section (Summary, Collection, Visit Strategy, Links) is hidden entirely when it has no content to show.
 
 ## Props
 
 ```ts
 type PlaceDetailProps = {
-  placeName: string | null;      // null = hidden; non-null = slide up and show
+  placeId: string | null;        // null = hidden; non-null = slide up and show
   onDismiss: () => void;
+  onBack?: () => void;           // when provided, shows a back button instead of leaving the corner empty
   onEdit: (place: PlaceDetail) => void;
+  onHeightChange?: (height: number) => void;  // reports live panel height so the caller can pad the map to match, same as HomePanel
 };
 ```
 
-Changing `placeName` from `null → string` triggers the enter animation and `findPlaceDetail` lookup. Changing back to `null` triggers the dismiss animation.
+Changing `placeId` from `null → string` triggers the enter animation and looks the place up in `HomeContext.savedPlaces` (converted via `toPlaceDetail`). If no saved place matches the id, a "Place not found" state is shown instead. Changing back to `null` triggers the dismiss animation.
 
 ## Hours Utility (`utils/placeHours.ts`)
 

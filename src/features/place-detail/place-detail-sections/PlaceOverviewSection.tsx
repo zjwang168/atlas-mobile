@@ -35,10 +35,15 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
           </View>
         </View>
 
-        <Image
-          className="h-28 w-28 rounded-xl bg-muted"
-          source={require('../../../../mock-data/image-placeholder/image-placeholder.jpg')}
-        />
+        <View className="h-28 w-28 overflow-hidden rounded-xl bg-muted">
+          {place.thumbnailUrl ? (
+            <Image
+              source={{ uri: place.thumbnailUrl }}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="cover"
+            />
+          ) : null}
+        </View>
       </View>
     </View>
   );

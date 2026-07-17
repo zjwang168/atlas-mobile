@@ -1,10 +1,9 @@
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
-import { fetchSavedPlaces, SavedPlace } from '@/services/place/placeService';
+import { fetchSavedPlaces, toPlaceDetail } from '@/services/place/placeService';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Constants from 'expo-constants';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, View } from 'react-native';
 import { PlaceCard } from './PlaceCard';
@@ -18,41 +17,6 @@ type AllPlacesProps = {
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
 };
-
-const MAPBOX_TOKEN: string =
-  (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
-  (process.env.MAPBOX_ACCESS_TOKEN as string) ||
-  '';
-
-/** Static map thumbnail centered on the place (Mapbox Static Images API).
-    Note: Mapbox expects LONGITUDE first. */
-function staticMapThumb(lat: number, lng: number): string {
-  if (!MAPBOX_TOKEN) return '';
-  return (
-    `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-    `pin-s+3b82f6(${lng},${lat})/${lng},${lat},14,0/200x200@2x` +
-    `?access_token=${MAPBOX_TOKEN}`
-  );
-}
-
-/** Adapt a DB row to the PlaceDetail shape the detail screens expect.
-    Fields we don't persist yet get sensible defaults. */
-function toPlaceDetail(row: SavedPlace): PlaceDetail {
-  return {
-    id: row.id,
-    name: row.name,
-    subtitle: row.subtitle ?? '',
-    latitude: row.latitude,
-    longitude: row.longitude,
-    address: row.region ?? '',
-    thumbnailUrl: row.photo_url || staticMapThumb(row.latitude, row.longitude),
-    schedule: [],
-    tags: row.category ? [{ id: row.category, label: row.category }] : [],
-    summary: row.subtitle ?? '',
-    visitStrategy: '',
-    savedAt: new Date(row.created_at).toLocaleDateString(),
-  };
-}
 
 function ItemSeparator() {
   return (
@@ -159,7 +123,7 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll }: AllPlacesProps) 
       }
       ItemSeparatorComponent={ItemSeparator}
       renderItem={renderItem}
-      showsVerticalScrollIndicator={false}
+      showsVerticalScrollIndicator
     />
   );
 }

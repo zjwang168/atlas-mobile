@@ -38,7 +38,7 @@ type MyPlacesProps = {
 
 ### Status
 
-**Full mode** (default): renders the header row (title + share button + avatar), a segmented control to switch sub-tabs, and the active sub-tab content. The segmented control is rendered once in a stable tree position above the sub-tab body (not re-parented per tab) so the native control doesn't unmount/remount when switching tabs — it stays pinned rather than scrolling away with the All Places list.
+**Full mode** (default): renders the header row (title + share button + avatar), a segmented control to switch sub-tabs, and both sub-tab bodies. The segmented control is rendered once in a stable tree position above the sub-tab body (not re-parented per tab) so the native control doesn't unmount/remount when switching tabs — it stays pinned rather than scrolling away with the All Places list. `AllPlaces` and `Atlas` are both always mounted and toggled via `display: 'none'` rather than conditional rendering, so switching tabs doesn't re-trigger `AllPlaces`'s fetch and full `FlatList`/row remount.
 
 **Compact mode** (`compact={true}`): renders only the title and action buttons. Used by `ContentPanel`'s compact snap content in `HomePanel`.
 

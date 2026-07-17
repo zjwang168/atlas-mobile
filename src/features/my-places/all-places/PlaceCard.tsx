@@ -53,7 +53,8 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
   };
 
   const handleOpenDetail = () => {
-    setOverlay({ kind: 'placeDetail', placeName: item.name });
+    onPress?.(item);
+    setOverlay({ kind: 'placeDetail', placeId: item.id });
   };
 
   return (

@@ -9,30 +9,33 @@ import {
   View,
 } from 'react-native';
 
-import { findPlaceDetail } from '../../../mock-data/mockPlaceDetails';
+import { useHome } from '../home/HomeContext';
+import { toPlaceDetail } from '../../services/place/placeService';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
 import PlaceInfoSection from './place-detail-sections/PlaceInfoSection';
 import PlaceOverviewSection from './place-detail-sections/PlaceOverviewSection';
 
 type PlaceDetailProps = {
-  placeName: string | null;
+  placeId: string | null;
   onDismiss: () => void;
   onBack?: () => void;
   onEdit: (place: PlaceDetailType) => void;
+  onHeightChange?: (height: number) => void;
 };
 
-export default function PlaceDetail({ placeName, onDismiss, onBack, onEdit: _onEdit }: PlaceDetailProps) {
+export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdit, onHeightChange }: PlaceDetailProps) {
+  const { savedPlaces } = useHome();
   const [place, setPlace] = useState<PlaceDetailType | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    if (placeName) {
+    if (placeId) {
       setNotFound(false);
-      const next = findPlaceDetail(placeName);
-      if (next) {
-        setPlace(next);
+      const row = savedPlaces.find((p) => p.id === placeId);
+      if (row) {
+        setPlace(toPlaceDetail(row));
       } else {
         setPlace(null);
         setNotFound(true);
@@ -42,7 +45,7 @@ export default function PlaceDetail({ placeName, onDismiss, onBack, onEdit: _onE
       setNotFound(false);
       setIsVisible(false);
     }
-  }, [placeName]);
+  }, [placeId, savedPlaces]);
 
   return (
     <ContentPanel
@@ -50,6 +53,7 @@ export default function PlaceDetail({ placeName, onDismiss, onBack, onEdit: _onE
       visible={isVisible}
       onHidden={() => setPlace(null)}
       zIndex={40}
+      onHeightChange={onHeightChange}
       compactContent={({ snapTo }) =>
         place ? (
           <PlaceCompactView
@@ -70,7 +74,7 @@ export default function PlaceDetail({ placeName, onDismiss, onBack, onEdit: _onE
                   Place not found
                 </Text>
                 <Text className="mt-2 text-center text-sm text-text-tertiary">
-                  We couldn't find details for "{placeName}". It may have been removed or the link may be outdated.
+                  We couldn't find details for this place. It may have been removed.
                 </Text>
                 <Button
                   className="mt-6"

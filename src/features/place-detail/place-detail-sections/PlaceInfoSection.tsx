@@ -74,45 +74,56 @@ function LinkRow({ link }: { link: PlaceLink }) {
 }
 
 export default function PlaceInfoSection({ place }: PlaceInfoSectionProps) {
+  const hasSummary = place.summary.trim().length > 0;
+  const hasVisitStrategy = place.visitStrategy.trim().length > 0;
+  const hasCollections = (place.collections?.length ?? 0) > 0;
+  const hasLinks = (place.links?.length ?? 0) > 0;
+
   return (
     <View className="gap-6 px-4 pt-6">
-      {place.tags.length > 0 && (
-        <View className="pt-2">
-          <SectionHeader label="Tags" action={{ icon: 'add', iconSize: 20 }} />
+      {/* Tags and Note always render their section, regardless of content —
+          every other section below is hidden entirely when it has nothing to show. */}
+      <View className="pt-2">
+        <SectionHeader label="Tags" action={{ icon: 'add', iconSize: 20 }} />
+        {place.tags.length > 0 && (
           <View className="mt-2">
             <TagList tags={place.tags} />
-          </View>
-        </View>
-      )}
-
-      <View className="pt-2">
-        <SectionHeader label="Collection" action={{ icon: 'add', iconSize: 20 }} />
-        {place.collections && place.collections.length > 0 && (
-          <View className="mt-2">
-            <TagList tags={place.collections} />
           </View>
         )}
       </View>
 
-      <View className="pt-2">
-        <SectionHeader label="Summary" />
-        <View className="mt-2">
-          <Paragraphs text={place.summary} />
+      {hasSummary && (
+        <View className="pt-2">
+          <SectionHeader label="Summary" />
+          <View className="mt-2">
+            <Paragraphs text={place.summary} />
+          </View>
         </View>
-      </View>
+      )}
 
-      <View className="pt-2">
-        <SectionHeader label="Visit Strategy" />
-        <View className="mt-2">
-          <Paragraphs text={place.visitStrategy} />
+      {hasCollections && (
+        <View className="pt-2">
+          <SectionHeader label="Collection" action={{ icon: 'add', iconSize: 20 }} />
+          <View className="mt-2">
+            <TagList tags={place.collections!} />
+          </View>
         </View>
-      </View>
+      )}
 
-      {place.links && place.links.length > 0 && (
+      {hasVisitStrategy && (
+        <View className="pt-2">
+          <SectionHeader label="Visit Strategy" />
+          <View className="mt-2">
+            <Paragraphs text={place.visitStrategy} />
+          </View>
+        </View>
+      )}
+
+      {hasLinks && (
         <View className="pt-2">
           <SectionHeader label="Links" action={{ icon: 'add', iconSize: 20 }} />
           <View className="mt-2 gap-1">
-            {place.links.map((link) => (
+            {place.links!.map((link) => (
               <LinkRow key={`${link.label}-${link.url}`} link={link} />
             ))}
           </View>

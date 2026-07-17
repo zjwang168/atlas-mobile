@@ -70,7 +70,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(result.places.map((p) => [p.id, !isPlaceAlreadySaved(p)]))
   );
-  const [detailName, setDetailName] = useState<string | null>(null);
+  const [detailPlaceId, setDetailPlaceId] = useState<string | null>(null);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(result.places[0]?.id ?? null);
 
   const selectedIds = useMemo(
@@ -341,7 +341,7 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
       </View>
 
       {/* Teammate's place detail — opened by tapping a row. */}
-      <PlaceDetail placeName={detailName} onDismiss={() => setDetailName(null)} onEdit={() => {}} />
+      <PlaceDetail placeId={detailPlaceId} onDismiss={() => setDetailPlaceId(null)} onEdit={() => {}} />
     </View>
   );
 }

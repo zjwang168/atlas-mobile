@@ -10,6 +10,8 @@
  * session and tighten RLS to `created_by = auth.uid()`.
  */
 
+import Constants from 'expo-constants';
+import type { PlaceDetail } from '@/types/place';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
 import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
@@ -318,6 +320,41 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   }
 
   return fetchFresh();
+}
+
+const MAPBOX_TOKEN: string =
+  (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
+  (process.env.MAPBOX_ACCESS_TOKEN as string) ||
+  '';
+
+/** Static map thumbnail centered on the place (Mapbox Static Images API).
+    Note: Mapbox expects LONGITUDE first. */
+function staticMapThumb(lat: number, lng: number): string {
+  if (!MAPBOX_TOKEN) return '';
+  return (
+    `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
+    `pin-s+3b82f6(${lng},${lat})/${lng},${lat},14,0/200x200@2x` +
+    `?access_token=${MAPBOX_TOKEN}`
+  );
+}
+
+/** Adapt a DB row to the PlaceDetail shape the detail screens expect.
+    Fields we don't persist yet get sensible defaults. */
+export function toPlaceDetail(row: SavedPlace): PlaceDetail {
+  return {
+    id: row.id,
+    name: row.name,
+    subtitle: row.subtitle ?? '',
+    latitude: row.latitude,
+    longitude: row.longitude,
+    address: row.region ?? '',
+    thumbnailUrl: row.photo_url || staticMapThumb(row.latitude, row.longitude),
+    schedule: [],
+    tags: row.category ? [{ id: row.category, label: row.category }] : [],
+    summary: row.subtitle ?? '',
+    visitStrategy: '',
+    savedAt: new Date(row.created_at).toLocaleDateString(),
+  };
 }
 
 /**
