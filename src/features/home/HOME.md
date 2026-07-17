@@ -38,6 +38,7 @@ function useHome(): {
   savedPlaces: SavedPlace[]; setSavedPlaces: (p: SavedPlace[]) => void;     // places persisted to Supabase
   refreshSavedPlaces: () => Promise<void>;                          // re-fetches savedPlaces
   deleteSavedPlace: (id: string) => Promise<void>;                  // deletes a saved place
+  updateSavedPlaceNote: (id: string, note: string) => Promise<void>; // updates a saved place's note; local cache first, syncs to Supabase
   chatHistory: ChatHistoryItem[]; setChatHistory: (i: ChatHistoryItem[]) => void;  // cached past import/chat sessions (max 50)
   deletedChatHistory: ChatHistoryItem[];                            // soft-deleted items
   activeHistoryItem: ChatHistoryItem | null; setActiveHistoryItem: (i: ChatHistoryItem | null) => void;  // session shown by AIChatBox
@@ -46,7 +47,7 @@ function useHome(): {
   deleteChatHistoryItem: (id: string) => void;                      // soft delete
   restoreChatHistoryItem: (id: string) => void;                     // undo soft delete
   selectedPlaceCoordinate: [number, number] | null; setSelectedPlaceCoordinate: (c) => void;  // centers the map when set
-  selectedPlaceId: string | null; setSelectedPlaceId: (id) => void;  // highlights a marker / list row
+  selectedPlaceId: string | null; setSelectedPlaceId: (id) => void;  // highlights the map marker; set on every place-row tap (not a toggle) — My Places rows have no selected-state styling, but the chat-history places panel highlights its own row
   importNotification: { visible: boolean; title: string; places: ParsedPlace[] } | null;
   setImportNotification: (n) => void;                               // import completion toast payload
   activeSidekick: 'none' | 'aiChat' | 'places'; setActiveSidekick: (s) => void;  // 'aiChat' shows AIChatBox
@@ -57,7 +58,7 @@ type Overlay =
   | { kind: 'none' }
   | { kind: 'search' }
   | { kind: 'debug' }
-  | { kind: 'placeDetail'; placeName: string }
+  | { kind: 'placeDetail'; placeId: string }
   | { kind: 'planDetail'; planId: string }
   | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void }
   | { kind: 'createPlan' };

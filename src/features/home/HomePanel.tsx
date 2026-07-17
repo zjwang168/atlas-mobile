@@ -28,18 +28,12 @@ function HomePanel({
   maxHeight,
   onHeightChange,
 }: HomePanelProps) {
-  const {
-    selectedPlaceId,
-    setSelectedPlaceCoordinate,
-    setSelectedPlaceId,
-  } = useHome();
+  const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
   const [accountOpen, setAccountOpen] = useState(false);
   const handlePlacePress = useCallback((place: Place) => {
-    const nextCoordinate: [number, number] | null =
-      selectedPlaceId === place.id ? null : [place.longitude, place.latitude];
-    setSelectedPlaceCoordinate(nextCoordinate);
-    setSelectedPlaceId(selectedPlaceId === place.id ? null : place.id);
-  }, [selectedPlaceId, setSelectedPlaceCoordinate, setSelectedPlaceId]);
+    setSelectedPlaceCoordinate([place.longitude, place.latitude]);
+    setSelectedPlaceId(place.id);
+  }, [setSelectedPlaceCoordinate, setSelectedPlaceId]);
 
   return (
     <>

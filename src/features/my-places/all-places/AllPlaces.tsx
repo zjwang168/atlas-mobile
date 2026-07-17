@@ -1,69 +1,35 @@
-import PlaceCard from '@/components/place-card/PlaceCard';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
-import { fetchSavedPlaces, SavedPlace } from '@/services/place/placeService';
+import { fetchSavedPlaces, toPlaceDetail } from '@/services/place/placeService';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Constants from 'expo-constants';
-import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, View } from 'react-native';
+import { PlaceCard } from './PlaceCard';
+
+/** Rows rendered per page — keeps the FlatList light as saved places grow. */
+const PAGE_SIZE = 20;
 
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
   bottomInset?: number;
-  /** Rendered at the very top of the scroll content (e.g. the segmented control)
-      so it scrolls away with the list instead of staying pinned. */
-  listHeader?: ReactNode;
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
-  /** ID of the currently selected place (for highlighting & auto-scroll). */
-  selectedPlaceId?: string | null;
 };
 
-const MAPBOX_TOKEN: string =
-  (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
-  (process.env.MAPBOX_ACCESS_TOKEN as string) ||
-  '';
-
-/** Static map thumbnail centered on the place (Mapbox Static Images API).
-    Note: Mapbox expects LONGITUDE first. */
-function staticMapThumb(lat: number, lng: number): string {
-  if (!MAPBOX_TOKEN) return '';
+function ItemSeparator() {
   return (
-    `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-    `pin-s+3b82f6(${lng},${lat})/${lng},${lat},14,0/200x200@2x` +
-    `?access_token=${MAPBOX_TOKEN}`
+    <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
   );
 }
 
-/** Adapt a DB row to the PlaceDetail shape the detail screens expect.
-    Fields we don't persist yet get sensible defaults. */
-function toPlaceDetail(row: SavedPlace): PlaceDetail {
-  return {
-    id: row.id,
-    name: row.name,
-    subtitle: row.subtitle ?? '',
-    latitude: row.latitude,
-    longitude: row.longitude,
-    address: row.region ?? '',
-    thumbnailUrl: row.photo_url || staticMapThumb(row.latitude, row.longitude),
-    schedule: [],
-    tags: row.category ? [{ id: row.category, label: row.category }] : [],
-    summary: row.subtitle ?? '',
-    visitStrategy: '',
-    savedAt: new Date(row.created_at).toLocaleDateString(),
-  };
-}
-
-export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, onScroll, selectedPlaceId }: AllPlacesProps) {
+function AllPlaces({ onPlacePress, bottomInset = 0, onScroll }: AllPlacesProps) {
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const listRef = useRef<FlatList<PlaceDetail>>(null);
-  const { deleteSavedPlace, selectedPlaceId: contextSelectedId, savedPlaces } = useHome();
-  // Use the prop if provided, otherwise fall back to context value
-  const effectiveSelectedId = selectedPlaceId ?? contextSelectedId;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const { deleteSavedPlace, savedPlaces } = useHome();
 
   const handleDelete = useCallback((id: string) => {
     deleteSavedPlace(id);
@@ -91,15 +57,20 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
     setLoading(false);
   }, [savedPlaces]);
 
-  // Auto-scroll to the selected place when selectedPlaceId changes
-  useEffect(() => {
-    if (effectiveSelectedId && places.length > 0) {
-      const idx = places.findIndex((p) => p.id === effectiveSelectedId);
-      if (idx >= 0) {
-        listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-      }
-    }
-  }, [selectedPlaceId, places]);
+  const visibleData = useMemo(() => places.slice(0, visibleCount), [places, visibleCount]);
+
+  const handleEndReached = useCallback(() => {
+    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, places.length));
+  }, [places.length]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: PlaceDetail }) => (
+      <PlaceCard item={item} onPress={onPlacePress} onDelete={handleDelete} />
+    ),
+    [onPlacePress, handleDelete],
+  );
+
+  const keyExtractor = useCallback((item: PlaceDetail) => item.id, []);
 
   if (loading) {
     return (
@@ -111,9 +82,8 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
 
   return (
     <FlatList
-      ref={listRef}
-      data={places}
-      keyExtractor={(item) => item.id}
+      data={visibleData}
+      keyExtractor={keyExtractor}
       style={{ flex: 1 }}
       contentContainerStyle={{ paddingBottom: bottomInset + 20 }}
       onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
@@ -121,17 +91,27 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
       refreshing={refreshing}
       onRefresh={() => {
         setRefreshing(true);
+        setVisibleCount(PAGE_SIZE);
         load();
       }}
-      ListHeaderComponent={
-        <View>
-          {listHeader}
-          <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-            <Text className="text-text-secondary" style={typography.subheader}>
-              Recent pins
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color="#717171" />
+      onEndReached={handleEndReached}
+      onEndReachedThreshold={0.5}
+      ListFooterComponent={
+        visibleData.length < places.length ? (
+          <View style={{ paddingVertical: 16 }}>
+            <ActivityIndicator />
           </View>
+        ) : null
+      }
+      initialNumToRender={PAGE_SIZE}
+      maxToRenderPerBatch={PAGE_SIZE}
+      windowSize={7}
+      ListHeaderComponent={
+        <View style={{ paddingHorizontal: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
+          <Text className="text-text-secondary" style={typography.subheader}>
+            Recent pins
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color="#717171" />
         </View>
       }
       ListEmptyComponent={
@@ -141,44 +121,11 @@ export default function AllPlaces({ onPlacePress, bottomInset = 0, listHeader, o
           </Text>
         </View>
       }
-      ItemSeparatorComponent={() => (
-        <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
-      )}
-      renderItem={({ item }) => {
-        const isActive = effectiveSelectedId === item.id;
-        return (
-          <View style={[styles.row, { paddingHorizontal: 16 }, isActive && styles.rowActive]}>
-            <View style={{ flex: 1 }}>
-              <PlaceCard
-                name={item.name}
-                description={item.summary}
-                imageUrl={item.thumbnailUrl}
-                tags={item.tags}
-                date={item.savedAt}
-                onPress={() => onPlacePress?.(item)}
-              />
-            </View>
-            <TouchableOpacity
-              onPress={() => handleDelete(item.id)}
-              style={{ marginLeft: 8, padding: 8 }}
-            >
-              <Ionicons name="trash-outline" size={20} color="#DC2626" />
-            </TouchableOpacity>
-          </View>
-        );
-      }}
-      showsVerticalScrollIndicator={false}
+      ItemSeparatorComponent={ItemSeparator}
+      renderItem={renderItem}
+      showsVerticalScrollIndicator
     />
   );
 }
 
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  rowActive: {
-    backgroundColor: '#F2FBF6',
-    borderRadius: 18,
-  },
-});
+export default memo(AllPlaces);

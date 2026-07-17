@@ -10,7 +10,7 @@ import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import { useHome } from '../home/HomeContext';
 import CreatePlan, { CreatePlanHandle } from './create-plan/CreatePlan';
-import type { SavedPlan } from './create-plan/savePlan';
+import { listSavedPlans, type SavedPlan } from './create-plan/savePlan';
 
 type PlanGridItem = {
   id: string;
@@ -129,12 +129,26 @@ function MyPlan({
   // 从 Supabase 加载真实计划数据，取代 mockPlans
   useEffect(() => {
     let cancelled = false;
-    fetchPlansFromSupabase().then((loaded) => {
+    Promise.all([fetchPlansFromSupabase(), listSavedPlans()]).then(([loaded, localPlans]) => {
       if (cancelled) return;
-      setDbPlans(loaded);
+      const merged = new Map<string, PlanGridItem>();
+      for (const plan of localPlans) {
+        merged.set(plan.id, {
+          id: plan.id,
+          title: plan.title,
+          placeCount: plan.placeCount,
+          imageUrl: plan.imageUrl,
+        });
+      }
+      for (const plan of loaded) merged.set(plan.id, plan);
+      setDbPlans([...merged.values()]);
       setLoadingPlans(false);
       // 将 Supabase 计划同步到 usePlanDelete（清空 mock 数据后逐个添加）
       // usePlanDelete 内部使用 mockPlans，这里我们用自己的 dbPlans 展示
+    }).catch((error) => {
+      if (cancelled) return;
+      console.warn('[MyPlan] Failed to load local plans:', error);
+      setLoadingPlans(false);
     });
     return () => { cancelled = true; };
   }, []);

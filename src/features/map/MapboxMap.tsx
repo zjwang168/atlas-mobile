@@ -105,7 +105,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     cameraRef.current?.setCamera({
       centerCoordinate,
       zoomLevel,
-      animationDuration: 500,
+      animationDuration: 2000,
       padding,
     });
   }, [centerCoordinate, zoomLevel, padding]);

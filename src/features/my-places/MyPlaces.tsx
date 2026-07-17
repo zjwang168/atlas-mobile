@@ -36,7 +36,7 @@ function MyPlaces({
   compact = false,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
-  const { refreshSavedPlaces, selectedPlaceId } = useHome();
+  const { refreshSavedPlaces } = useHome();
 
   // Native iOS UISegmentedControl (via @expo/ui). Rendered inside the scroll
   // content so it scrolls away rather than staying pinned.
@@ -155,24 +155,30 @@ function MyPlaces({
     </View>
   );
 
-  // Title pinned at the top of the panel; the segment + list scroll below it.
+  // Title and segment are pinned above the tab body — kept in one stable tree
+  // position so the native SegmentedControl never unmounts/remounts when
+  // switching tabs (it used to live inside AllPlaces's FlatList header for one
+  // tab and as a plain sibling for the other, causing a remount + height jump).
+  //
+  // Both tab bodies stay mounted permanently (toggled via `display` rather than
+  // conditional rendering) so switching tabs never re-triggers AllPlaces's
+  // fetch/FlatList mount — that remount was showing up as a multi-second delay
+  // with no spinner (savedPlaces is already cached, so `loading` clears before
+  // the first frame paints; the delay was the remount itself, not a fetch).
   return (
     <View style={{ flex: 1 }}>
       {titleRow}
-      {activeTab === 'allPlaces' ? (
+      {segment}
+      <View style={{ flex: 1, display: activeTab === 'allPlaces' ? 'flex' : 'none' }}>
         <AllPlaces
-          listHeader={segment}
           onScroll={onScroll}
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
-          selectedPlaceId={selectedPlaceId}
         />
-      ) : (
-        <View style={{ flex: 1 }}>
-          {segment}
-          <Atlas />
-        </View>
-      )}
+      </View>
+      <View style={{ flex: 1, display: activeTab === 'atlas' ? 'flex' : 'none' }}>
+        <Atlas />
+      </View>
     </View>
   );
 }

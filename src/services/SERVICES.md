@@ -36,6 +36,25 @@ export async function parseInput(input: string): Promise<ParseResult>
 
 `parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape.
 
+### `place/placeService.ts`
+
+CRUD for the user's saved places, backed by Supabase and an offline-first local cache (see `local/`).
+
+```ts
+export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>
+export async function fetchSavedPlaces(): Promise<SavedPlace[]>
+export async function deletePlace(id: string): Promise<void>
+export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline
+export function toPlaceDetail(row: SavedPlace): PlaceDetail
+export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
+```
+
+## Planned
+
+### `local/` — on-device cache + offline write queue
+
+Not yet implemented — see [PLAN.md](local/PLAN.md) for the full design (AsyncStorage-backed cache-then-revalidate wrapper around `placeService`/chat history, namespaced by user id, with an offline write queue flushed on reconnect).
+
 ## Stub Services (not yet implemented)
 
 These files are empty placeholders. Implement here when the feature is ready — **do not create new service files**:
@@ -43,9 +62,6 @@ These files are empty placeholders. Implement here when the feature is ready —
 | File | Intended purpose |
 |---|---|
 | `ai/aiService.ts` | Claude / DeepSeek AI client for in-app AI features |
-| `import/importService.ts` | Import pipeline: parse pasted text / URLs / scans into places |
-| `place/placeService.ts` | CRUD for user's saved places (Supabase) |
-| `supabase/supabaseClient.ts` | Supabase JS client singleton |
 
 ## Constants
 

@@ -1,68 +1,70 @@
-/**
- * Free place-photo lookup via Wikipedia page images.
- *
- * Layer 2 of the photo strategy (post og:image → Wikipedia → Places API):
- * zero keys, zero cost, strong hit rate for landmarks. Fetched once at save
- * time and cached forever in places.photo_url — never re-fetched.
- */
+import type { ParsedPlace } from '../import/importService';
 
-const WIKI_API = 'https://en.wikipedia.org/w/api.php';
-const REQUEST_TIMEOUT_MS = 2500;
-const CONCURRENCY = 4;
-const THUMB_SIZE = 640;
+const PHOTO_TIMEOUT_MS = 2500;
+const MAX_CONCURRENT_REQUESTS = 4;
 
-/** Look up a representative photo for a place name. Returns null on miss. */
-export async function fetchWikipediaPhoto(name: string): Promise<string | null> {
-  const term = name.trim();
-  if (!term) return null;
+type WikiSearchPage = {
+  title?: string;
+  thumbnail?: {
+    source?: string;
+  };
+};
+
+type WikiSearchResponse = {
+  query?: {
+    pages?: Record<string, WikiSearchPage>;
+  };
+};
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Photo lookup timed out')), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
+async function fetchPhotoForPlace(place: ParsedPlace): Promise<string | null> {
+  const query = [place.name, place.subtitle].filter(Boolean).join(' ');
+  if (!query.trim()) return null;
 
   const params = new URLSearchParams({
     action: 'query',
     generator: 'search',
-    gsrsearch: term,
+    gsrsearch: query,
     gsrlimit: '1',
     prop: 'pageimages',
-    piprop: 'thumbnail',
-    pithumbsize: String(THUMB_SIZE),
+    pithumbsize: '600',
     format: 'json',
     origin: '*',
   });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${WIKI_API}?${params.toString()}`, {
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as {
-      query?: { pages?: Record<string, { thumbnail?: { source?: string } }> };
-    };
-    const pages = json.query?.pages;
-    if (!pages) return null;
-    const first = Object.values(pages)[0];
-    return first?.thumbnail?.source ?? null;
+    const response = await withTimeout(fetch(`https://en.wikipedia.org/w/api.php?${params.toString()}`), PHOTO_TIMEOUT_MS);
+    if (!response.ok) return null;
+    const json = (await response.json()) as WikiSearchResponse;
+    const page = Object.values(json.query?.pages ?? {})[0];
+    return page?.thumbnail?.source ?? null;
   } catch {
-    return null; // timeouts / network errors: photo is best-effort
-  } finally {
-    clearTimeout(timer);
+    return null;
   }
 }
 
-/** Fetch photos for a batch with bounded concurrency. Order preserved. */
-export async function fetchPhotosForPlaces(
-  places: { name: string }[],
-): Promise<(string | null)[]> {
-  const results: (string | null)[] = new Array(places.length).fill(null);
-  let cursor = 0;
-  async function worker() {
-    while (cursor < places.length) {
-      const i = cursor++;
-      results[i] = await fetchWikipediaPhoto(places[i].name);
+export async function fetchPhotosForPlaces(places: ParsedPlace[]): Promise<Array<string | null>> {
+  const results: Array<string | null> = new Array(places.length).fill(null);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < places.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await fetchPhotoForPlace(places[index]);
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, places.length) }, worker),
-  );
+
+  const workerCount = Math.min(MAX_CONCURRENT_REQUESTS, places.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
   return results;
 }
