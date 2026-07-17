@@ -13,6 +13,7 @@
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
 import { supabase } from '../supabase/supabaseClient';
+import { fetchPhotosForPlaces } from './placePhotoService';
 
 export type SavedPlace = {
   id: string;
@@ -23,6 +24,7 @@ export type SavedPlace = {
   latitude: number;
   longitude: number;
   region: string | null;
+  photo_url?: string | null;
   created_at: string;
 };
 
@@ -85,7 +87,7 @@ export async function savePlaces(
 
   const { data: existing, error: existingError } = await supabase
     .from('places')
-    .select('id, name, subtitle, category, latitude, longitude, region, created_at');
+    .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at');
   if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
 
   const existingRows = (existing ?? []) as SavedPlace[];
@@ -106,13 +108,19 @@ export async function savePlaces(
       .filter((place): place is SavedPlace => Boolean(place));
   }
 
-  const rows = placesToInsert.map((p) => ({
+  // Best-effort photo lookup (free Wikipedia layer). Bounded: ~2.5s per
+  // request, 4 in flight; misses are simply null and the UI falls back to
+  // the static map thumbnail. Fetched once here, cached forever in the row.
+  const photos = await fetchPhotosForPlaces(placesToInsert);
+
+  const rows = placesToInsert.map((p, i) => ({
     name: truncate(p.name, 255) ?? 'Unknown place',
     subtitle: truncate(p.subtitle, 255),
     category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
     region: truncate(source?.region, 100),
+    photo_url: photos[i],
   }));
 
   let data = null as SavedPlace[] | null;
@@ -172,7 +180,7 @@ export async function savePlaces(
 export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   const { data, error } = await supabase
     .from('places')
-    .select('id, name, subtitle, category, latitude, longitude, region, created_at')
+    .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at')
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Failed to fetch places: ${error.message}`);
   return ((data ?? []) as SavedPlace[]).map((place) => ({
