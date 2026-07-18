@@ -18,8 +18,31 @@ from backend.services.place_image_service import place_image_wiki_api
 MAX_CONCURRENT_REQUESTS = 4
 NEGATIVE_RETRY_S = 3600
 PHOTO_CACHE_VERSION = "v2"
+# Minimum spacing between outbound Wikipedia requests, enforced across every
+# concurrent worker and every call into this module (not just within one
+# batch) — a burst of ~200 concurrent lookups previously tripped Wikimedia's
+# per-IP rate limit (HTTP 429) partway through a run, and every place after
+# that got silently miscached as "no photo" instead of "we got throttled."
+MIN_REQUEST_INTERVAL_S = 0.4
 
 _SOURCES = [place_image_wiki_api]
+
+_throttle_lock = asyncio.Lock()
+_last_request_at = 0.0
+_blocked_until = 0.0  # monotonic time; set when Wikimedia 429s us
+
+
+async def _throttle() -> None:
+    """Serialize outbound requests to at most one per MIN_REQUEST_INTERVAL_S,
+    and hold everyone back until any active rate-limit backoff clears."""
+    global _last_request_at
+    async with _throttle_lock:
+        now = time.monotonic()
+        earliest_allowed = max(_last_request_at + MIN_REQUEST_INTERVAL_S, _blocked_until)
+        wait_s = earliest_allowed - now
+        if wait_s > 0:
+            await asyncio.sleep(wait_s)
+        _last_request_at = time.monotonic()
 
 
 async def _fetch_photo_for_place(client: AsyncSession, name: str) -> tuple[str | None, dict]:
@@ -29,6 +52,8 @@ async def _fetch_photo_for_place(client: AsyncSession, name: str) -> tuple[str |
     than parse URL, so the first successful lookup can be reused across every
     source that mentions the same place.
     """
+    global _blocked_until
+
     cache_key = f"photo:{PHOTO_CACHE_VERSION}:{name.strip().lower()}"
     cached = cache.get(cache_key)
     if cached is not None:
@@ -51,10 +76,21 @@ async def _fetch_photo_for_place(client: AsyncSession, name: str) -> tuple[str |
             return cached.get("url"), {}
 
     for source in _SOURCES:
+        await _throttle()
         try:
             # Source failures are isolated here so a provider outage cannot
             # turn an otherwise valid parse response into a 500.
             photo = await source.fetch(client, name)
+        except place_image_wiki_api.RateLimited as exc:
+            # Not a genuine miss — do not cache a negative for it, and hold
+            # every subsequent request (this batch and future ones) back
+            # until the backoff window Wikimedia gave us has passed.
+            _blocked_until = time.monotonic() + exc.retry_after_s
+            print(
+                f"[place_image_service] Rate limited by Wikipedia while looking up '{name}'; "
+                f"backing off {exc.retry_after_s:.0f}s, leaving photo_url null without caching a miss."
+            )
+            return None, {}
         except Exception:
             photo = None
         if photo:

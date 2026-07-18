@@ -19,11 +19,24 @@ WIKIPEDIA_USER_AGENT = os.environ.get(
 IMPERSONATE_PROFILE = "chrome"
 
 
+class RateLimited(Exception):
+    """Raised on HTTP 429 so callers can distinguish throttling from a genuine
+    'no photo for this place' result — a burst of concurrent lookups previously
+    got the whole batch 429'd, and each subsequent place was silently (and
+    wrongly) recorded as if Wikipedia had no thumbnail for it."""
+
+    def __init__(self, retry_after_s: float):
+        super().__init__(f"Wikipedia rate limited us, retry after {retry_after_s:.0f}s")
+        self.retry_after_s = retry_after_s
+
+
 async def fetch(client: AsyncSession, name: str) -> str | None:
     """Return the first Wikipedia thumbnail URL for a place name, if available.
 
-    The wrapper owns provider ordering, shared caching, and exception isolation;
-    this source only translates a name into the existing Wikipedia API query.
+    The wrapper owns provider ordering, shared caching, exception isolation,
+    and request throttling; this source only translates a name into the
+    existing Wikipedia API query. Raises RateLimited on HTTP 429 instead of
+    swallowing it — the wrapper must not cache that as a negative result.
     """
     query = name.strip()
     if not query:
@@ -47,6 +60,9 @@ async def fetch(client: AsyncSession, name: str) -> str | None:
             timeout=PHOTO_TIMEOUT_S,
             impersonate=IMPERSONATE_PROFILE,
         )
+        if resp.status_code == 429:
+            retry_after_s = float(resp.headers.get("retry-after", "60"))
+            raise RateLimited(retry_after_s)
         resp.raise_for_status()
         pages = (resp.json().get("query") or {}).get("pages") or {}
         page = next(iter(pages.values()), None)
@@ -56,6 +72,8 @@ async def fetch(client: AsyncSession, name: str) -> str | None:
             # verify which URL was added to the backend response/cache.
             print(f"[place_image_wiki_api] Added photo_url for '{query}': {photo_url}")
         return photo_url
+    except RateLimited:
+        raise
     except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         detail = f"HTTP {status}" if status else str(exc)
