@@ -1,3 +1,11 @@
+/**
+ * @deprecated Place photo enrichment has moved to the FastAPI backend.
+ *
+ * This file is intentionally kept temporarily for rollback/reference only.
+ * New code should not import it; parsed places should arrive from the backend
+ * with `photo_url` already populated when a Wikipedia thumbnail is available.
+ */
+
 const PHOTO_TIMEOUT_MS = 2500;
 const MAX_CONCURRENT_REQUESTS = 4;
 
@@ -28,9 +36,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 async function fetchPhotoForPlace(place: PhotoQueryTarget): Promise<string | null> {
-  // Name only: subtitle is often a full street address (see importService's
-  // formatSubtitle), and appending it makes Wikipedia's search return zero
-  // results instead of the place's own page.
+  // Deprecated: the backend now performs this name-only Wikipedia lookup once
+  // per parse response and shares results through the server cache.
   const query = place.name.trim();
   if (!query) return null;
 
@@ -56,6 +63,9 @@ async function fetchPhotoForPlace(place: PhotoQueryTarget): Promise<string | nul
   }
 }
 
+/**
+ * @deprecated Use backend-populated `photo_url` from parse responses instead.
+ */
 export async function fetchPhotosForPlaces(places: PhotoQueryTarget[]): Promise<Array<string | null>> {
   const results: Array<string | null> = new Array(places.length).fill(null);
   let nextIndex = 0;

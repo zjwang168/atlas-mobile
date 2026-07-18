@@ -65,7 +65,21 @@ class AgentOrchestrator:
         # 0. Check cache — return immediately on hit
         cached = get_cached_result(url)
         if cached is not None:
+            from backend.services.place_image_service.place_image_service import _missing_photo_count, _photo_signature, enrich_response_with_photos
+
             print(f"[AgentOrchestrator] Cache HIT for URL: {url[:80]}")
+            # Photo enrichment entry point 2: internal orchestrator URL cache.
+            # This cache-hit return can bypass main.py's get_or_build_response
+            # wrapper, so cached payloads are upgraded here before they leave
+            # run_pipeline().
+            missing_before = _missing_photo_count(cached)
+            if missing_before:
+                photo_before = _photo_signature(cached)
+                await enrich_response_with_photos(cached)
+                if _photo_signature(cached) != photo_before:
+                    # Persist when the cached response gained or explicitly
+                    # recorded photo_url fields before it is bundled.
+                    set_cached_result(url, cached)
             metrics.t_parse_done = time.time()
             metrics.t_geocode_done = time.time()
             metrics.t_response = time.time()
@@ -99,6 +113,14 @@ class AgentOrchestrator:
                 "run_name": "AtlasParseGraph:url_pipeline",
             },
         )
+
+        from backend.services.place_image_service.place_image_service import enrich_response_with_photos
+
+        # Fresh orchestrator results are enriched before this internal cache
+        # write; main.py may still run the response-bundling wrapper afterward
+        # for /parse_link, so that wrapper should treat already-present
+        # photo_url fields as complete.
+        await enrich_response_with_photos(result)
 
         # Store successful result in cache
         set_cached_result(url, result)

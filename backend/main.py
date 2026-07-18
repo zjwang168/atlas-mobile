@@ -47,9 +47,10 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.services import cache, progress
+from backend.services import progress
 from backend.services.conversation_manager import conversation_manager
 from backend.services.gemini_computer_use import extract_web_text
+from backend.services.place_image_service.place_image_service import enrich_response_with_photos, get_or_build_response
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
 
@@ -128,6 +129,7 @@ class LocationItem(BaseModel):
     is_exact: Optional[bool] = None
     confidence: Optional[float] = None
     source: Optional[str] = None
+    photo_url: Optional[str] = None
 
 
 class RouteSegment(BaseModel):
@@ -244,6 +246,9 @@ async def scrape_url(req: ScrapeUrlRequest):
         )
         result["title"] = scraped_title or result.get("title") or url
         result["source_type"] = "web_scrape"
+        # Non-URL-cache endpoints enrich immediately before serialization so
+        # clients receive `photo_url` without doing device-side Wikipedia calls.
+        await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
         progress.fail(req.request_id, str(e))
@@ -285,6 +290,9 @@ async def scan_url(req: ScanUrlRequest):
             "resolved_count": len(result.get("locations", [])),
         })
         progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        # Keep Gemini/scan-derived responses on the same photo contract as
+        # parse_link even though this endpoint does not use the URL parse cache.
+        await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
         progress.fail(req.request_id, str(e))
@@ -337,6 +345,9 @@ async def parse_youtube(req: YouTubeParseRequest):
             print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
         print(f"{'='*50}\n")
 
+        # YouTube parsing has its own builder, so enrich the final response
+        # here instead of relying on the parse_link cache wrapper.
+        await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
         progress.fail(req.request_id, str(e))
@@ -354,63 +365,58 @@ async def parse_link(req: ParseRequest) -> ParseResponse:
     Uses the agentic pipeline (AgentOrchestrator) under the hood.
     Results are cached in-memory for subsequent requests.
     """
-    # Check cache
-    cached = cache.get(req.url)
-    if cached is not None:
-        progress.start(req.request_id, "Cache hit.") if req.request_id else None
-        progress.finish(req.request_id, {"location_count": len(cached.get("locations", []))})
-        return ParseResponse(**cached)
-
     # Create session
     session = conversation_manager.create_session()
 
     try:
-        progress.start(req.request_id, "Fetching source content.") if req.request_id else None
-        progress.stream_note(req.request_id, "Fetching source", {"detail": "Fetching and routing the link before parsing."})
-        result_state = await atlas_graph_app.ainvoke(
-            {
-                "task_type": "parse_link",
-                "url": req.url,
-                "request_id": req.request_id,
-                "session": session,
-            },
-            config={
-                "configurable": {"thread_id": req.request_id or session.session_id},
-                "run_name": "AtlasApp:parse_link",
-            },
-        )
-        result = result_state.get("result", {})
+        async def build_response() -> dict:
+            progress.start(req.request_id, "Fetching source content.") if req.request_id else None
+            progress.stream_note(req.request_id, "Fetching source", {"detail": "Fetching and routing the link before parsing."})
+            result_state = await atlas_graph_app.ainvoke(
+                {
+                    "task_type": "parse_link",
+                    "url": req.url,
+                    "request_id": req.request_id,
+                    "session": session,
+                },
+                config={
+                    "configurable": {"thread_id": req.request_id or session.session_id},
+                    "run_name": "AtlasApp:parse_link",
+                },
+            )
+            result = result_state.get("result", {})
+            return {
+                "title": result["title"],
+                "locations": result["locations"],
+                "route": result["route"],
+                "removed_noise": result.get("removed_noise", []),
+                "session_id": result.get("session_id", session.session_id),
+                "removed_hierarchy": result.get("removed_hierarchy", []),
+                "inferred_region": result.get("inferred_region"),
+                "source_type": result.get("source_type"),
+            }
 
-        # Build response — backward compatible with old format + new fields
-        response_data = {
-            "title": result["title"],
-            "locations": result["locations"],
-            "route": result["route"],
-            "removed_noise": result.get("removed_noise", []),
-            "session_id": result.get("session_id", session.session_id),
-            "removed_hierarchy": result.get("removed_hierarchy", []),
-            "inferred_region": result.get("inferred_region"),
-            "source_type": result.get("source_type"),
-        }
-
-        # Cache successful results
-        cache.set(req.url, response_data)
+        # Photo enrichment entry point 1: normal FastAPI response bundling.
+        # This wrapper runs the photo service immediately before ParseResponse
+        # serialization, including old URL-cache hits that were saved before
+        # photo_url existed.
+        response_data = await get_or_build_response(req.url, build_response)
         progress.finish(req.request_id, {"location_count": len(response_data["locations"])})
 
         # Server-side log
-        locs = result.get("locations", [])
+        locs = response_data.get("locations", [])
         print(f"\n{'='*50}")
         print(f"📌 URL: {req.url[:80]}")
         print(f"📍 Locations ({len(locs)}):")
         for i, loc in enumerate(locs):
             print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
-        rh = result.get("removed_hierarchy", [])
+        rh = response_data.get("removed_hierarchy", [])
         if rh:
             print(f"🗂️ Hierarchy removed ({len(rh)}):")
             for h in rh:
                 n = h.get('name', h) if isinstance(h, dict) else h
                 print(f"   - {n}")
-        rn = result.get("removed_noise", [])
+        rn = response_data.get("removed_noise", [])
         if rn:
             print(f"🔇 Noise removed ({len(rn)}):")
             for n in rn:
@@ -503,6 +509,9 @@ async def parse_text(req: ParseTextRequest) -> ParseResponse:
             print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
 
         progress.finish(req.request_id, {"location_count": len(response_data["locations"])})
+        # Pasted text has no stable URL cache key, so enrich only the response
+        # being returned for this request.
+        await enrich_response_with_photos(response_data)
         return ParseResponse(**response_data)
 
     except ValueError as e:
@@ -599,6 +608,9 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
             "resolved_count": len(result.get("locations", [])),
         })
         progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        # Discovery responses are built outside the parse_link cache path but
+        # still share the name-keyed photo cache inside the enrichment service.
+        await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
         progress.fail(req.request_id, str(e))
@@ -745,6 +757,9 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
             f"🔍 Source: {loc.get('source', '?')}\n"
             f"{'='*50}\n"
         )
+        # Landmark/image identification returns the same ParseResponse shape,
+        # so enrich it before Pydantic serializes LocationItem.
+        await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -802,6 +817,9 @@ async def scan_images_base64_endpoint(req: ScanImagesBase64Request):
             print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
         print(f"{'='*50}\n")
 
+        # Image scans bypass atlas_graph parse_link caching; enrich the
+        # normalized response payload directly.
+        await enrich_response_with_photos(response_data)
         return ParseResponse(**response_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -855,6 +873,9 @@ async def scan_images_endpoint(files: list[UploadFile] = File(...)):
             print(f"   {i+1}. {loc['name']:30s} ({loc['latitude']:.4f}, {loc['longitude']:.4f})")
         print(f"{'='*50}\n")
 
+        # Multipart image scans share the same response normalization as the
+        # base64 endpoint, including server-side photo enrichment.
+        await enrich_response_with_photos(response_data)
         return ParseResponse(**response_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

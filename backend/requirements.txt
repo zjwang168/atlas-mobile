@@ -21,3 +21,4 @@ youtube-transcript-api==1.2.4
 langsmith==0.3.45
 
 httpx
+curl_cffi==0.15.0
