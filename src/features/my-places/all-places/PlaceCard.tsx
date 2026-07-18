@@ -5,7 +5,7 @@ import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useRef } from 'react';
-import { Image, ScrollView, StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
@@ -44,8 +44,6 @@ function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; o
 export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
   const { setOverlay } = useHome();
-  const colorScheme = useColorScheme();
-  const iconColor = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
 
   const handleDelete = () => {
     swipeableRef.current?.close();
@@ -71,16 +69,13 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
         <TouchableOpacity onPress={handleOpenDetail} activeOpacity={0.7}>
           <View style={{ flexDirection: 'row', gap: 24, alignItems: 'flex-start' }}>
             <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 4 }}>
-                <Text
-                  className="text-text-primary"
-                  style={[typography.h3, { flexShrink: 1 }]}
-                  numberOfLines={1}
-                >
-                  {item.name}
-                </Text>
-                <Ionicons name="chevron-forward" size={18} color={iconColor} />
-              </View>
+              <Text
+                className="text-text-primary"
+                style={[typography.h3, { marginBottom: 4 }]}
+                numberOfLines={1}
+              >
+                {item.name}
+              </Text>
               <Text
                 numberOfLines={3}
                 className="text-text-secondary"
