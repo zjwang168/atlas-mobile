@@ -6,6 +6,7 @@ import { flushQueue } from '../../services/local/syncQueue';
 import type { SavedPlace } from '../../services/place/placeService';
 import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } from '../../services/place/placeService';
 import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
+import type { SnapState } from '../../components/content-panel/ContentPanel';
 import type { PlannedPlace } from '../my-plan/create-plan/plan-place/types';
 
 // --- Chat History ---
@@ -88,6 +89,10 @@ type HomeContextValue = {
   setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
   /** 用户当前位置坐标 [lng, lat]（默认西雅图） */
   userLocation: [number, number];
+  /** Shared bottom-sheet snap state — HomePanel (both tabs) and PlaceDetail all
+      read/animate to this and write back on drag, so they stay in lockstep. */
+  panelSnapState: SnapState;
+  setPanelSnapState: (state: SnapState) => void;
 };
 
 const HomeContext = createContext<HomeContextValue>({
@@ -120,6 +125,8 @@ const HomeContext = createContext<HomeContextValue>({
   activeSidekick: 'none',
   setActiveSidekick: () => {},
   userLocation: [-122.3321, 47.6062],
+  panelSnapState: 'default',
+  setPanelSnapState: () => {},
 });
 
 export function useHome() {
@@ -153,6 +160,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   } | null>(null);
   const [activeSidekick, setActiveSidekick] = useState<'none' | 'aiChat' | 'places'>('none');
   const [userLocation] = useState<[number, number]>([-122.3321, 47.6062]);
+  const [panelSnapState, setPanelSnapState] = useState<SnapState>('default');
   const currentUserIdRef = useRef<string | null>(null);
 
   const refreshSavedPlaces = useCallback(async () => {
@@ -339,6 +347,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       activeSidekick,
       setActiveSidekick,
       userLocation,
+      panelSnapState,
+      setPanelSnapState,
     }),
     [
       overlay,
@@ -360,6 +370,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       importNotification,
       activeSidekick,
       userLocation,
+      panelSnapState,
     ],
   );
 

@@ -26,6 +26,7 @@ App.tsx (HomeProvider)
 - The tab bar drives a persistent 2-page pager (My Places / My Plan) rather than screen navigation — both pages stay mounted.
 - `AIChatBox` appears as a sidekick layered over the pager, not as its own tab or page.
 - Panels and overlays are mutually exclusive, gated by `overlay.kind` and `activeSidekick`.
+- `HomePanel` (both tabs) and `PlaceDetail` share one bottom-sheet snap state (`panelSnapState`) in controlled mode, so dragging any of them to a new height carries over to the others — including the pager tab that's currently off-screen — instead of each defaulting back to `default` when it becomes visible.
 
 ## API
 
@@ -52,6 +53,7 @@ function useHome(): {
   setImportNotification: (n) => void;                               // import completion toast payload
   activeSidekick: 'none' | 'aiChat' | 'places'; setActiveSidekick: (s) => void;  // 'aiChat' shows AIChatBox
   userLocation: [number, number];                                   // default map center (Seattle) until GPS is wired up
+  panelSnapState: SnapState; setPanelSnapState: (s: SnapState) => void;  // shared bottom-sheet height — HomePanel (both tabs) and PlaceDetail stay in sync through this
 };
 
 type Overlay =

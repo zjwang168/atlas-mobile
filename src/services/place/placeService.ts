@@ -186,6 +186,9 @@ export async function savePlaces(
     photo_url: truncate(p.imageUri, 1000),
   }));
 
+  // Temporary id for optimistic UI — never sent to Supabase (which assigns the
+  // real id via uuid_generate_v4()). Overwritten below once the insert returns,
+  // and by reconcileSavedPlaces() in syncQueue.ts if this save is queued offline.
   const localRows: SavedPlace[] = rows.map((row) => withStableKey({
     id: createLocalId(),
     name: row.name,
@@ -267,6 +270,8 @@ export async function savePlaces(
     data = insertedRows;
   }
 
+  // Swap each local-id row for its real Supabase row, matched by array index
+  // since localRows/rows/data are all derived from placesToInsert in the same order.
   const savedRows = ((data ?? []) as SavedPlace[]).map(withStableKey);
   await updateSavedPlacesCache(userId, (current) => (
     current.map((row) => {

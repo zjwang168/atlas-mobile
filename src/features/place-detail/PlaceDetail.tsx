@@ -25,7 +25,7 @@ type PlaceDetailProps = {
 };
 
 export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdit, onHeightChange }: PlaceDetailProps) {
-  const { savedPlaces } = useHome();
+  const { savedPlaces, panelSnapState, setPanelSnapState } = useHome();
   const [place, setPlace] = useState<PlaceDetailType | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -49,7 +49,8 @@ export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdi
 
   return (
     <ContentPanel
-      initialSnap="default"
+      snapState={panelSnapState}
+      onSnapStateChange={setPanelSnapState}
       visible={isVisible}
       onHidden={() => setPlace(null)}
       zIndex={40}

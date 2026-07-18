@@ -28,7 +28,7 @@ function HomePanel({
   maxHeight,
   onHeightChange,
 }: HomePanelProps) {
-  const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
+  const { setSelectedPlaceCoordinate, setSelectedPlaceId, panelSnapState, setPanelSnapState } = useHome();
   const [accountOpen, setAccountOpen] = useState(false);
   const handlePlacePress = useCallback((place: Place) => {
     setSelectedPlaceCoordinate([place.longitude, place.latitude]);
@@ -38,7 +38,8 @@ function HomePanel({
   return (
     <>
     <ContentPanel
-      initialSnap="default"
+      snapState={panelSnapState}
+      onSnapStateChange={setPanelSnapState}
       visible={visible}
       height={height}
       defaultSnapHeight={defaultSnapHeight}

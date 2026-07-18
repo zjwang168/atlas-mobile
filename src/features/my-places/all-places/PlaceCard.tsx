@@ -68,14 +68,10 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
         animationOptions={{ mass: 1, damping: 14, stiffness: 90, overshootClamping: false }}
         renderRightActions={(progress) => <DeleteAction progress={progress} onDelete={handleDelete} />}
       >
-        <TouchableOpacity onPress={() => onPress?.(item)} activeOpacity={0.7}>
+        <TouchableOpacity onPress={handleOpenDetail} activeOpacity={0.7}>
           <View style={{ flexDirection: 'row', gap: 24, alignItems: 'flex-start' }}>
             <View style={{ flex: 1 }}>
-              <TouchableOpacity
-                onPress={handleOpenDetail}
-                activeOpacity={0.7}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 4 }}
-              >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 4 }}>
                 <Text
                   className="text-text-primary"
                   style={[typography.h3, { flexShrink: 1 }]}
@@ -84,7 +80,7 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
                   {item.name}
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color={iconColor} />
-              </TouchableOpacity>
+              </View>
               <Text
                 numberOfLines={3}
                 className="text-text-secondary"

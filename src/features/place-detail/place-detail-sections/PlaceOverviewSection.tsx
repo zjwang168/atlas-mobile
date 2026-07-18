@@ -4,6 +4,7 @@ import { Image, useColorScheme, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 
 import { Button } from '@/components/ui/button';
+import { typography } from '@/theme/typography';
 import { PlaceDetail } from '../../../types/place';
 import { getOpenStatus } from '../utils/placeHours';
 
@@ -19,6 +20,9 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
       <View className="flex-row items-start gap-3">
         <View className="h-28 flex-1 justify-between pt-1">
           <View className="gap-0.5">
+            <Text className="text-foreground" style={typography.h2}>
+              {place.name}
+            </Text>
             <Text className="text-sm leading-5 text-text-tertiary">{place.address}</Text>
             <Text
               className={`text-sm ${status.isOpen ? 'font-medium text-green-700' : 'font-normal text-text-tertiary'}`}
