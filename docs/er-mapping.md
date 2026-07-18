@@ -43,7 +43,7 @@ Relationships:
 
 Implemented through:
 
-- collection_places
+- atlas_places
 - project_places
 
 ---
@@ -64,7 +64,7 @@ Relationships:
 
 Implemented through:
 
-- collection_places
+- atlas_places
 
 ---
 

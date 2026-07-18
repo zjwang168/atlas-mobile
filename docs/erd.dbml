@@ -49,7 +49,7 @@ Table place_sources {
   created_at timestamptz
 }
 
-Table collections {
+Table atlas {
   id uuid [pk]
   owner_id uuid [ref: > users.id]
   title varchar
@@ -59,9 +59,9 @@ Table collections {
   updated_at timestamptz
 }
 
-Table collection_places {
+Table atlas_places {
   id uuid [pk]
-  collection_id uuid [ref: > collections.id]
+  atlas_id uuid [ref: > atlas.id]
   place_id uuid [ref: > places.id]
   added_by uuid [ref: > users.id]
   note text
@@ -124,7 +124,7 @@ Table imports {
   id uuid [pk]
   user_id uuid [ref: > users.id]
   project_id uuid [ref: > projects.id]
-  collection_id uuid [ref: > collections.id]
+  atlas_id uuid [ref: > atlas.id]
   input_type varchar
   input_url text
   input_text text
