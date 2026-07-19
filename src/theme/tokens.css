@@ -88,6 +88,66 @@
   --color-atlas-8: var(--atlas-8);
 }
 
+/* ── Typography utilities ───────────────────────────────────────────────────
+   Mirrors src/theme/typography.ts — usable directly as `className="h2"`,
+   `className="bodySmallEmphasis"`, etc. Keep both in sync when either changes. */
+@utility display {
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 600;
+}
+@utility h2 {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.11px;
+}
+@utility h3 {
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 600;
+}
+@utility subheader {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+}
+@utility body {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+@utility bodyEmphasis {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+@utility bodySmall {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
+@utility bodySmallEmphasis {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+@utility caption {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 400;
+}
+@utility captionEmphasis {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+@utility labelTab {
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+}
+
 /* ── Light mode (Figma "Color" collection, source of truth) ─────────────────*/
 :root {
   /* shadcn / NativeWind default tokens → mapped to Figma semantics */

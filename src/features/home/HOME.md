@@ -26,7 +26,7 @@ App.tsx (HomeProvider)
 - The tab bar drives a persistent 2-page pager (My Places / My Plan) rather than screen navigation — both pages stay mounted.
 - `AIChatBox` appears as a sidekick layered over the pager, not as its own tab or page.
 - Panels and overlays are mutually exclusive, gated by `overlay.kind` and `activeSidekick`.
-- `HomePanel` (both tabs) and `PlaceDetail` share one bottom-sheet snap state (`panelSnapState`) in controlled mode, so dragging any of them to a new height carries over to the others — including the pager tab that's currently off-screen — instead of each defaulting back to `default` when it becomes visible.
+- `HomePanel` (both tabs) and `PlaceDetail` use the same `ContentPanel` snap group (`home-main`), so a panel opened without an explicit snap state inherits the last settled height. The group memory is owned by `src/components/content-panel`, not `HomeContext`, and it is broadcast about a frame after a drag-release snap (not deferred to spring completion) so a panel becoming visible mid-spring doesn't briefly show a stale height. `HomeScreen` only forwards a `ContentPanel`'s `onHeightChange` into the map's camera padding for whichever one is actually the on-screen driver (active tab, or `PlaceDetail` while its overlay is open) — the other synced-but-off-screen instances still inherit state consistency, but don't fight over the camera. `HomeScreen`'s own read of the group's settled state (used for the map's discrete padding recenter, not per-frame dragging) is deliberately delayed roughly one spring's settle time behind the group's raw value — firing that recenter mid-spring would compete with the panel's own height animation on the JS thread.
 
 ## API
 
@@ -53,7 +53,6 @@ function useHome(): {
   setImportNotification: (n) => void;                               // import completion toast payload
   activeSidekick: 'none' | 'aiChat' | 'places'; setActiveSidekick: (s) => void;  // 'aiChat' shows AIChatBox
   userLocation: [number, number];                                   // default map center (Seattle) until GPS is wired up
-  panelSnapState: SnapState; setPanelSnapState: (s: SnapState) => void;  // shared bottom-sheet height — HomePanel (both tabs) and PlaceDetail stay in sync through this
 };
 
 type Overlay =

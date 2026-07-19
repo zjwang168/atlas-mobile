@@ -2,7 +2,7 @@
 
 ## Overview
 
-`MyPlaces` is the first tab of the home content panel. It displays the user's saved places with two sub-tabs: **All Places** (a scrollable list) and **Atlas** (a curated view, placeholder).
+`MyPlaces` is the first tab of the home content panel. It displays the user's saved places with two sub-tabs: **All Places** (a scrollable list) and **Atlas** (a curated view of places grouped into named atlases).
 
 ## File Structure
 
@@ -12,7 +12,8 @@ src/features/my-places/
   all-places/
     AllPlaces.tsx        ← scrollable FlatList of place cards
   atlas/
-    Atlas.tsx            ← curated atlas view (placeholder)
+    Atlas.tsx            ← curated atlas view
+    AtlasPlaceCard.tsx   ← square-thumbnail + name card used in the horizontal row
   MY-PLACES.md           ← this document
 ```
 
@@ -69,6 +70,6 @@ The segmented control is no longer passed in as a list header — it's rendered 
 
 ## `Atlas`
 
-Placeholder sub-tab. Renders the message "Your curated atlas will appear here."
+Curated sub-tab — shows each atlas as a title above a horizontal scroll row of its places. See [atlas/ATLAS.md](atlas/ATLAS.md).
 
 No props.

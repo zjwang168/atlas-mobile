@@ -13,6 +13,7 @@ const BOTTOM_BAR_CLEARANCE = 84;
 
 type HomePanelProps = {
   activeTab: string;
+  snapGroup?: string;
   visible: boolean;
   height?: number;
   defaultSnapHeight?: number;
@@ -22,13 +23,14 @@ type HomePanelProps = {
 
 function HomePanel({
   activeTab,
+  snapGroup,
   visible,
   height,
   defaultSnapHeight,
   maxHeight,
   onHeightChange,
 }: HomePanelProps) {
-  const { setSelectedPlaceCoordinate, setSelectedPlaceId, panelSnapState, setPanelSnapState } = useHome();
+  const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
   const [accountOpen, setAccountOpen] = useState(false);
   const handlePlacePress = useCallback((place: Place) => {
     setSelectedPlaceCoordinate([place.longitude, place.latitude]);
@@ -38,8 +40,7 @@ function HomePanel({
   return (
     <>
     <ContentPanel
-      snapState={panelSnapState}
-      onSnapStateChange={setPanelSnapState}
+      snapGroup={snapGroup}
       visible={visible}
       height={height}
       defaultSnapHeight={defaultSnapHeight}

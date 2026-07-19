@@ -6,6 +6,8 @@ import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
 import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
+import { SNAP_HEIGHTS } from '../../components/content-panel/ContentPanel';
+import { useContentPanelSnapGroup } from '../../components/content-panel/ContentPanelSnapProvider';
 import AddPlaceToPlan from '../my-plan/add-place-to-plan/AddPlaceToPlan';
 import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
@@ -17,6 +19,12 @@ import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
 import HomeTabBar, { TAB_PLACES, TAB_PLAN } from './HomeTabBar';
 import SearchPanel from '../search/SearchPanel';
+
+const HOME_PANEL_SNAP_GROUP = 'home-main';
+// Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
+// 200 / mass 0.9) — see below for why the map's padding recompute waits this long
+// after a group snap change instead of reacting immediately.
+const PANEL_SPRING_SETTLE_DELAY = 380;
 
 // ---- Types ----
 
@@ -84,6 +92,20 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
     userLocation,
     savedPlaces,
   } = useHome();
+  const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
+  // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
+  // panel switching mid-spring doesn't inherit a stale value) — but this screen's own
+  // subscription drives the map's discrete camera-padding recenter below, which is
+  // expensive enough that firing it mid-spring competes with the panel's own height
+  // animation on the JS thread and stutters it. Delaying this copy until roughly the
+  // spring's settle time keeps the recenter from overlapping the drag animation, same
+  // as when the group write itself was deferred to spring completion.
+  const [settledPanelSnapState, setSettledPanelSnapState] = useState(groupSnapState);
+  useEffect(() => {
+    if (groupSnapState === settledPanelSnapState) return;
+    const timeout = setTimeout(() => setSettledPanelSnapState(groupSnapState), PANEL_SPRING_SETTLE_DELAY);
+    return () => clearTimeout(timeout);
+  }, [groupSnapState, settledPanelSnapState]);
   const tabBarOpacity = useRef(new Animated.Value(1)).current;
   const pagerTranslateX = useRef(new Animated.Value(0)).current;
   const pagerWidth = useMemo(() => Dimensions.get('window').width, []);
@@ -136,11 +158,6 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
     return 12;
   }, [selectedPlaceCoordinate, hasParsedPlaces]);
 
-  // 地图 padding：当 ContentPanel 可见时补偿底部高度
-  const contentPanelHeight = useMemo(() => {
-    // 根据屏幕高度估算 ContentPanel 的 default snap 高度 (55%)
-    return Dimensions.get('window').height * 0.55;
-  }, []);
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
   // Any bottom panel that should push the map center up — the main pager panel
   // or the PlaceDetail overlay — drives the same padding-tracking path.
@@ -148,17 +165,23 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
-  const bottomPanelHeightRef = useRef(contentPanelHeight);
+  const bottomPanelHeightRef = useRef(SNAP_HEIGHTS[settledPanelSnapState]);
   const mapRef = useRef<MapboxMapHandle>(null);
-  // Only recomputed when the active bottom panel toggles (a rare, discrete event) —
-  // this still goes through MapboxMap's prop-driven, animated camera path so
-  // hiding/showing the panel eases the map padding smoothly.
+  // Recomputed whenever the active bottom panel toggles OR its resolved snap state
+  // changes, so a discrete camera recenter (e.g. selecting a different marker while
+  // the panel is at a non-default snap height) uses padding matching the panel's
+  // *current* height instead of a frozen default — this still goes through
+  // MapboxMap's prop-driven, animated camera path so hiding/showing the panel eases
+  // the map padding smoothly. Per-frame drag tracking stays on the ref-based path below.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: bottomPanelActive ? bottomPanelHeightRef.current : 0,
+    paddingBottom: bottomPanelActive ? SNAP_HEIGHTS[settledPanelSnapState] : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [bottomPanelActive]);
+  }), [bottomPanelActive, settledPanelSnapState]);
+  useEffect(() => {
+    bottomPanelHeightRef.current = mapPadding.paddingBottom;
+  }, [mapPadding]);
   // Per-frame panel height updates — pushed straight to the map's camera via ref,
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
@@ -189,11 +212,6 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
   // --- Search & History handlers ---
   const handleSearchPress = useCallback(() => {
     setOverlay({ kind: 'search' });
-  }, [setOverlay]);
-
-  // --- PlaceDetail back handler ---
-  const handlePlaceDetailBack = useCallback(() => {
-    setOverlay({ kind: 'none' });
   }, [setOverlay]);
 
   const handleMarkerPress = useCallback((marker: MapMarker) => {
@@ -233,15 +251,17 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
             <HomePanel
               activeTab={TAB_PLACES}
+              snapGroup={HOME_PANEL_SNAP_GROUP}
               visible={panelVisible}
-              onHeightChange={handlePanelHeightChange}
+              onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
             />
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
             <HomePanel
               activeTab={TAB_PLAN}
+              snapGroup={HOME_PANEL_SNAP_GROUP}
               visible={panelVisible}
-              onHeightChange={handlePanelHeightChange}
+              onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
             />
           </View>
         </Animated.View>
@@ -335,9 +355,9 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
       <PlaceDetail
         placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
         onDismiss={() => setOverlay({ kind: 'none' })}
-        onBack={handlePlaceDetailBack}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
-        onHeightChange={handlePanelHeightChange}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
       />
 
       <PlanDetail

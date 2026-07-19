@@ -68,9 +68,9 @@ PlaceDetail (ContentPanel)
 │       └── share / map / dismiss buttons
 │
 └── [default / full snap]
-    ├── PlaceHeader            ← name + dismiss button
+    ├── PlaceHeader            ← place.name title + dismiss button
     └── ScrollView
-        ├── PlaceOverviewSection   ← thumbnail, address, open status, action row
+        ├── PlaceOverviewSection   ← thumbnail, address, open status, action row (fills height to align buttons with the thumbnail bottom)
         └── PlaceInfoSection       ← tags, summary, collections, visit strategy, links, note
 ```
 
@@ -86,7 +86,6 @@ In `PlaceInfoSection`, **Tags** and **Note** always render their section header 
 type PlaceDetailProps = {
   placeId: string | null;        // null = hidden; non-null = slide up and show
   onDismiss: () => void;
-  onBack?: () => void;           // when provided, shows a back button instead of leaving the corner empty
   onEdit: (place: PlaceDetail) => void;
   onHeightChange?: (height: number) => void;  // reports live panel height so the caller can pad the map to match, same as HomePanel
 };

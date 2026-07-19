@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useContentPanelSnapGroup } from './ContentPanelSnapProvider';
 
 export type SnapState = 'compact' | 'short' | 'default' | 'tall' | 'full';
 
@@ -27,6 +28,11 @@ type ContentPanelProps = {
    */
   compactContent?: (props: CompactContentRenderProps) => React.ReactNode;
   initialSnap?: SnapState;
+  /**
+   * Shared snap memory key. When provided without `snapState`, the panel
+   * initializes from the group's last settled snap and writes back after snaps settle.
+   */
+  snapGroup?: string;
   /**
    * Controlled snap state. When provided the panel animates to this snap position
    * whenever the value changes. Internal gestures still work, but call
@@ -56,13 +62,17 @@ type ContentPanelProps = {
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const HANDLE_HEIGHT = 24;
 
-const defaultSnapHeights: Record<SnapState, number> = {
+// Exported so callers that need to anticipate a panel's pixel height from its
+// snap state alone (e.g. HomeScreen sizing map camera padding) don't hardcode
+// a second copy of these numbers.
+export const SNAP_HEIGHTS: Record<SnapState, number> = {
   compact: HANDLE_HEIGHT + 40,
   short: SCREEN_HEIGHT * 0.40,
   default: SCREEN_HEIGHT * 0.55,
   tall: SCREEN_HEIGHT * 0.70,
   full: SCREEN_HEIGHT,
 };
+const defaultSnapHeights = SNAP_HEIGHTS;
 
 const SNAP_ORDER: SnapState[] = ['compact', 'short', 'default', 'tall', 'full'];
 
@@ -73,6 +83,7 @@ export default function ContentPanel({
   children,
   compactContent,
   initialSnap = 'default',
+  snapGroup,
   snapState: controlledSnapState,
   onSnapStateChange,
   visible,
@@ -84,19 +95,23 @@ export default function ContentPanel({
   onHeightChange,
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
+  const activeSnapGroup = controlledSnapState === undefined ? snapGroup : undefined;
+  const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(activeSnapGroup, initialSnap);
+  const effectiveControlledSnapState = controlledSnapState ?? (activeSnapGroup ? groupSnapState : undefined);
+  const initialResolvedSnap = effectiveControlledSnapState ?? initialSnap;
   const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
   // Tracked in state (mirroring snapHeights.current.compact) so the crossfade
   // interpolation below can be recreated once the real compact height is measured.
   const [compactHeightTrack, setCompactHeightTrack] = useState(snapHeights.current.compact);
 
-  const [snapState, setSnapState] = useState<SnapState>(controlledSnapState ?? initialSnap);
-  const snapStateRef = useRef<SnapState>(controlledSnapState ?? initialSnap);
+  const [snapState, setSnapState] = useState<SnapState>(initialResolvedSnap);
+  const snapStateRef = useRef<SnapState>(initialResolvedSnap);
 
-  const panelHeight = useRef(new Animated.Value(snapHeights.current[initialSnap])).current;
+  const panelHeight = useRef(new Animated.Value(snapHeights.current[initialResolvedSnap])).current;
 
   // Tracks the actual current panel height (updated via listener) so gesture start
   // height is always correct even when in free-height mode between snap points.
-  const currentPanelHeight = useRef(snapHeights.current[initialSnap]);
+  const currentPanelHeight = useRef(snapHeights.current[initialResolvedSnap]);
   useEffect(() => {
     const id = panelHeight.addListener(({ value }) => {
       currentPanelHeight.current = value;
@@ -182,9 +197,10 @@ export default function ContentPanel({
   const opacity = useRef(new Animated.Value(visible === false ? 0 : 1)).current;
 
   const scrollY = useRef(0);
-  const gestureStartHeight = useRef(snapHeights.current[initialSnap]);
+  const gestureStartHeight = useRef(snapHeights.current[initialResolvedSnap]);
   const isDragging = useRef(false);
   const isProgrammaticTransition = useRef(false);
+  const transitionId = useRef(0);
 
   // Stable identity so children re-rendered by unrelated state (e.g. the
   // per-frame panelHeight listener) don't force their own children to
@@ -198,12 +214,15 @@ export default function ContentPanel({
   // treating it as a new function every ContentPanel render.
   const snapTo = useCallback((next: SnapState, animated = true) => {
     snapStateRef.current = next;
-    setSnapState(next);
-    onSnapStateChange?.(next);
     const nextHeight = maxHeight === undefined
       ? snapHeights.current[next]
       : Math.min(snapHeights.current[next], maxHeight);
     if (!animated) {
+      transitionId.current += 1;
+      isProgrammaticTransition.current = false;
+      setSnapState(next);
+      setGroupSnapState(next);
+      onSnapStateChange?.(next);
       panelHeight.setValue(nextHeight);
       return;
     }
@@ -211,33 +230,57 @@ export default function ContentPanel({
     // (e.g. incidental finger drift during a tap) while a snap animation is
     // already in flight — otherwise it captures the in-flight height as
     // gestureStartHeight and can resolve to the wrong snap point on release.
+    const currentTransitionId = transitionId.current + 1;
+    transitionId.current = currentTransitionId;
     isProgrammaticTransition.current = true;
+    // Broadcast to the group one frame later rather than synchronously here.
+    // useNativeDriver:false means this spring's per-frame updates also run on
+    // the JS thread — an immediate setGroupSnapState() forces every other
+    // group member to re-render on this same tick, which stalls the spring's
+    // first frame. Deferring by a frame keeps that re-render fan-out off the
+    // critical release frame while still closing (to ~16ms) the window where
+    // a panel becoming visible mid-spring would otherwise read a stale group
+    // value and visibly cut once this spring finishes.
+    requestAnimationFrame(() => {
+      if (transitionId.current !== currentTransitionId) return;
+      setGroupSnapState(next);
+    });
     Animated.spring(panelHeight, {
       toValue: nextHeight,
       useNativeDriver: false,
       damping: 22,
       stiffness: 200,
       mass: 0.9,
-    }).start(() => {
+    }).start(({ finished }) => {
+      if (transitionId.current !== currentTransitionId) return;
       isProgrammaticTransition.current = false;
+      if (!finished) return;
+      setSnapState(next);
+      onSnapStateChange?.(next);
     });
-  }, [maxHeight, onSnapStateChange]);
+  }, [maxHeight, onSnapStateChange, setGroupSnapState]);
 
-  // Respond to controlled snapState changes from the parent
-  const prevControlledSnapState = useRef(controlledSnapState);
+  // Respond to controlled snapState changes from the parent. A `snapGroup`-driven
+  // change means a *different* panel in the group settled somewhere else — that
+  // resync must be instant so a hidden panel is always already caught up by the
+  // time it becomes visible, instead of racing its entrance animation with a
+  // catch-up spring. An explicit `snapState` prop is real programmatic control
+  // (e.g. an instance-level override), so it keeps animating.
+  const prevControlledSnapState = useRef(effectiveControlledSnapState);
   useLayoutEffect(() => {
     const prev = prevControlledSnapState.current;
-    prevControlledSnapState.current = controlledSnapState;
+    prevControlledSnapState.current = effectiveControlledSnapState;
+    const groupDriven = controlledSnapState === undefined && activeSnapGroup !== undefined;
 
-    if (controlledSnapState === undefined) {
+    if (effectiveControlledSnapState === undefined) {
       // Control removed — return to initial position
-      if (prev !== undefined) snapTo(initialSnap);
+      if (prev !== undefined) snapTo(initialSnap, !groupDriven);
       return;
     }
-    if (controlledSnapState !== snapStateRef.current) {
-      snapTo(controlledSnapState);
+    if (effectiveControlledSnapState !== snapStateRef.current) {
+      snapTo(effectiveControlledSnapState, !groupDriven);
     }
-  }, [controlledSnapState]);
+  }, [effectiveControlledSnapState, initialSnap, snapTo, controlledSnapState, activeSnapGroup]);
 
   const setCompactHeight = (height: number) => {
     snapHeights.current.compact = height;

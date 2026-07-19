@@ -2,6 +2,8 @@ import { TextStyle } from 'react-native';
 
 /**
  * Typography tokens — mirror the text styles defined in the SPARC Figma file.
+ * Also usable directly as NativeWind classNames (`h2`, `bodySmallEmphasis`, ...) —
+ * see the `@utility` block in `tokens.css`. Keep both in sync when either changes.
  *
  * Font family: SF Pro, which is the iOS system font — so we don't bundle any
  * font files or set `fontFamily`; React Native's default on iOS already renders
@@ -12,6 +14,7 @@ import { TextStyle } from 'react-native';
  *   import { typography } from '@/theme/typography';
  *   <Text style={typography.body}>Hello</Text>
  *   <Text style={[typography.caption, { color: '#717171' }]}>Subtitle</Text>
+ *   <Text className="h2">Hello</Text>
  */
 export const typography = {
   /** Display — Semibold 28/34 */
