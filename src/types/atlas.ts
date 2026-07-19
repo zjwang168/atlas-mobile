@@ -3,6 +3,7 @@ export type Atlas = {
   id: string;
   owner_id: string | null;
   title: string;
+  emoji: string;
   description: string | null;
   visibility: string;
   created_at: string;

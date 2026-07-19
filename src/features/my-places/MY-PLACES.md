@@ -13,7 +13,10 @@ src/features/my-places/
     AllPlaces.tsx        ← scrollable FlatList of place cards
   atlas/
     Atlas.tsx            ← curated atlas view
-    AtlasPlaceCard.tsx   ← square-thumbnail + name card used in the horizontal row
+    AtlasCard.tsx        ← square-emoji + title card used in the horizontal row; opens AtlasDetail
+    AtlasDetail.tsx       ← overlay listing the places inside one atlas, triggered via HomeContext
+    AtlasOverviewSection.tsx  ← place count/description + emoji, rendered below AtlasDetail's header
+    AtlasPlaceCard.tsx   ← square-thumbnail + name card, not currently rendered
   MY-PLACES.md           ← this document
 ```
 
@@ -70,6 +73,6 @@ The segmented control is no longer passed in as a list header — it's rendered 
 
 ## `Atlas`
 
-Curated sub-tab — shows each atlas as a title above a horizontal scroll row of its places. See [atlas/ATLAS.md](atlas/ATLAS.md).
+Curated sub-tab — shows a horizontal scroll row of atlas cards (emoji + title). See [atlas/ATLAS.md](atlas/ATLAS.md).
 
 No props.

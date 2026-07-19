@@ -13,6 +13,7 @@ import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
+import AtlasDetail from '../my-places/atlas/AtlasDetail';
 import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
 import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
@@ -159,9 +160,10 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
   }, [selectedPlaceCoordinate, hasParsedPlaces]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
-  // Any bottom panel that should push the map center up — the main pager panel
-  // or the PlaceDetail overlay — drives the same padding-tracking path.
-  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail';
+  // Any bottom panel that should push the map center up — the main pager panel,
+  // the PlaceDetail overlay, or the AtlasDetail overlay — drives the same
+  // padding-tracking path.
+  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail';
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
@@ -363,6 +365,12 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
       <PlanDetail
         planId={overlay.kind === 'planDetail' ? overlay.planId : null}
         onDismiss={() => setOverlay({ kind: 'none' })}
+      />
+
+      <AtlasDetail
+        atlasId={overlay.kind === 'atlasDetail' ? overlay.atlasId : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
+        onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
       />
 
       <AddPlaceToPlan

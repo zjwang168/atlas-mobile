@@ -36,6 +36,7 @@ export type Overlay =
   | { kind: 'debug' }
   | { kind: 'placeDetail'; placeId: string }
   | { kind: 'planDetail'; planId: string }
+  | { kind: 'atlasDetail'; atlasId: string }
   | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void }
   | { kind: 'createPlan' };
 

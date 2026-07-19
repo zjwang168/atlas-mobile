@@ -1,8 +1,45 @@
+import { Badge } from '@/components/ui/badge';
 import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
-import { mockAtlasPlaces, mockAtlases } from '../../../../mock-data/mockAtlases';
-import { ScrollView, View } from 'react-native';
-import { AtlasPlaceCard } from './AtlasPlaceCard';
+import { mockAtlases } from '../../../../mock-data/mockAtlases';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { ScrollView, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { AtlasCard } from './AtlasCard';
+
+const CATEGORY_PILLS = ['All', 'Restaurants', 'Museums', 'Trails', 'Cafes', 'Landmarks'];
+
+function CategoryPillsRow() {
+  const colorScheme = useColorScheme();
+  const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8, gap: 8 }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ flexDirection: 'row', gap: 6 }}
+        style={{ flex: 1 }}
+      >
+        {CATEGORY_PILLS.map((label) =>
+          label === 'All' ? (
+            <Badge key={label} variant="default" style={{ paddingHorizontal: 12, paddingVertical: 4 }}>
+              <Text className="text-white" style={typography.caption}>
+                {label}
+              </Text>
+            </Badge>
+          ) : (
+            <Badge key={label} variant="outline" style={{ paddingHorizontal: 12, paddingVertical: 4 }}>
+              <Text style={typography.caption}>{label}</Text>
+            </Badge>
+          )
+        )}
+      </ScrollView>
+      <TouchableOpacity>
+        <Ionicons name="list-outline" size={20} color={foreground} />
+      </TouchableOpacity>
+    </View>
+  );
+}
 
 export default function Atlas() {
   if (mockAtlases.length === 0) {
@@ -16,28 +53,15 @@ export default function Atlas() {
   }
 
   return (
-    <ScrollView contentContainerStyle={{ paddingVertical: 16 }}>
-      {mockAtlases.map((atlas) => (
-        <View key={atlas.id} style={{ marginBottom: 24 }}>
-          <Text
-            className="text-text-primary"
-            style={[typography.h3, { paddingHorizontal: 16, marginBottom: 12 }]}
-          >
-            {atlas.title}
-          </Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}
-          >
-            {mockAtlasPlaces
-              .filter((atlasPlace) => atlasPlace.atlasId === atlas.id)
-              .map((atlasPlace) => (
-                <AtlasPlaceCard key={atlasPlace.id} name={atlasPlace.name} thumbnailUrl={atlasPlace.thumbnailUrl} />
-              ))}
-          </ScrollView>
+    <View style={{ flex: 1 }}>
+      <CategoryPillsRow />
+      <ScrollView contentContainerStyle={{ paddingVertical: 0 }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 16, marginTop: 8, marginBottom: 80, }}>
+          {mockAtlases.map((atlas) => (
+            <AtlasCard key={atlas.id} atlasId={atlas.id} emoji={atlas.emoji} title={atlas.title} />
+          ))}
         </View>
-      ))}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }

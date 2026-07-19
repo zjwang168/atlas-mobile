@@ -15,7 +15,7 @@ App.tsx (HomeProvider)
     │   │   └── HomePanel (My Plan)
     │   ├── AIChatBox           Atlas AI conversation sidekick — not a tab, see Behaviour
     │   ├── HomeTabBar          native iOS tab bar: My Places / My Plan / Add
-    │   └── overlays            SearchPanel / DebugPanel / CreatePlan / PlaceDetail / PlanDetail / AddPlaceToPlan
+    │   └── overlays            SearchPanel / DebugPanel / CreatePlan / PlaceDetail / PlanDetail / AtlasDetail / AddPlaceToPlan
     └── SaveScreen              rendered when overlay === 'save', replaces HomeScreen entirely
 ```
 
@@ -26,7 +26,7 @@ App.tsx (HomeProvider)
 - The tab bar drives a persistent 2-page pager (My Places / My Plan) rather than screen navigation — both pages stay mounted.
 - `AIChatBox` appears as a sidekick layered over the pager, not as its own tab or page.
 - Panels and overlays are mutually exclusive, gated by `overlay.kind` and `activeSidekick`.
-- `HomePanel` (both tabs) and `PlaceDetail` use the same `ContentPanel` snap group (`home-main`), so a panel opened without an explicit snap state inherits the last settled height. The group memory is owned by `src/components/content-panel`, not `HomeContext`, and it is broadcast about a frame after a drag-release snap (not deferred to spring completion) so a panel becoming visible mid-spring doesn't briefly show a stale height. `HomeScreen` only forwards a `ContentPanel`'s `onHeightChange` into the map's camera padding for whichever one is actually the on-screen driver (active tab, or `PlaceDetail` while its overlay is open) — the other synced-but-off-screen instances still inherit state consistency, but don't fight over the camera. `HomeScreen`'s own read of the group's settled state (used for the map's discrete padding recenter, not per-frame dragging) is deliberately delayed roughly one spring's settle time behind the group's raw value — firing that recenter mid-spring would compete with the panel's own height animation on the JS thread.
+- `HomePanel` (both tabs) and `PlaceDetail` use the same `ContentPanel` snap group (`home-main`), so a panel opened without an explicit snap state inherits the last settled height. The group memory is owned by `src/components/content-panel`, not `HomeContext`, and it is broadcast about a frame after a drag-release snap (not deferred to spring completion) so a panel becoming visible mid-spring doesn't briefly show a stale height. `HomeScreen` only forwards a `ContentPanel`'s `onHeightChange` into the map's camera padding for whichever one is actually the on-screen driver (active tab, `PlaceDetail` while its overlay is open, or `AtlasDetail` while its overlay is open) — the other synced-but-off-screen instances still inherit state consistency, but don't fight over the camera. `AtlasDetail` isn't in the `home-main` snap group (it doesn't pass `snapGroup`), so it doesn't inherit/broadcast settled height there, but `bottomPanelActive` and the live per-frame padding path both still key off `overlay.kind === 'atlasDetail'` the same way they do for `placeDetail`. `HomeScreen`'s own read of the group's settled state (used for the map's discrete padding recenter, not per-frame dragging) is deliberately delayed roughly one spring's settle time behind the group's raw value — firing that recenter mid-spring would compete with the panel's own height animation on the JS thread.
 
 ## API
 
@@ -61,6 +61,7 @@ type Overlay =
   | { kind: 'debug' }
   | { kind: 'placeDetail'; placeId: string }
   | { kind: 'planDetail'; planId: string }
+  | { kind: 'atlasDetail'; atlasId: string }
   | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void }
   | { kind: 'createPlan' };
 

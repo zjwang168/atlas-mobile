@@ -16,7 +16,7 @@ import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, Da
 | `PlaceLink` | PlaceInfoSection link rows |
 | `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |
 | `DayOfWeek` | `placeHours.ts` — `'monday'` … `'sunday'` |
-| `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`) — no service reads/writes it yet; `Atlas.tsx` renders from `mock-data/mockAtlases.ts` fixtures instead |
+| `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`) — no service reads/writes it yet and no mock currently uses this shape; `AtlasDetail.tsx` fills each mock atlas with a slice of `HomeContext.savedPlaces` instead (see `ATLAS.md`) |
 
 ## `route.ts` — parse/route API types
 
