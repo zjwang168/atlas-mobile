@@ -345,7 +345,7 @@ export default function AccountModal({ visible, onClose }: Props) {
         disabled={busy}
         activeOpacity={0.85}
       >
-        <Text style={styles.signupButtonText}>Sign up</Text>
+        <Text style={styles.signupButtonText}>Sign Up</Text>
         <Ionicons name="chevron-forward" size={16} color="#166534" />
       </TouchableOpacity>
     </>
