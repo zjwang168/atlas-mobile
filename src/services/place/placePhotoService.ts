@@ -1,7 +1,16 @@
-import type { ParsedPlace } from '../import/importService';
+/**
+ * @deprecated Place photo enrichment has moved to the FastAPI backend.
+ *
+ * This file is intentionally kept temporarily for rollback/reference only.
+ * New code should not import it; parsed places should arrive from the backend
+ * with `photo_url` already populated when a Wikipedia thumbnail is available.
+ */
 
 const PHOTO_TIMEOUT_MS = 2500;
 const MAX_CONCURRENT_REQUESTS = 4;
+
+/** Minimal shape needed to search for a photo — decoupled from any one place type. */
+export type PhotoQueryTarget = { name: string; subtitle?: string };
 
 type WikiSearchPage = {
   title?: string;
@@ -26,9 +35,11 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   });
 }
 
-async function fetchPhotoForPlace(place: ParsedPlace): Promise<string | null> {
-  const query = [place.name, place.subtitle].filter(Boolean).join(' ');
-  if (!query.trim()) return null;
+async function fetchPhotoForPlace(place: PhotoQueryTarget): Promise<string | null> {
+  // Deprecated: the backend now performs this name-only Wikipedia lookup once
+  // per parse response and shares results through the server cache.
+  const query = place.name.trim();
+  if (!query) return null;
 
   const params = new URLSearchParams({
     action: 'query',
@@ -52,7 +63,10 @@ async function fetchPhotoForPlace(place: ParsedPlace): Promise<string | null> {
   }
 }
 
-export async function fetchPhotosForPlaces(places: ParsedPlace[]): Promise<Array<string | null>> {
+/**
+ * @deprecated Use backend-populated `photo_url` from parse responses instead.
+ */
+export async function fetchPhotosForPlaces(places: PhotoQueryTarget[]): Promise<Array<string | null>> {
   const results: Array<string | null> = new Array(places.length).fill(null);
   let nextIndex = 0;
 

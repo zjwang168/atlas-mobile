@@ -25,8 +25,8 @@ import type { ParseResult, GeocodedLocation, RouteResult, RouteSegment, ChatMess
 
 | Type | Used by |
 |---|---|
-| `ParseResult` | `parseLink()` return, `HomeScreen` state |
-| `GeocodedLocation` | Map markers for route stops |
+| `ParseResult` | `parseLink()` return, `HomeScreen` state; `locations[]` may include backend-filled `photo_url` |
+| `GeocodedLocation` | Map markers for route stops; carries optional `photo_url` from parse responses |
 | `RouteResult` | GeoJSON polyline construction |
 | `ChatMessage` | `HomeScreen` message thread (`role: 'user' \| 'assistant' \| 'system'`) |
 

@@ -55,7 +55,7 @@ def _trim_lru(cache: OrderedDict[str, dict], max_size: int) -> None:
 
 
 def _is_misc_key(key: str) -> bool:
-    return key.startswith("geo:")
+    return key.startswith(("geo:", "photo:"))
 
 
 def _select_cache(key: str) -> tuple[OrderedDict[str, dict], int]:
@@ -153,6 +153,25 @@ def set_cached_result(url: str, result: dict) -> None:
             cache.popitem(last=False)
         cache[key] = {"result": result, "cached_at": time.time()}
 
+    _persist_to_disk()
+
+
+def set_many(entries: dict[str, Any]) -> None:
+    """Store multiple raw cache entries with a single disk persist.
+
+    This mirrors set_cached_result() semantics but avoids rewriting cache.json
+    once per place when photo enrichment resolves a batch of locations.
+    """
+    _load_from_disk()
+    for key, value in entries.items():
+        cache, max_size = _select_cache(key)
+        if key in cache:
+            cache[key] = {"result": value, "cached_at": time.time()}
+            cache.move_to_end(key)
+        else:
+            if len(cache) >= max_size:
+                cache.popitem(last=False)
+            cache[key] = {"result": value, "cached_at": time.time()}
     _persist_to_disk()
 
 
