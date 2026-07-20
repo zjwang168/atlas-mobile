@@ -396,7 +396,7 @@ export default function AccountModal({ visible, onClose }: Props) {
             </View>
             <View style={styles.choiceText}>
               <Text style={styles.choiceTitle}>Simple Sign-up Account</Text>
-              <Text style={styles.choiceSubtitle}>Enter your password directly.</Text>
+              <Text style={styles.choiceSubtitle}>Recovery unavailable for simple accounts.</Text>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
