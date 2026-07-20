@@ -7,6 +7,7 @@ export interface GeocodedLocation {
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
   description?: string | null;
   category?: string | null;
+  photo_url?: string | null;
 }
 
 /** A segment between two consecutive locations in the route */

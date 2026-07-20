@@ -18,7 +18,6 @@ import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, type SavedPlacesIndexEntry, withTimeout } from '../local/syncQueue';
 import { supabase } from '../supabase/supabaseClient';
-import { fetchPhotosForPlaces } from './placePhotoService';
 
 export type SavedPlace = {
   id: string;
@@ -174,19 +173,17 @@ export async function savePlaces(
       .filter((place): place is SavedPlace => Boolean(place));
   }
 
-  // Best-effort photo lookup (free Wikipedia layer). Bounded: ~2.5s per
-  // request, 4 in flight; misses are simply null and the UI falls back to
-  // the static map thumbnail. Fetched once here, cached forever in the row.
-  const photos = await fetchPhotosForPlaces(placesToInsert);
-
-  const rows = placesToInsert.map((p, i) => ({
+  const rows = placesToInsert.map((p) => ({
     name: truncate(p.name, 255) ?? 'Unknown place',
     subtitle: truncate(p.subtitle, 255),
     category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
     region: truncate(source?.region, 100),
-    photo_url: photos[i],
+    // `imageUri` is the backend-provided place thumbnail from parse responses.
+    // Keep saves deterministic: persist it as-is instead of starting a client
+    // side third-party lookup after the row is visible.
+    photo_url: truncate(p.imageUri, 1000),
   }));
 
   const localRows: SavedPlace[] = rows.map((row) => withStableKey({

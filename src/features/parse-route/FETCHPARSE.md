@@ -57,7 +57,7 @@ Mapbox Geocoding API client.
 - Uses the **same public token** (`MAPBOX_ACCESS_TOKEN`) as the frontend via `.env`.
 - `geocode()` — Single location name → coordinates via `mapbox.places` endpoint.
 - `batch_geocode()` — Concurrent geocoding of multiple location names using `asyncio.gather`. Failed items are silently skipped with a warning log.
-- Returns dicts with keys: `name`, `latitude`, `longitude`, `full_address`.
+- Returns dicts with keys: `name`, `latitude`, `longitude`, `full_address`, and optional `photo_url`.
 
 ### [`backend/services/route_planner.py`](backend/services/route_planner.py)
 
@@ -101,7 +101,7 @@ Python dependencies:
 
 TypeScript type definitions for the parse/fetch feature:
 
-- `GeocodedLocation` — `{ name, latitude, longitude, full_address }`
+- `GeocodedLocation` — `{ name, latitude, longitude, full_address, photo_url? }`
 - `RouteSegment` — `{ from_name, to_name, distance_km }`
 - `RouteResult` — `{ ordered_locations, total_distance_km, segments }`
 - `ParseResult` — Top-level response type matching the backend's response

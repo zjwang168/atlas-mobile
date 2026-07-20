@@ -34,11 +34,12 @@ Import parsing adapter for the four import modes.
 export async function parseInput(input: string): Promise<ParseResult>
 ```
 
-`parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape.
+`parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape, including backend-filled `photo_url` as the place `imageUri`.
 
 ### `place/placeService.ts`
 
 CRUD for the user's saved places, backed by Supabase and an offline-first local cache (see `local/`).
+Parsed place photos are saved from the backend response; this service does not call third-party photo APIs from the device.
 
 ```ts
 export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>

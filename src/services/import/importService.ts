@@ -52,6 +52,7 @@ type BackendLocation = {
   description?: string | null;
   category?: string | null;
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  photo_url?: string | null;
 };
 
 /** Fields of the backend parse response that we consume. */
@@ -92,6 +93,9 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
     type: loc.category || 'Place',
     latitude: loc.latitude,
     longitude: loc.longitude,
+    // Backend photo enrichment uses `photo_url`; import screens already carry
+    // thumbnails as `imageUri`, and placeService persists that value on save.
+    imageUri: loc.photo_url ?? undefined,
     sentiment: loc.sentiment ?? null,
   }));
 
