@@ -143,7 +143,7 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   }));
 
   const { data, error } = await withTimeout(
-    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
+    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
   );
   if (error) throw new Error(`Failed to save queued places: ${error.message}`);
 
@@ -171,8 +171,10 @@ async function deletePlaceOnline(placeId: string): Promise<void> {
 }
 
 async function updateNoteOnline(placeId: string, note: string): Promise<void> {
-  const { error } = await withTimeout(supabase.from('places').update({ note: note || null }).eq('id', placeId));
-  if (error) throw new Error(`Failed to update queued place note: ${error.message}`);
+  void placeId;
+  void note;
+  // The current Supabase `places` table does not expose a `note` column.
+  // Keep note edits local until the backend schema grows one.
 }
 
 async function reconcileSavedPlaces(userId: string, localRows: SavedPlace[], remoteRows: SavedPlace[]): Promise<void> {

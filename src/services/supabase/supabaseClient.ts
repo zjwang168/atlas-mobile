@@ -38,6 +38,47 @@ export async function signInWithEmail(email: string, password: string) {
   return data;
 }
 
+/** Start the password reset flow for a simple email/password account. */
+export async function sendPasswordResetEmail(email: string) {
+  const { data, error } = await supabase.auth.resetPasswordForEmail(email);
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Send an email OTP to a Gmail mailbox (or any email inbox). */
+export async function sendEmailOtp(email: string, shouldCreateUser = true) {
+  const { data, error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser,
+    },
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Verify the email OTP sent to the user. */
+export async function verifyEmailOtp(email: string, token: string) {
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'email',
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Verify a recovery OTP sent for password reset. */
+export async function verifyRecoveryOtp(email: string, token: string) {
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'recovery',
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 /** Silent anonymous sign-in — every device gets a stable identity so rows
     always have a user_id and RLS holds. Called by AuthGate when no session. */
 export async function signInAnonymously() {
@@ -50,6 +91,13 @@ export async function signInAnonymously() {
     Keeps the same user id, so all existing rows stay owned by this user. */
 export async function upgradeToEmailAccount(email: string, password: string) {
   const { data, error } = await supabase.auth.updateUser({ email, password });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Set a password on the currently signed-in user after an OTP verification step. */
+export async function setCurrentUserPassword(password: string) {
+  const { data, error } = await supabase.auth.updateUser({ password });
   if (error) throw new Error(error.message);
   return data;
 }

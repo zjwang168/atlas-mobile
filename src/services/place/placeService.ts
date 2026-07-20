@@ -147,7 +147,7 @@ export async function savePlaces(
     const { data: existing, error: existingError } = await withTimeout(
       supabase
         .from('places')
-        .select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
+        .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
       'Checking existing places timed out',
     );
     if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
@@ -208,7 +208,7 @@ export async function savePlaces(
 
   try {
     const bulk = await withTimeout(
-      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
+      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
       'Saving places timed out',
     );
     data = (bulk.data ?? null) as SavedPlace[] | null;
@@ -236,7 +236,7 @@ export async function savePlaces(
     const insertedRows: SavedPlace[] = [];
     for (const row of rows) {
       const single = await withTimeout(
-        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at'),
+        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
         'Saving place timed out',
       ).catch((singleError) => {
         if (!isRetryableError(singleError)) throw singleError;
@@ -307,7 +307,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before fetch failed:', error));
     const { data, error } = await supabase
       .from('places')
-      .select('id, name, subtitle, category, latitude, longitude, region, photo_url, note, created_at')
+      .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at')
       .order('created_at', { ascending: false });
     if (error) throw new Error(`Failed to fetch places: ${error.message}`);
     const fresh = ((data ?? []) as SavedPlace[]).map(withStableKey);
@@ -354,7 +354,7 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
     summary: row.subtitle ?? '',
     visitStrategy: '',
-    note: row.note ?? undefined,
+    note: undefined,
     savedAt: new Date(row.created_at).toLocaleDateString(),
   };
 }
@@ -384,9 +384,8 @@ export async function deletePlace(id: string): Promise<void> {
 }
 
 /**
- * Update a saved place's note. Writes to the local cache immediately so the
- * UI reflects the change offline, then syncs to Supabase — queued for retry
- * via syncQueue when offline or the request fails.
+ * Update a saved place's note locally. The current Supabase `places` table
+ * does not have a `note` column, so this stays client-side only for now.
  *
  * @param id    The ID of the place to update.
  * @param note  The new note text (empty string clears the note).
@@ -400,19 +399,5 @@ export async function updatePlaceNote(id: string, note: string): Promise<void> {
     current.map((place) => (place.id === id ? { ...place, note: trimmed || null } : place)),
   );
 
-  if (id.startsWith('local-')) {
-    await enqueueWrite(userId, { kind: 'updateNote', placeId: id, note: trimmed });
-    return;
-  }
-
-  try {
-    const { error } = await withTimeout(
-      supabase.from('places').update({ note: trimmed || null }).eq('id', id),
-      'Updating place note timed out',
-    );
-    if (error) throw new Error(`Failed to update place note: ${error.message}`);
-  } catch (error) {
-    if (!isRetryableError(error)) throw error;
-    await enqueueWrite(userId, { kind: 'updateNote', placeId: id, note: trimmed });
-  }
+  // No-op on the server until the DB schema grows a note column.
 }
