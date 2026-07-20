@@ -386,7 +386,7 @@ export default function AccountModal({ visible, onClose }: Props) {
     <>
       <View style={styles.sectionHeaderRow}>
         <BackButton label="Back to sign in" onPress={() => setRootView('login')} />
-        <Text style={styles.subtitle}>Choose the account type you used before.</Text>
+        <Text style={styles.subtitle}>Forget password? Recovery it here.</Text>
       </View>
       {recoveryMode === 'chooser' && (
         <>
