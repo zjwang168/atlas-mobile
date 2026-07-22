@@ -12,6 +12,7 @@
 
 - Places are cache-then-revalidate. `fetchSavedPlaces()` returns cached rows immediately when available, refreshes Supabase in the background, and updates subscribers when fresh rows land.
 - Place saves/deletes/note edits are optimistic. Retryable failures are queued and replayed on foreground or the next fetch/save.
+- Atlases follow the same shape as places: `fetchAtlases()` is cache-then-revalidate, and `createAtlas()` is an optimistic local write — retryable failures are queued (`createAtlas` write kind) and replayed the same way.
 - Plans use local storage as their persistence layer until a server-backed plans API exists.
 
 ## Public API

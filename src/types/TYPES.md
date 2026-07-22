@@ -16,7 +16,7 @@ import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, Da
 | `PlaceLink` | PlaceInfoSection link rows |
 | `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |
 | `DayOfWeek` | `placeHours.ts` — `'monday'` … `'sunday'` |
-| `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`) — no service reads/writes it yet and no mock currently uses this shape; `AtlasDetail.tsx` fills each mock atlas with a slice of `HomeContext.savedPlaces` instead (see `ATLAS.md`) |
+| `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`) — no service reads/writes it yet; `AtlasDetail.tsx` always renders an empty place list until this join is wired up (see `ATLAS.md`) |
 
 ## `route.ts` — parse/route API types
 
@@ -37,7 +37,7 @@ import type { ParseResult, GeocodedLocation, RouteResult, RouteSegment, ChatMess
 import type { Atlas } from '@/types/atlas';
 ```
 
-`Atlas` mirrors the Supabase `atlas` table (renamed from `collections`) — no service reads/writes it yet; `Atlas.tsx` renders from `mock-data/mockAtlases.ts` fixtures instead.
+`Atlas` mirrors the Supabase `atlas` table (renamed from `collections`), including its `emoji` column — read/written by `services/atlas/atlasService.ts`, the same offline-first pattern as `SavedPlace`/`placeService.ts`.
 
 ## Stub type files (not yet populated)
 

@@ -3,6 +3,7 @@ export const CACHE_VERSION = 1;
 export const LOCAL_CACHE_KEYS = {
   savedPlaces: 'savedPlaces',
   savedPlacesIndex: 'savedPlacesIndex',
+  atlases: 'atlases',
   plans: 'plans',
   writeQueue: 'writeQueue',
   deadLetters: 'deadLetters',

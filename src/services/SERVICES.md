@@ -50,6 +50,16 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
 ```
 
+### `atlas/atlasService.ts`
+
+CRUD for the user's atlases, backed by Supabase and the same offline-first local cache as `place/placeService.ts` (see `local/`).
+
+```ts
+export async function createAtlas(title: string): Promise<Atlas>
+export async function fetchAtlases(): Promise<Atlas[]>
+export function subscribeAtlases(listener: (atlases: Atlas[]) => void): () => void
+```
+
 ## Planned
 
 ### `local/` — on-device cache + offline write queue

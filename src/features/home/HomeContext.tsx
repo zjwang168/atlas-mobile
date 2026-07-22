@@ -1,12 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState } from 'react-native';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
+import { createAtlas as createAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
 import type { ParsedPlace } from '../../services/import/importService';
 import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
 import { flushQueue } from '../../services/local/syncQueue';
 import type { SavedPlace } from '../../services/place/placeService';
 import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } from '../../services/place/placeService';
 import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
+import type { Atlas } from '../../types/atlas';
 import type { PlannedPlace } from '../my-plan/create-plan/plan-place/types';
 
 // --- Chat History ---
@@ -85,6 +87,12 @@ type HomeContextValue = {
   deleteSavedPlace: (id: string) => Promise<void>;
   /** 更新已保存地点的备注（本地立即生效，联网后同步到 Supabase） */
   updateSavedPlaceNote: (id: string, note: string) => Promise<void>;
+  /** Loaded atlases (local cache + Supabase sync) */
+  atlases: Atlas[];
+  /** Refreshes the atlas list from Supabase */
+  refreshAtlases: () => Promise<void>;
+  /** Creates a new atlas (local cache first, syncs to Supabase); returns null on failure */
+  createAtlas: (title: string) => Promise<Atlas | null>;
   /** 当前激活的 sidekick */
   activeSidekick: 'none' | 'aiChat' | 'places';
   setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
@@ -119,6 +127,9 @@ const HomeContext = createContext<HomeContextValue>({
   setImportNotification: () => {},
   deleteSavedPlace: async () => {},
   updateSavedPlaceNote: async () => {},
+  atlases: [],
+  refreshAtlases: async () => {},
+  createAtlas: async () => null,
   activeSidekick: 'none',
   setActiveSidekick: () => {},
   userLocation: [-122.3321, 47.6062],
@@ -143,6 +154,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const [tabBarVisible, setTabBarVisible] = useState(true);
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  const [atlases, setAtlases] = useState<Atlas[]>([]);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
   const [deletedChatHistory, setDeletedChatHistory] = useState<ChatHistoryItem[]>([]);
   const [activeHistoryItem, setActiveHistoryItem] = useState<ChatHistoryItem | null>(null);
@@ -166,12 +178,32 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshAtlases = useCallback(async () => {
+    try {
+      const rows = await fetchAtlases();
+      setAtlases(rows);
+    } catch (e) {
+      console.error('[HomeContext] refreshAtlases failed:', e);
+    }
+  }, []);
+
+  const createAtlas = useCallback(async (title: string) => {
+    try {
+      return await createAtlasService(title);
+    } catch (e) {
+      console.error('[HomeContext] createAtlas failed:', e);
+      return null;
+    }
+  }, []);
+
   // 初始加载已保存地点，让地图在启动时显示已保存的标记
   useEffect(() => {
     refreshSavedPlaces();
+    refreshAtlases();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => subscribeSavedPlaces(setSavedPlaces), []);
+  useEffect(() => subscribeAtlases(setAtlases), []);
 
   useEffect(() => {
     let mounted = true;
@@ -208,13 +240,15 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
 
       setSavedPlaces([]);
       refreshSavedPlaces();
+      setAtlases([]);
+      refreshAtlases();
     });
 
     return () => {
       mounted = false;
       data.subscription.unsubscribe();
     };
-  }, [refreshSavedPlaces]);
+  }, [refreshSavedPlaces, refreshAtlases]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -329,6 +363,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       replaceChatHistoryItem,
       deleteSavedPlace,
       updateSavedPlaceNote,
+      atlases,
+      refreshAtlases,
+      createAtlas,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       setChatHistory,
@@ -355,6 +392,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       replaceChatHistoryItem,
       deleteSavedPlace,
       updateSavedPlaceNote,
+      atlases,
+      refreshAtlases,
+      createAtlas,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       selectedPlaceCoordinate,

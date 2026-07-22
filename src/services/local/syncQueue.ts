@@ -1,3 +1,5 @@
+import type { Atlas } from '@/types/atlas';
+import { ATLAS_SELECT_COLUMNS } from '../atlas/atlasShared';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
 import type { SavedPlace } from '../place/placeService';
@@ -37,10 +39,21 @@ type UpdateNoteWrite = {
   note: string;
 };
 
-export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite | UpdateNoteWrite;
+type CreateAtlasWrite = {
+  kind: 'createAtlas';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  localId: string;
+  title: string;
+  emoji: string;
+};
+
+export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite | UpdateNoteWrite | CreateAtlasWrite;
 type NewQueuedWrite = Omit<SavePlacesWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<DeletePlaceWrite, 'id' | 'attempts' | 'createdAt'>
-  | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>;
+  | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<CreateAtlasWrite, 'id' | 'attempts' | 'createdAt'>;
 
 export type DeadLetterWrite = QueuedWrite & {
   failedAt: string;
@@ -165,6 +178,24 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   return saved;
 }
 
+async function insertAtlasOnline(write: CreateAtlasWrite): Promise<Atlas> {
+  const { data, error } = await withTimeout(
+    supabase
+      .from('atlas')
+      .insert({ title: write.title, emoji: write.emoji })
+      .select(ATLAS_SELECT_COLUMNS)
+      .single(),
+  );
+  if (error) throw new Error(`Failed to save queued atlas: ${error.message}`);
+  return data as Atlas;
+}
+
+async function reconcileAtlas(userId: string, localId: string, remoteRow: Atlas): Promise<void> {
+  await updateCached<Atlas[]>(userId, LOCAL_CACHE_KEYS.atlases, (current) => (
+    (current ?? []).map((row) => (row.id === localId ? remoteRow : row))
+  ));
+}
+
 async function deletePlaceOnline(placeId: string): Promise<void> {
   const { error } = await withTimeout(supabase.from('places').delete().eq('id', placeId));
   if (error) throw new Error(`Failed to delete queued place: ${error.message}`);
@@ -232,6 +263,11 @@ async function replayWrite(userId: string, write: QueuedWrite): Promise<void> {
   }
   if (write.kind === 'updateNote') {
     await updateNoteOnline(write.placeId, write.note);
+    return;
+  }
+  if (write.kind === 'createAtlas') {
+    const remoteRow = await insertAtlasOnline(write);
+    await reconcileAtlas(userId, write.localId, remoteRow);
     return;
   }
   await deletePlaceOnline(write.placeId);

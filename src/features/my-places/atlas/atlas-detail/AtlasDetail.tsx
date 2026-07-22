@@ -2,17 +2,19 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, useColorScheme, View } from 'react-native';
 
 import ContentPanel from '../../../../components/content-panel/ContentPanel';
 import { useHome } from '../../../home/HomeContext';
-import { toPlaceDetail } from '../../../../services/place/placeService';
 import type { Atlas } from '@/types/atlas';
 import type { PlaceDetail as PlaceDetailType } from '@/types/place';
-import { mockAtlases, mockAtlasPlaceCounts } from '../../../../../mock-data/mockAtlases';
 import { PlaceCard } from '../../all-places/PlaceCard';
 import AtlasOverviewSection from './AtlasOverviewSection';
+
+// No real `atlas_places` join exists yet, so every atlas always shows an empty
+// place list until that's wired up.
+const NO_PLACES: PlaceDetailType[] = [];
 
 function ItemSeparator() {
   return (
@@ -27,37 +29,20 @@ type AtlasDetailProps = {
 };
 
 export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: AtlasDetailProps) {
-  const { savedPlaces, deleteSavedPlace } = useHome();
+  const { atlases, deleteSavedPlace } = useHome();
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
     if (atlasId) {
-      setAtlas(mockAtlases.find((a) => a.id === atlasId) ?? null);
+      setAtlas(atlases.find((a) => a.id === atlasId) ?? null);
       setIsVisible(true);
     } else {
       setIsVisible(false);
     }
-  }, [atlasId]);
+  }, [atlasId, atlases]);
 
-  // No real `atlas_places` join yet — each mock atlas is filled with a slice of
-  // the current local savedPlaces cache (`mockAtlasPlaceCounts` places per
-  // atlas, offset so atlases don't overlap while there are enough saved places,
-  // wrapping via modulo when there aren't) so every row is a real, resolvable
-  // saved place instead of a fabricated one PlaceCard/PlaceDetail can't look up.
-  const places = useMemo(() => {
-    if (!atlasId || savedPlaces.length === 0) return [];
-    const atlasIds = mockAtlases.map((a) => a.id);
-    const atlasIndex = atlasIds.indexOf(atlasId);
-    if (atlasIndex < 0) return [];
-    const count = mockAtlasPlaceCounts[atlasId] ?? 0;
-    const offset = atlasIds
-      .slice(0, atlasIndex)
-      .reduce((sum, id) => sum + (mockAtlasPlaceCounts[id] ?? 0), 0);
-    return Array.from({ length: count }, (_, i) => savedPlaces[(offset + i) % savedPlaces.length]).map(
-      toPlaceDetail,
-    );
-  }, [atlasId, savedPlaces]);
+  const places = NO_PLACES;
 
   const handleDelete = useCallback((id: string) => {
     deleteSavedPlace(id);
