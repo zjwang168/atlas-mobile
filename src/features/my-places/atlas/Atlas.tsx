@@ -37,6 +37,9 @@ function CategoryPillsRow() {
       <TouchableOpacity>
         <Ionicons name="list-outline" size={20} color={foreground} />
       </TouchableOpacity>
+      <TouchableOpacity>
+        <Ionicons name="add" size={20} color={foreground} />
+      </TouchableOpacity>
     </View>
   );
 }

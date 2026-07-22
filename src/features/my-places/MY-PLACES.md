@@ -14,9 +14,9 @@ src/features/my-places/
   atlas/
     Atlas.tsx            ← curated atlas view
     AtlasCard.tsx        ← square-emoji + title card used in the horizontal row; opens AtlasDetail
-    AtlasDetail.tsx       ← overlay listing the places inside one atlas, triggered via HomeContext
-    AtlasOverviewSection.tsx  ← place count/description + emoji, rendered below AtlasDetail's header
-    AtlasPlaceCard.tsx   ← square-thumbnail + name card, not currently rendered
+    atlas-detail/
+      AtlasDetail.tsx       ← overlay listing the places inside one atlas, triggered via HomeContext
+      AtlasOverviewSection.tsx  ← place count/description + emoji, rendered below AtlasDetail's header
   MY-PLACES.md           ← this document
 ```
 

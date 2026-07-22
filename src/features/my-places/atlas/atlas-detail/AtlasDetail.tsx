@@ -5,13 +5,13 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, useColorScheme, View } from 'react-native';
 
-import ContentPanel from '../../../components/content-panel/ContentPanel';
-import { useHome } from '../../home/HomeContext';
-import { toPlaceDetail } from '../../../services/place/placeService';
+import ContentPanel from '../../../../components/content-panel/ContentPanel';
+import { useHome } from '../../../home/HomeContext';
+import { toPlaceDetail } from '../../../../services/place/placeService';
 import type { Atlas } from '@/types/atlas';
 import type { PlaceDetail as PlaceDetailType } from '@/types/place';
-import { mockAtlases, mockAtlasPlaceCounts } from '../../../../mock-data/mockAtlases';
-import { PlaceCard } from '../all-places/PlaceCard';
+import { mockAtlases, mockAtlasPlaceCounts } from '../../../../../mock-data/mockAtlases';
+import { PlaceCard } from '../../all-places/PlaceCard';
 import AtlasOverviewSection from './AtlasOverviewSection';
 
 function ItemSeparator() {

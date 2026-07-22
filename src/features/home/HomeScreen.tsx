@@ -13,7 +13,7 @@ import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
-import AtlasDetail from '../my-places/atlas/AtlasDetail';
+import AtlasDetail from '../my-places/atlas/atlas-detail/AtlasDetail';
 import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
 import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
