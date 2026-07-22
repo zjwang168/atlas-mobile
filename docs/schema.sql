@@ -34,6 +34,9 @@ CREATE TABLE places (
     external_place_id VARCHAR(255),
     external_source VARCHAR(100),
     visibility VARCHAR(50) DEFAULT 'private',
+    recommended BOOLEAN,
+    photo_url TEXT,
+    note TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -50,7 +53,7 @@ CREATE TABLE place_sources (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE collections (
+CREATE TABLE atlas (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     owner_id UUID REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
@@ -60,15 +63,15 @@ CREATE TABLE collections (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE collection_places (
+CREATE TABLE atlas_places (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    collection_id UUID REFERENCES collections(id) ON DELETE CASCADE,
+    atlas_id UUID REFERENCES atlas(id) ON DELETE CASCADE,
     place_id UUID REFERENCES places(id) ON DELETE CASCADE,
     added_by UUID REFERENCES users(id) ON DELETE SET NULL,
     note TEXT,
     sort_order INT DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (collection_id, place_id)
+    UNIQUE (atlas_id, place_id)
 );
 
 CREATE TABLE projects (
@@ -128,7 +131,7 @@ CREATE TABLE imports (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
-    collection_id UUID REFERENCES collections(id) ON DELETE SET NULL,
+    atlas_id UUID REFERENCES atlas(id) ON DELETE SET NULL,
     input_type VARCHAR(100),
     input_url TEXT,
     input_text TEXT,
@@ -191,9 +194,9 @@ CREATE INDEX idx_places_category ON places(category);
 CREATE INDEX idx_place_sources_place_id ON place_sources(place_id);
 CREATE INDEX idx_place_sources_user_id ON place_sources(user_id);
 
-CREATE INDEX idx_collections_owner_id ON collections(owner_id);
-CREATE INDEX idx_collection_places_collection_id ON collection_places(collection_id);
-CREATE INDEX idx_collection_places_place_id ON collection_places(place_id);
+CREATE INDEX idx_atlas_owner_id ON atlas(owner_id);
+CREATE INDEX idx_atlas_places_atlas_id ON atlas_places(atlas_id);
+CREATE INDEX idx_atlas_places_place_id ON atlas_places(place_id);
 
 CREATE INDEX idx_projects_owner_id ON projects(owner_id);
 CREATE INDEX idx_project_members_project_id ON project_members(project_id);

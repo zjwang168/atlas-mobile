@@ -1,3 +1,6 @@
+import type { Atlas } from '@/types/atlas';
+import type { AtlasPlace } from '@/types/place';
+import { ATLAS_PLACES_SELECT_COLUMNS, ATLAS_SELECT_COLUMNS } from '../atlas/atlasShared';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
 import type { SavedPlace } from '../place/placeService';
@@ -37,10 +40,49 @@ type UpdateNoteWrite = {
   note: string;
 };
 
-export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite | UpdateNoteWrite;
+type CreateAtlasWrite = {
+  kind: 'createAtlas';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  localId: string;
+  title: string;
+  emoji: string;
+};
+
+type AddAtlasPlacesWrite = {
+  kind: 'addAtlasPlaces';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  atlasId: string;
+  localRows: AtlasPlace[];
+};
+
+type RemoveAtlasPlaceWrite = {
+  kind: 'removeAtlasPlace';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  joinRowId: string;
+};
+
+type DeleteAtlasWrite = {
+  kind: 'deleteAtlas';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  atlasId: string;
+};
+
+export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite | UpdateNoteWrite | CreateAtlasWrite | AddAtlasPlacesWrite | RemoveAtlasPlaceWrite | DeleteAtlasWrite;
 type NewQueuedWrite = Omit<SavePlacesWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<DeletePlaceWrite, 'id' | 'attempts' | 'createdAt'>
-  | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>;
+  | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<CreateAtlasWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<AddAtlasPlacesWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<RemoveAtlasPlaceWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<DeleteAtlasWrite, 'id' | 'attempts' | 'createdAt'>;
 
 export type DeadLetterWrite = QueuedWrite & {
   failedAt: string;
@@ -165,6 +207,52 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   return saved;
 }
 
+async function insertAtlasOnline(write: CreateAtlasWrite): Promise<Atlas> {
+  const { data, error } = await withTimeout(
+    supabase
+      .from('atlas')
+      .insert({ title: write.title, emoji: write.emoji })
+      .select(ATLAS_SELECT_COLUMNS)
+      .single(),
+  );
+  if (error) throw new Error(`Failed to save queued atlas: ${error.message}`);
+  return data as Atlas;
+}
+
+async function reconcileAtlas(userId: string, localId: string, remoteRow: Atlas): Promise<void> {
+  await updateCached<Atlas[]>(userId, LOCAL_CACHE_KEYS.atlases, (current) => (
+    (current ?? []).map((row) => (row.id === localId ? remoteRow : row))
+  ));
+}
+
+async function deleteAtlasOnline(atlasId: string): Promise<void> {
+  const { error } = await withTimeout(supabase.from('atlas').delete().eq('id', atlasId));
+  if (error) throw new Error(`Failed to delete queued atlas: ${error.message}`);
+}
+
+async function insertAtlasPlacesOnline(write: AddAtlasPlacesWrite): Promise<AtlasPlace[]> {
+  const rows = write.localRows.map(({ atlas_id, place_id, sort_order }) => ({ atlas_id, place_id, sort_order }));
+  const { data, error } = await withTimeout(
+    supabase.from('atlas_places').insert(rows).select(ATLAS_PLACES_SELECT_COLUMNS),
+  );
+  if (error) throw new Error(`Failed to save queued atlas places: ${error.message}`);
+  return (data ?? []) as AtlasPlace[];
+}
+
+async function deleteAtlasPlaceOnline(joinRowId: string): Promise<void> {
+  const { error } = await withTimeout(supabase.from('atlas_places').delete().eq('id', joinRowId));
+  if (error) throw new Error(`Failed to remove queued atlas place: ${error.message}`);
+}
+
+async function reconcileAtlasPlaces(userId: string, localRows: AtlasPlace[], remoteRows: AtlasPlace[]): Promise<void> {
+  await updateCached<AtlasPlace[]>(userId, LOCAL_CACHE_KEYS.atlasPlaces, (current) => (
+    (current ?? []).map((row) => {
+      const localIndex = localRows.findIndex((local) => local.id === row.id);
+      return localIndex >= 0 ? (remoteRows[localIndex] ?? row) : row;
+    })
+  ));
+}
+
 async function deletePlaceOnline(placeId: string): Promise<void> {
   const { error } = await withTimeout(supabase.from('places').delete().eq('id', placeId));
   if (error) throw new Error(`Failed to delete queued place: ${error.message}`);
@@ -226,6 +314,50 @@ async function removeCancelledLocalSave(userId: string, deleteWrite: DeletePlace
   return queue.filter((write) => write.id !== saveWrite.id && write.id !== deleteWrite.id);
 }
 
+/**
+ * If a queued removal targets a local `atlas_places` row that was never
+ * synced (still waiting in a queued `addAtlasPlaces` write), drop that row
+ * from the pending insert instead of replaying the removal online — mirrors
+ * `removeCancelledLocalSave` for places, so a place added then removed while
+ * offline doesn't ghost-reappear once the queue flushes.
+ */
+async function removeCancelledLocalAtlasPlace(removeWrite: RemoveAtlasPlaceWrite, queue: QueuedWrite[]): Promise<QueuedWrite[] | null> {
+  if (!isLocalId(removeWrite.joinRowId)) return null;
+  const addWrite = queue.find(
+    (write): write is AddAtlasPlacesWrite =>
+      write.kind === 'addAtlasPlaces' && write.localRows.some((row) => row.id === removeWrite.joinRowId),
+  );
+  if (!addWrite) return null;
+
+  const remainingRows = addWrite.localRows.filter((row) => row.id !== removeWrite.joinRowId);
+  const withoutRemoveWrite = queue.filter((write) => write.id !== removeWrite.id);
+  if (remainingRows.length === 0) {
+    return withoutRemoveWrite.filter((write) => write.id !== addWrite.id);
+  }
+  return withoutRemoveWrite.map((write) => (
+    write.id === addWrite.id ? { ...addWrite, localRows: remainingRows } : write
+  ));
+}
+
+/**
+ * If a queued deletion targets a local atlas that was never synced (still
+ * waiting in a queued `createAtlas` write), drop the create instead of
+ * replaying a delete for an atlas Supabase never saw — mirrors
+ * `removeCancelledLocalSave` for places.
+ */
+async function removeCancelledLocalAtlas(userId: string, deleteWrite: DeleteAtlasWrite, queue: QueuedWrite[]): Promise<QueuedWrite[] | null> {
+  if (!isLocalId(deleteWrite.atlasId)) return null;
+  const createWrite = queue.find(
+    (write): write is CreateAtlasWrite => write.kind === 'createAtlas' && write.localId === deleteWrite.atlasId,
+  );
+  if (!createWrite) return null;
+
+  await updateCached<Atlas[]>(userId, LOCAL_CACHE_KEYS.atlases, (current) => (
+    (current ?? []).filter((row) => row.id !== deleteWrite.atlasId)
+  ));
+  return queue.filter((write) => write.id !== createWrite.id && write.id !== deleteWrite.id);
+}
+
 async function replayWrite(userId: string, write: QueuedWrite): Promise<void> {
   if (write.kind === 'savePlaces') {
     const remoteRows = await insertPlacesOnline(write);
@@ -234,6 +366,24 @@ async function replayWrite(userId: string, write: QueuedWrite): Promise<void> {
   }
   if (write.kind === 'updateNote') {
     await updateNoteOnline(write.placeId, write.note);
+    return;
+  }
+  if (write.kind === 'createAtlas') {
+    const remoteRow = await insertAtlasOnline(write);
+    await reconcileAtlas(userId, write.localId, remoteRow);
+    return;
+  }
+  if (write.kind === 'addAtlasPlaces') {
+    const remoteRows = await insertAtlasPlacesOnline(write);
+    await reconcileAtlasPlaces(userId, write.localRows, remoteRows);
+    return;
+  }
+  if (write.kind === 'removeAtlasPlace') {
+    await deleteAtlasPlaceOnline(write.joinRowId);
+    return;
+  }
+  if (write.kind === 'deleteAtlas') {
+    await deleteAtlasOnline(write.atlasId);
     return;
   }
   await deletePlaceOnline(write.placeId);
@@ -250,7 +400,11 @@ export async function flushQueue(userId: string): Promise<{ success: boolean; re
     for (const write of [...queue]) {
       const cancelled = write.kind === 'deletePlace'
         ? await removeCancelledLocalSave(userId, write, queue)
-        : null;
+        : write.kind === 'removeAtlasPlace'
+          ? await removeCancelledLocalAtlasPlace(write, queue)
+          : write.kind === 'deleteAtlas'
+            ? await removeCancelledLocalAtlas(userId, write, queue)
+            : null;
       if (cancelled) {
         queue = cancelled;
         await writeQueue(userId, queue);

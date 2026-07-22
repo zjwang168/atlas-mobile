@@ -47,4 +47,29 @@ export type PlaceDetail = Place & {
   phoneNumber?: string;
   links?: PlaceLink[];
   savedAt: string;
+  // Below: mirror `places` table columns not yet surfaced by any UI — optional
+  // and unwired until a feature needs them.
+  category?: string;
+  description?: string;
+  aiSummary?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  visibility?: string;
+  recommended?: boolean;
+  externalPlaceId?: string;
+  externalSource?: string;
+  createdBy?: string;
+  updatedAt?: string;
+};
+
+/** Row shape of the Supabase `atlas_places` join table (renamed from `collection_places`). */
+export type AtlasPlace = {
+  id: string;
+  atlas_id: string;
+  place_id: string;
+  added_by: string | null;
+  note: string | null;
+  sort_order: number;
+  created_at: string;
 };

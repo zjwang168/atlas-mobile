@@ -16,7 +16,7 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
 
   return (
     <View className="px-4 pt-1">
-      <View className="flex-row items-start gap-3">
+      <View className="flex-row items-stretch gap-3">
         <View className="h-28 flex-1 justify-between pt-1">
           <View className="gap-0.5">
             <Text className="text-sm leading-5 text-text-tertiary">{place.address}</Text>

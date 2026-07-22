@@ -88,6 +88,8 @@ When `routeGeoJSON` is provided, a blue polyline is drawn via `MapboxGL.ShapeSou
 
 The camera is controlled programmatically via a `MapboxGL.Camera` ref. `centerCoordinate` and `zoomLevel` changes trigger a smooth 500ms re-center. `HomeScreen` passes the mean of all route points as `centerCoordinate` when a route is active.
 
+`HomeScreen` derives the `padding` prop's `paddingBottom` from the active bottom panel's last settled snap group state (via `ContentPanel`'s exported `SNAP_HEIGHTS`), not a fixed constant — so a discrete recenter (e.g. selecting a different marker while `PlaceDetail` is open at a non-default snap height) keeps the map's visible focus matched to whatever height the panel currently occupies, whether `compact`, `default`, or `full`. Continuous drag tracking still goes through `setPaddingBottom` on the ref.
+
 ## Map Style
 
 Currently `MapboxGL.StyleURL.Street`. Other options: `Outdoors`, `Light`, `Dark`, `Satellite`, `SatelliteStreet`, or a custom `mapbox://styles/…` URL.

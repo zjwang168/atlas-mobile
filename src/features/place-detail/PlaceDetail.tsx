@@ -19,12 +19,12 @@ import PlaceOverviewSection from './place-detail-sections/PlaceOverviewSection';
 type PlaceDetailProps = {
   placeId: string | null;
   onDismiss: () => void;
-  onBack?: () => void;
   onEdit: (place: PlaceDetailType) => void;
+  snapGroup?: string;
   onHeightChange?: (height: number) => void;
 };
 
-export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdit, onHeightChange }: PlaceDetailProps) {
+export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapGroup, onHeightChange }: PlaceDetailProps) {
   const { savedPlaces } = useHome();
   const [place, setPlace] = useState<PlaceDetailType | null>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -49,7 +49,7 @@ export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdi
 
   return (
     <ContentPanel
-      initialSnap="default"
+      snapGroup={snapGroup}
       visible={isVisible}
       onHidden={() => setPlace(null)}
       zIndex={40}
@@ -93,7 +93,6 @@ export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdi
             <PlaceHeader
               place={place}
               onDismiss={onDismiss}
-              onBack={onBack}
             />
             <ScrollView
               bounces
@@ -115,35 +114,18 @@ export default function PlaceDetail({ placeId, onDismiss, onBack, onEdit: _onEdi
 function PlaceHeader({
   place,
   onDismiss,
-  onBack,
 }: {
   place: PlaceDetailType;
   onDismiss: () => void;
-  onBack?: () => void;
 }) {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
 
   return (
     <View className="flex-row items-center px-4 pb-2 pt-1">
-      {/* Left: back button */}
-      {onBack ? (
-        <Button
-          accessibilityLabel="Go back"
-          onPress={onBack}
-          size="icon"
-          variant="ghost"
-          className="h-12 w-12 rounded-full bg-background"
-        >
-          <Ionicons name="arrow-back" size={24} color={foreground} />
-        </Button>
-      ) : (
-        <View className="h-12 w-12" />
-      )}
-
       {/* Center: place name title */}
-      <Text className="flex-1 text-center text-lg font-semibold text-foreground" numberOfLines={1}>
-        Place Details
+      <Text className="flex-1 h2 text-foreground" numberOfLines={1}>
+        {place.name}
       </Text>
 
       {/* Right: close button */}

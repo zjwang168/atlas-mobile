@@ -50,6 +50,31 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
 ```
 
+### `atlas/atlasService.ts`
+
+CRUD for the user's atlases, backed by Supabase and the same offline-first local cache as `place/placeService.ts` (see `local/`).
+
+```ts
+export async function createAtlas(title: string): Promise<Atlas>
+export async function deleteAtlas(id: string): Promise<void>  // local cache first, syncs to Supabase; atlas_places rows cascade server-side
+export async function fetchAtlases(): Promise<Atlas[]>
+export function subscribeAtlases(listener: (atlases: Atlas[]) => void): () => void
+```
+
+### `atlas/atlasPlacesService.ts`
+
+CRUD for atlas ↔ place membership (the `atlas_places` join table), backed by Supabase and the same offline-first local cache as `place/placeService.ts` (see `local/`). The local cache holds every `atlas_places` row for the user across all atlases; callers filter by `atlas_id`.
+
+```ts
+export async function fetchAtlasPlaces(): Promise<AtlasPlace[]>
+export async function addPlacesToAtlas(atlasId: string, placeIds: string[]): Promise<AtlasPlace[]>  // optimistic local insert, syncs to Supabase; skips places already in the atlas
+export async function removePlaceFromAtlas(joinRowId: string): Promise<void>  // deletes the atlas_places row only (by its own id, not the place id); local cache first, syncs to Supabase
+export async function removeAtlasPlacesForAtlas(atlasId: string): Promise<void>  // local-cache-only cleanup called by atlasService.deleteAtlas; no Supabase write since atlas_places is ON DELETE CASCADE
+export function subscribeAtlasPlaces(listener: (rows: AtlasPlace[]) => void): () => void
+```
+
+`HomeContext` wraps `addPlacesToAtlas` / `removePlaceFromAtlas` / `deleteAtlas` (on `useHome()`) with an `Alert.alert` on failure, unlike the other `HomeContext` write wrappers (`deleteSavedPlace`, `createAtlas`), which only `console.error` — call the `useHome()` versions from feature code rather than these service functions directly.
+
 ## Planned
 
 ### `local/` — on-device cache + offline write queue

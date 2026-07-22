@@ -59,7 +59,7 @@ When working on `MyPlan`, these docs cover the two major flows it hosts inline:
 
 - **Create Plan wizard** → `src/features/my-plan/create-plan/CREATE-PLAN.md`
 - **Plan Detail overlay** → `src/features/my-plan/plan-detail/PLAN-DETAIL.md`
-- **Add Place to Plan overlay** → `src/features/my-plan/add-place-to-plan/ADD-PLACE-TO-PLAN.md`
+- **Add Place overlay** (shared, cross-feature) → `src/features/add-place/ADD-PLACE.md`
 
 ## Dependencies
 

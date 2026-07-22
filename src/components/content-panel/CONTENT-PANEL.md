@@ -2,7 +2,7 @@
 
 ## Overview
 
-A draggable bottom sheet that snaps to three heights (`compact`, `default`, `full`). Supports conditional visibility (slide-in / slide-out) and an optional separate compact-mode view. Used by `HomePanel`, `PlaceDetail`, `PlanDetail`, and `AddPlaceToPlan`.
+A draggable bottom sheet that snaps to three heights (`compact`, `default`, `full`). Supports conditional visibility (slide-in / slide-out) and an optional separate compact-mode view. Used by `HomePanel`, `PlaceDetail`, `PlanDetail`, and `AddPlace`.
 
 ## File
 
@@ -21,6 +21,8 @@ type ContentPanelProps = {
    */
   compactContent?: (props: CompactContentRenderProps) => React.ReactNode;
   initialSnap?: SnapState;           // default: 'default'
+  /** Shared settled snap memory key. Ignored when snapState is provided. */
+  snapGroup?: string;
   /**
    * Controlled snap state. Animates to this value when it changes.
    * Internal gestures still work; call onSnapStateChange to sync.
@@ -73,7 +75,23 @@ type CompactContentRenderProps = {
 | `tall` | `SCREEN_HEIGHT * 0.70` | CreatePlan wizard height |
 | `full` | `SCREEN_HEIGHT` | Adds `paddingTop: insets.top` |
 
+`export const SNAP_HEIGHTS: Record<SnapState, number>` exposes this table so callers that need a panel's approximate pixel height from its snap state alone (without mounting a listener) don't hardcode a second copy — see `HomeScreen.tsx`'s map padding sizing.
+
 On release, the panel always snaps to the nearest snap point by absolute pixel distance — there is no free-height zone.
+
+Animated `snapTo` changes update the internal target immediately, but React-visible `snapState` / `onSnapStateChange` are committed after the height spring finishes — this keeps controlled-mode updates from blocking the first frames of a new snap animation. `snapGroup` memory is broadcast one frame later (via `requestAnimationFrame`, not deferred all the way to spring completion): broadcasting synchronously on the same tick that starts the spring forces every other group member to re-render on that tick, which stalls the spring's first frame (its updates run on the JS thread too, since `useNativeDriver: false`); waiting for full settle instead would leave a panel that becomes visible mid-spring reading a stale group value until it cuts over. The one-frame defer splits the difference.
+
+## Snap Groups
+
+`ContentPanelSnapProvider` owns shared snap memory for named panel groups. A `ContentPanel` with `snapGroup="home-main"` initializes from that group's last settled snap state and writes its new target back to the group one frame after `snapTo` is called (see Snap Heights for why not synchronously or at spring completion). This lets sibling panels inherit the same resting state without using React state as the animation driver.
+
+When a *different* panel in the group settles a new snap, the rest of the group resyncs to it instantly (no spring) — only the panel whose own gesture or override actually drove the change animates. This keeps a panel that's about to become visible already caught up, instead of its entrance transition racing a catch-up spring on its height.
+
+Priority order:
+
+1. `snapState` prop, when provided, explicitly controls the panel.
+2. `snapGroup`, when provided, inherits and updates the group's last settled snap.
+3. `initialSnap` is used when neither controlled state nor group memory exists.
 
 ## Mount behaviour
 
@@ -112,6 +130,7 @@ The content-area drag responder also ignores touch-moves while a `snapTo`-driven
 
 ```tsx
 <ContentPanel
+  snapGroup="home-main"
   visible={isOpen}
   onHidden={onDismiss}
   compactContent={({ snapTo }) => (

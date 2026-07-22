@@ -30,6 +30,24 @@ Full token definitions are in `tokens.css`. Quick reference:
 | `--text-tertiary` | `text-text-tertiary` | neutral-500 — Captions, hints |
 | `--handle` | `bg-handle` | neutral-300/800 — Drag handle pill |
 
+### Typography utilities
+
+`tokens.css` also defines `@utility` classes mirroring `src/theme/typography.ts`'s tokens, usable directly as a `className` (e.g. `className="h2"`, `className="bodySmallEmphasis"`) instead of `style={typography.h2}`. Keep both in sync when either changes.
+
+| Token | className / `typography.*` key | Size / line-height / weight |
+|---|---|---|
+| Display | `display` | 28px / 34px / 600 |
+| Heading/H2 | `h2` | 22px / 28px / 600, -0.11px tracking |
+| Heading/H3 | `h3` | 17px / 22px / 600 |
+| Heading/Subheader | `subheader` | 15px / 20px / 600 |
+| Body | `body` | 16px / 24px / 400 |
+| Body Emphasis | `bodyEmphasis` | 16px / 24px / 600 |
+| Body Small | `bodySmall` | 14px / 20px / 400 |
+| Body Small Emphasis | `bodySmallEmphasis` | 14px / 20px / 600 |
+| Caption | `caption` | 13px / 18px / 400 |
+| Caption Emphasis | `captionEmphasis` | 13px / 18px / 600 |
+| Label/Tab | `labelTab` | 11px / 14px / 500 |
+
 ## Adding New Tokens
 
 1. Add the CSS variable to both `:root` (light) and `.dark` blocks in `tokens.css`.

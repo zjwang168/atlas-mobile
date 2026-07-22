@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   FlatList,
   Image,
@@ -13,22 +13,33 @@ import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import ContentPanel from '@/components/content-panel/ContentPanel';
-import { mockPlaceDetails } from '../../../../mock-data/mockPlaceDetails';
-import type { PlannedPlace } from '../create-plan/plan-place/types';
-import { newPlannedPlace } from '../create-plan/plan-place/types';
+import { useHome } from '@/features/home/HomeContext';
+import { toPlaceDetail } from '@/services/place/placeService';
+import type { PlaceDetail } from '@/types/place';
 
 const FILTERS = ['Recommended', 'Best for Summer', 'Nearby', 'Not Yet Visited'];
 
-type AddPlaceToPlanProps = {
+type AddPlaceProps = {
   visible: boolean;
   onDismiss: () => void;
-  onSelect: (places: PlannedPlace[]) => void;
+  onSelect: (places: PlaceDetail[]) => void;
+  snapGroup?: string;
+  onHeightChange?: (height: number) => void;
+  /** Place ids to hide from the picker — e.g. places already in the target atlas. Omit to show every saved place (callers like the plan flow want duplicates selectable). */
+  excludeIds?: string[];
 };
 
-export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlaceToPlanProps) {
+export default function AddPlace({ visible, onDismiss, onSelect, snapGroup, onHeightChange, excludeIds }: AddPlaceProps) {
+  const { savedPlaces } = useHome();
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<string | null>('Recommended');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const places = useMemo(() => {
+    const excluded = excludeIds ? new Set(excludeIds) : null;
+    const detailed = savedPlaces.map(toPlaceDetail);
+    return excluded ? detailed.filter((p) => !excluded.has(p.id)) : detailed;
+  }, [savedPlaces, excludeIds]);
 
   function resetState() {
     setSearch('');
@@ -36,7 +47,7 @@ export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlac
     setSelected(new Set());
   }
 
-  const results = mockPlaceDetails.filter((p) => {
+  const results = places.filter((p) => {
     const q = search.toLowerCase();
     return p.name.toLowerCase().includes(q) || p.subtitle.toLowerCase().includes(q);
   });
@@ -51,9 +62,7 @@ export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlac
   }
 
   function handleConfirm() {
-    const chosen = mockPlaceDetails
-      .filter((p) => selected.has(p.id))
-      .map((p) => newPlannedPlace(p));
+    const chosen = places.filter((p) => selected.has(p.id));
     onSelect(chosen);
   }
 
@@ -70,6 +79,8 @@ export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlac
       onHidden={resetState}
       initialSnap="default"
       zIndex={50}
+      snapGroup={snapGroup}
+      onHeightChange={onHeightChange}
     >
       {({ reportScrollY, bottomInset }) => (
         <KeyboardAvoidingView
@@ -182,6 +193,11 @@ export default function AddPlaceToPlan({ visible, onDismiss, onSelect }: AddPlac
               paddingBottom: bottomInset + 16,
             }}
             ItemSeparatorComponent={() => <View className="h-px bg-border" />}
+            ListEmptyComponent={
+              <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+                <Text className="text-sm text-text-tertiary">No saved places yet</Text>
+              </View>
+            }
             renderItem={({ item }) => {
               const isSelected = selected.has(item.id);
               return (

@@ -13,6 +13,7 @@ const BOTTOM_BAR_CLEARANCE = 84;
 
 type HomePanelProps = {
   activeTab: string;
+  snapGroup?: string;
   visible: boolean;
   height?: number;
   defaultSnapHeight?: number;
@@ -22,6 +23,7 @@ type HomePanelProps = {
 
 function HomePanel({
   activeTab,
+  snapGroup,
   visible,
   height,
   defaultSnapHeight,
@@ -38,7 +40,7 @@ function HomePanel({
   return (
     <>
     <ContentPanel
-      initialSnap="default"
+      snapGroup={snapGroup}
       visible={visible}
       height={height}
       defaultSnapHeight={defaultSnapHeight}

@@ -68,9 +68,9 @@ PlaceDetail (ContentPanel)
 │       └── share / map / dismiss buttons
 │
 └── [default / full snap]
-    ├── PlaceHeader            ← name + dismiss button
+    ├── PlaceHeader            ← place.name title + dismiss button
     └── ScrollView
-        ├── PlaceOverviewSection   ← thumbnail, address, open status, action row
+        ├── PlaceOverviewSection   ← thumbnail, address, open status, action row (fills height to align buttons with the thumbnail bottom)
         └── PlaceInfoSection       ← tags, summary, collections, visit strategy, links, note
 ```
 
@@ -86,13 +86,14 @@ In `PlaceInfoSection`, **Tags** and **Note** always render their section header 
 type PlaceDetailProps = {
   placeId: string | null;        // null = hidden; non-null = slide up and show
   onDismiss: () => void;
-  onBack?: () => void;           // when provided, shows a back button instead of leaving the corner empty
   onEdit: (place: PlaceDetail) => void;
   onHeightChange?: (height: number) => void;  // reports live panel height so the caller can pad the map to match, same as HomePanel
 };
 ```
 
 Changing `placeId` from `null → string` triggers the enter animation and looks the place up in `HomeContext.savedPlaces` (converted via `toPlaceDetail`). If no saved place matches the id, a "Place not found" state is shown instead. Changing back to `null` triggers the dismiss animation.
+
+`PlaceDetail` is opened via `HomeContext`'s `placeDetail` overlay (`{ kind: 'placeDetail'; placeId; returnTo?: Overlay }`, see `HOME.md`). `HomeScreen` owns the single `<PlaceDetail>` instance and restores `overlay` to `returnTo` on dismiss instead of always going to `{ kind: 'none' }`, so closing the panel returns to whichever panel opened it (e.g. `AtlasDetail`) rather than the home screen. The trigger is responsible for passing its own current overlay as `returnTo` — see `PlaceCard.tsx` (`../my-places/all-places/PlaceCard.tsx`), the only place that opens this overlay.
 
 ## Hours Utility (`utils/placeHours.ts`)
 

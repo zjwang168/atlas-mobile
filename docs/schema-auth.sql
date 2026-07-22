@@ -7,7 +7,7 @@
 -- Ownership columns (DEFAULT auth.uid(): frontend direct inserts
 -- are stamped automatically; backend acts as user via JWT pass-through)
 ALTER TABLE places            ADD COLUMN user_id UUID REFERENCES auth.users(id) DEFAULT auth.uid();
-ALTER TABLE collections       ADD COLUMN user_id UUID REFERENCES auth.users(id) DEFAULT auth.uid();
+ALTER TABLE atlas             ADD COLUMN user_id UUID REFERENCES auth.users(id) DEFAULT auth.uid();
 ALTER TABLE conversations     ALTER COLUMN user_id SET DEFAULT auth.uid();
 ALTER TABLE long_term_memory  ALTER COLUMN user_id SET DEFAULT auth.uid();
 -- (legacy rows backfilled to the project owner's uid)
@@ -22,8 +22,8 @@ CREATE POLICY "own conversations" ON conversations FOR ALL
 ALTER TABLE long_term_memory  ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "own memories" ON long_term_memory FOR ALL
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-ALTER TABLE collections       ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "own collections" ON collections FOR ALL
+ALTER TABLE atlas             ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "own atlas" ON atlas FOR ALL
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 
 -- RLS: child tables — access via owned parent
@@ -43,10 +43,10 @@ ALTER TABLE conversation_summaries ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "via parent conversation" ON conversation_summaries FOR ALL
   USING (EXISTS (SELECT 1 FROM conversations c WHERE c.id = conversation_id AND c.user_id = auth.uid()))
   WITH CHECK (EXISTS (SELECT 1 FROM conversations c WHERE c.id = conversation_id AND c.user_id = auth.uid()));
-ALTER TABLE collection_places      ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "via parent collection" ON collection_places FOR ALL
-  USING (EXISTS (SELECT 1 FROM collections col WHERE col.id = collection_id AND col.user_id = auth.uid()))
-  WITH CHECK (EXISTS (SELECT 1 FROM collections col WHERE col.id = collection_id AND col.user_id = auth.uid()));
+ALTER TABLE atlas_places            ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "via parent atlas" ON atlas_places FOR ALL
+  USING (EXISTS (SELECT 1 FROM atlas col WHERE col.id = atlas_id AND col.user_id = auth.uid()))
+  WITH CHECK (EXISTS (SELECT 1 FROM atlas col WHERE col.id = atlas_id AND col.user_id = auth.uid()));
 
 -- Notes:
 -- * Anonymous users share the `authenticated` role; per-uid policies
