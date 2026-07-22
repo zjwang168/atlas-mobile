@@ -8,7 +8,7 @@ import { DndProvider } from './dnd/DndProvider';
 import FlexiblePlaceField from './flexible-place-field/FlexiblePlaceField';
 import DateRangeField from './date-range-field/DateRangeField';
 import { useHome } from '../../../home/HomeContext';
-import { type PlacesState, type SlotKey, type PlannedPlace, type TimeSlot } from './types';
+import { type PlacesState, type SlotKey, type PlannedPlace, type TimeSlot, newPlannedPlace } from './types';
 import { savePlan, type SavedPlan } from '../savePlan';
 
 type PlanPlaceProps = {
@@ -52,8 +52,10 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
   const openForFree = useCallback(() => {
     setOverlay({
-      kind: 'addPlaceToPlan',
-      onSelect: (newPlaces) => {
+      kind: 'addPlace',
+      returnTo: { kind: 'createPlan' },
+      onSelect: (selectedPlaces) => {
+        const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl }));
         updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
       },
     });
@@ -61,8 +63,10 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
 
   const openForDate = useCallback((date: string, timeSlot: TimeSlot) => {
     setOverlay({
-      kind: 'addPlaceToPlan',
-      onSelect: (newPlaces) => {
+      kind: 'addPlace',
+      returnTo: { kind: 'createPlan' },
+      onSelect: (selectedPlaces) => {
+        const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl }));
         updatePlaces((prev) => {
           const existing = prev.byDate[date] ?? [];
           const tagged = newPlaces.map((p) => ({ ...p, timeSlot }));

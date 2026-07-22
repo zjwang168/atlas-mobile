@@ -43,7 +43,7 @@ function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; o
     own props actually changed do. */
 export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
-  const { setOverlay } = useHome();
+  const { overlay, setOverlay } = useHome();
 
   const handleDelete = () => {
     swipeableRef.current?.close();
@@ -52,7 +52,9 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
 
   const handleOpenDetail = () => {
     onPress?.(item);
-    setOverlay({ kind: 'placeDetail', placeId: item.id });
+    // Remember whatever panel is currently open (e.g. AtlasDetail, or 'none'
+    // for the plain My Places list) so PlaceDetail can return to it on close.
+    setOverlay({ kind: 'placeDetail', placeId: item.id, returnTo: overlay });
   };
 
   return (

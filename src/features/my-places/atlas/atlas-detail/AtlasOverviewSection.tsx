@@ -8,9 +8,11 @@ import type { Atlas } from '@/types/atlas';
 type AtlasOverviewSectionProps = {
   atlas: Atlas;
   placeCount: number;
+  onAddPress?: () => void;
+  onDeletePress?: () => void;
 };
 
-export default function AtlasOverviewSection({ atlas, placeCount }: AtlasOverviewSectionProps) {
+export default function AtlasOverviewSection({ atlas, placeCount, onAddPress, onDeletePress }: AtlasOverviewSectionProps) {
   return (
     <View className="px-4 pt-1">
       <View className="flex-row items-stretch gap-3">
@@ -25,8 +27,10 @@ export default function AtlasOverviewSection({ atlas, placeCount }: AtlasOvervie
           </View>
 
           <View className="flex-row gap-2">
+            <ActionButton icon="add" onPress={onAddPress} />
             <ActionButton icon="share-outline" />
             <ActionButton icon="pencil-outline" />
+            <ActionButton icon="trash-outline" onPress={onDeletePress} />
             <ActionButton icon="ellipsis-horizontal" />
           </View>
         </View>
@@ -41,14 +45,16 @@ export default function AtlasOverviewSection({ atlas, placeCount }: AtlasOvervie
 
 function ActionButton({
   icon,
+  onPress,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
+  onPress?: () => void;
 }) {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
 
   return (
-    <Button size="icon" variant="ghost" className="rounded-full bg-background">
+    <Button size="icon" variant="ghost" className="rounded-full bg-background" onPress={onPress}>
       <Ionicons name={icon} size={20} color={foreground} />
     </Button>
   );

@@ -8,7 +8,7 @@ import type { SavedPlace } from '../../services/place/placeService';
 import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
 import { SNAP_HEIGHTS } from '../../components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '../../components/content-panel/ContentPanelSnapProvider';
-import AddPlaceToPlan from '../my-plan/add-place-to-plan/AddPlaceToPlan';
+import AddPlace from '../add-place/AddPlace';
 import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
@@ -161,9 +161,9 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
   // Any bottom panel that should push the map center up — the main pager panel,
-  // the PlaceDetail overlay, or the AtlasDetail overlay — drives the same
-  // padding-tracking path.
-  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail';
+  // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
+  // drives the same padding-tracking path.
+  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
@@ -337,8 +337,12 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
         <DebugPanel onClose={() => setOverlay({ kind: 'none' })} />
       )}
 
-      {/* CreatePlan full-screen overlay — triggered by "Add to plan" from SaveScreen */}
-      {overlay.kind === 'createPlan' && (
+      {/* CreatePlan full-screen overlay — triggered by "Add to plan" from SaveScreen.
+          Stays mounted underneath the AddPlace overlay when AddPlace was opened
+          from within the wizard (returnTo.kind === 'createPlan'), so returning
+          from AddPlace doesn't remount CreatePlan and trigger its mount-time
+          reset() — see CreatePlan.tsx. */}
+      {(overlay.kind === 'createPlan' || (overlay.kind === 'addPlace' && overlay.returnTo?.kind === 'createPlan')) && (
         <View style={StyleSheet.absoluteFill}>
           <CreatePlan
             onClose={() => {
@@ -356,7 +360,7 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
 
       <PlaceDetail
         placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
-        onDismiss={() => setOverlay({ kind: 'none' })}
+        onDismiss={() => setOverlay(overlay.kind === 'placeDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
         onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
@@ -373,13 +377,17 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
         onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
       />
 
-      <AddPlaceToPlan
-        visible={overlay.kind === 'addPlaceToPlan'}
-        onDismiss={() => setOverlay({ kind: 'none' })}
+      <AddPlace
+        visible={overlay.kind === 'addPlace'}
+        onDismiss={() => setOverlay(overlay.kind === 'addPlace' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
         onSelect={(places) => {
-          if (overlay.kind === 'addPlaceToPlan') overlay.onSelect(places);
-          setOverlay({ kind: 'none' });
+          if (overlay.kind !== 'addPlace') return;
+          overlay.onSelect(places);
+          setOverlay(overlay.returnTo ?? { kind: 'none' });
         }}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'addPlace' ? handlePanelHeightChange : undefined}
+        excludeIds={overlay.kind === 'addPlace' ? overlay.excludeIds : undefined}
       />
     </View>
   );

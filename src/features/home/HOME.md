@@ -15,7 +15,7 @@ App.tsx (HomeProvider)
     │   │   └── HomePanel (My Plan)
     │   ├── AIChatBox           Atlas AI conversation sidekick — not a tab, see Behaviour
     │   ├── HomeTabBar          native iOS tab bar: My Places / My Plan / Add
-    │   └── overlays            SearchPanel / DebugPanel / CreatePlan / PlaceDetail / PlanDetail / AtlasDetail / AddPlaceToPlan
+    │   └── overlays            SearchPanel / DebugPanel / CreatePlan / PlaceDetail / PlanDetail / AtlasDetail / AddPlace
     └── SaveScreen              rendered when overlay === 'save', replaces HomeScreen entirely
 ```
 
@@ -25,8 +25,8 @@ App.tsx (HomeProvider)
 
 - The tab bar drives a persistent 2-page pager (My Places / My Plan) rather than screen navigation — both pages stay mounted.
 - `AIChatBox` appears as a sidekick layered over the pager, not as its own tab or page.
-- Panels and overlays are mutually exclusive, gated by `overlay.kind` and `activeSidekick`.
-- `HomePanel` (both tabs) and `PlaceDetail` use the same `ContentPanel` snap group (`home-main`), so a panel opened without an explicit snap state inherits the last settled height. The group memory is owned by `src/components/content-panel`, not `HomeContext`, and it is broadcast about a frame after a drag-release snap (not deferred to spring completion) so a panel becoming visible mid-spring doesn't briefly show a stale height. `HomeScreen` only forwards a `ContentPanel`'s `onHeightChange` into the map's camera padding for whichever one is actually the on-screen driver (active tab, `PlaceDetail` while its overlay is open, or `AtlasDetail` while its overlay is open) — the other synced-but-off-screen instances still inherit state consistency, but don't fight over the camera. `AtlasDetail` isn't in the `home-main` snap group (it doesn't pass `snapGroup`), so it doesn't inherit/broadcast settled height there, but `bottomPanelActive` and the live per-frame padding path both still key off `overlay.kind === 'atlasDetail'` the same way they do for `placeDetail`. `HomeScreen`'s own read of the group's settled state (used for the map's discrete padding recenter, not per-frame dragging) is deliberately delayed roughly one spring's settle time behind the group's raw value — firing that recenter mid-spring would compete with the panel's own height animation on the JS thread.
+- Panels and overlays are mutually exclusive, gated by `overlay.kind` and `activeSidekick` — except `CreatePlan`, which `HomeScreen` also keeps mounted while `overlay` is `{ kind: 'addPlace', returnTo: { kind: 'createPlan' } }`, so the `addPlace` overlay can sit on top of it without unmounting the wizard (see `CREATE-PLAN.md`).
+- `HomePanel` (both tabs), `PlaceDetail`, and `AddPlace` use the same `ContentPanel` snap group (`home-main`), so a panel opened without an explicit snap state inherits the last settled height. The group memory is owned by `src/components/content-panel`, not `HomeContext`, and it is broadcast about a frame after a drag-release snap (not deferred to spring completion) so a panel becoming visible mid-spring doesn't briefly show a stale height. `HomeScreen` only forwards a `ContentPanel`'s `onHeightChange` into the map's camera padding for whichever one is actually the on-screen driver (active tab, `PlaceDetail` while its overlay is open, `AtlasDetail` while its overlay is open, or `AddPlace` while its overlay is open) — the other synced-but-off-screen instances still inherit state consistency, but don't fight over the camera. `AtlasDetail` isn't in the `home-main` snap group (it doesn't pass `snapGroup`), so it doesn't inherit/broadcast settled height there, but `bottomPanelActive` and the live per-frame padding path both still key off `overlay.kind === 'atlasDetail'` the same way they do for `placeDetail` and `addPlace`. `HomeScreen`'s own read of the group's settled state (used for the map's discrete padding recenter, not per-frame dragging) is deliberately delayed roughly one spring's settle time behind the group's raw value — firing that recenter mid-spring would compete with the panel's own height animation on the JS thread.
 
 ## API
 
@@ -43,6 +43,10 @@ function useHome(): {
   atlases: Atlas[];                                                 // atlases persisted to Supabase, local-cache-backed
   refreshAtlases: () => Promise<void>;                              // re-fetches atlases
   createAtlas: (title: string) => Promise<Atlas | null>;            // optimistic local create, syncs to Supabase; null on failure
+  deleteAtlas: (id: string) => Promise<void>;                       // optimistic local delete, syncs to Supabase; atlas_places rows cascade; alerts on failure
+  atlasPlaces: AtlasPlace[];                                        // every atlas_places row for every atlas; filter by atlas_id for one atlas
+  addPlacesToAtlas: (atlasId: string, placeIds: string[]) => Promise<void>;  // optimistic local insert, syncs to Supabase; skips places already in the atlas; alerts on failure
+  removePlaceFromAtlas: (joinRowId: string) => Promise<void>;       // removes by atlas_places row id (not place id); local cache first, syncs to Supabase; alerts on failure
   chatHistory: ChatHistoryItem[]; setChatHistory: (i: ChatHistoryItem[]) => void;  // cached past import/chat sessions (max 50)
   deletedChatHistory: ChatHistoryItem[];                            // soft-deleted items
   activeHistoryItem: ChatHistoryItem | null; setActiveHistoryItem: (i: ChatHistoryItem | null) => void;  // session shown by AIChatBox
@@ -62,10 +66,10 @@ type Overlay =
   | { kind: 'none' }
   | { kind: 'search' }
   | { kind: 'debug' }
-  | { kind: 'placeDetail'; placeId: string }
+  | { kind: 'placeDetail'; placeId: string; returnTo?: Overlay }  // returnTo is the overlay to restore on dismiss — the trigger's own overlay state at the time it opened this (e.g. PlaceCard captures useHome().overlay); omit to fall back to `{ kind: 'none' }`
   | { kind: 'planDetail'; planId: string }
   | { kind: 'atlasDetail'; atlasId: string }
-  | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void }
+  | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }  // excludeIds hides already-selected places (e.g. AtlasDetail passes places already in the atlas); omit to allow duplicates (e.g. the plan flow). returnTo is the overlay to restore on dismiss/confirm — the caller's own overlay state (e.g. `{ kind: 'atlasDetail', atlasId }`); omit to fall back to `{ kind: 'none' }`
   | { kind: 'createPlan' };
 
 // src/features/home/HomeTabBar.tsx
@@ -78,3 +82,4 @@ const TAB_ADD: string;     // not a pager page — triggers onAddPress instead
 
 - [CHAT-HISTORY.md](../atlas-ai/chat-history/CHAT-HISTORY.md) — `AtlasAIHome` / `HistoryPlacesPanel`, currently unmounted
 - [AI-CHAT.md](../atlas-ai/ai-chat/AI-CHAT.md) — `AIChatBox`, mounted directly by `HomeScreen`
+- [ADD-PLACE.md](../add-place/ADD-PLACE.md) — `AddPlace` overlay, opened via the `addPlace` `Overlay` variant

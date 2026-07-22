@@ -2,19 +2,16 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useCallback, useEffect, useState } from 'react';
-import { FlatList, Pressable, useColorScheme, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, FlatList, Pressable, useColorScheme, View } from 'react-native';
 
 import ContentPanel from '../../../../components/content-panel/ContentPanel';
 import { useHome } from '../../../home/HomeContext';
+import { toPlaceDetail } from '@/services/place/placeService';
 import type { Atlas } from '@/types/atlas';
 import type { PlaceDetail as PlaceDetailType } from '@/types/place';
 import { PlaceCard } from '../../all-places/PlaceCard';
 import AtlasOverviewSection from './AtlasOverviewSection';
-
-// No real `atlas_places` join exists yet, so every atlas always shows an empty
-// place list until that's wired up.
-const NO_PLACES: PlaceDetailType[] = [];
 
 function ItemSeparator() {
   return (
@@ -29,7 +26,7 @@ type AtlasDetailProps = {
 };
 
 export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: AtlasDetailProps) {
-  const { atlases, deleteSavedPlace } = useHome();
+  const { atlases, savedPlaces, setOverlay, atlasPlaces, addPlacesToAtlas, removePlaceFromAtlas, deleteAtlas } = useHome();
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [isVisible, setIsVisible] = useState(false);
 
@@ -42,11 +39,71 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     }
   }, [atlasId, atlases]);
 
-  const places = NO_PLACES;
+  // This atlas's join rows, sorted for display — atlasPlaces itself covers every
+  // atlas and is loaded once by HomeContext, same as savedPlaces/atlases.
+  const atlasPlaceRows = useMemo(() => {
+    if (!atlasId) return [];
+    return atlasPlaces.filter((row) => row.atlas_id === atlasId).sort((a, b) => a.sort_order - b.sort_order);
+  }, [atlasId, atlasPlaces]);
 
-  const handleDelete = useCallback((id: string) => {
-    deleteSavedPlace(id);
-  }, [deleteSavedPlace]);
+  // atlas_places.id (the join row, needed to remove membership) keyed by place_id,
+  // since PlaceCard's onDelete only gives back the place id.
+  const joinRowIdByPlaceId = useMemo(
+    () => new Map(atlasPlaceRows.map((row) => [row.place_id, row.id])),
+    [atlasPlaceRows],
+  );
+
+  const places = useMemo(() => {
+    const savedById = new Map(savedPlaces.map((place) => [place.id, place]));
+    return atlasPlaceRows
+      .map((row) => savedById.get(row.place_id))
+      .filter((place): place is NonNullable<typeof place> => Boolean(place))
+      .map(toPlaceDetail);
+  }, [atlasPlaceRows, savedPlaces]);
+
+  // Removes the place from this atlas only — the saved place itself is untouched.
+  const handleDelete = useCallback((placeId: string) => {
+    const joinRowId = joinRowIdByPlaceId.get(placeId);
+    if (joinRowId) removePlaceFromAtlas(joinRowId);
+  }, [joinRowIdByPlaceId, removePlaceFromAtlas]);
+
+  const handleAddPress = useCallback(() => {
+    if (!atlasId) return;
+    const excludeIds = atlasPlaceRows.map((row) => row.place_id);
+    setOverlay({
+      kind: 'addPlace',
+      excludeIds,
+      returnTo: { kind: 'atlasDetail', atlasId },
+      onSelect: (selected) => {
+        addPlacesToAtlas(atlasId, selected.map((place) => place.id));
+      },
+    });
+  }, [atlasId, atlasPlaceRows, setOverlay, addPlacesToAtlas]);
+
+  const handleDeletePress = useCallback(() => {
+    if (!atlasId || !atlas) return;
+    const placeCount = places.length;
+    const message = placeCount > 0
+      ? `Delete "${atlas.title}"? Its ${placeCount} ${placeCount === 1 ? 'place' : 'places'} will stay in My Places but won't be grouped in this atlas anymore. This can't be undone.`
+      : `Delete "${atlas.title}"? This can't be undone.`;
+    Alert.alert(
+      'Delete Atlas',
+      message,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deleteAtlas(atlasId);
+            // The atlas is gone — nothing to return to, so close the panel
+            // instead of leaving it visible with no content.
+            setOverlay({ kind: 'none' });
+          },
+        },
+      ],
+    );
+  }, [atlasId, atlas, places.length, deleteAtlas, setOverlay]);
 
   const renderItem = useCallback(
     ({ item }: { item: PlaceDetailType }) => <PlaceCard item={item} onDelete={handleDelete} />,
@@ -81,7 +138,7 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
               scrollEventThrottle={16}
               ListHeaderComponent={
                 <View style={{ paddingBottom: 16 }}>
-                  <AtlasOverviewSection atlas={atlas} placeCount={places.length} />
+                  <AtlasOverviewSection atlas={atlas} placeCount={places.length} onAddPress={handleAddPress} onDeletePress={handleDeletePress} />
                 </View>
               }
               ItemSeparatorComponent={ItemSeparator}

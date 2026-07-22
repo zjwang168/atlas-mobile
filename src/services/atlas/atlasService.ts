@@ -9,6 +9,7 @@ import { getCached, getCurrentUserId, setCached, updateCached } from '../local/l
 import { enqueueWrite, flushQueue, isRetryableError, withTimeout } from '../local/syncQueue';
 import { supabase } from '../supabase/supabaseClient';
 import { ATLAS_SELECT_COLUMNS, truncateAtlasTitle } from './atlasShared';
+import { removeAtlasPlacesForAtlas } from './atlasPlacesService';
 
 export type SavedAtlas = Atlas;
 
@@ -117,5 +118,33 @@ export async function createAtlas(title: string): Promise<Atlas> {
       emoji: DEFAULT_ATLAS_EMOJI,
     });
     return localRow;
+  }
+}
+
+/**
+ * Delete an atlas. Removes it from the local cache immediately (along with
+ * its cached `atlas_places` rows), then syncs to Supabase — queued for retry
+ * via syncQueue when offline or the request fails with a retryable error.
+ * `atlas_places` rows are `ON DELETE CASCADE`, so no separate server call is
+ * needed for those.
+ */
+export async function deleteAtlas(id: string): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot delete an atlas before auth is ready');
+
+  await updateAtlasesCache(userId, (current) => current.filter((row) => row.id !== id));
+  await removeAtlasPlacesForAtlas(id);
+
+  if (id.startsWith('local-')) {
+    await enqueueWrite(userId, { kind: 'deleteAtlas', atlasId: id });
+    return;
+  }
+
+  try {
+    const { error } = await withTimeout(supabase.from('atlas').delete().eq('id', id), 'Deleting atlas timed out');
+    if (error) throw new Error(`Failed to delete atlas: ${error.message}`);
+  } catch (error) {
+    if (!isRetryableError(error)) throw error;
+    await enqueueWrite(userId, { kind: 'deleteAtlas', atlasId: id });
   }
 }

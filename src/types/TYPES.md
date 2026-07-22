@@ -11,12 +11,12 @@ import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, Da
 | Type | Used by |
 |---|---|
 | `Place` | Map markers, list rows — minimal identity + coordinates |
-| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlaceToPlan picker — extends `Place` with `savedAt`, schedule, tags, links, etc. Also carries the rest of the `places` table columns (`category`, `description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) as optional fields — reserved for the DB row, not yet populated by `toPlaceDetail()` or consumed by any UI |
+| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. Also carries the rest of the `places` table columns (`category`, `description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) as optional fields — reserved for the DB row, not yet populated by `toPlaceDetail()` or consumed by any UI |
 | `PlaceTag` | PlaceCard tags, PlaceInfoSection, Badge pills |
 | `PlaceLink` | PlaceInfoSection link rows |
 | `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |
 | `DayOfWeek` | `placeHours.ts` — `'monday'` … `'sunday'` |
-| `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`) — no service reads/writes it yet; `AtlasDetail.tsx` always renders an empty place list until this join is wired up (see `ATLAS.md`) |
+| `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`), field names matching the DB row (`atlas_id`, `place_id`, `added_by`, `sort_order`, `created_at`) — read/written by `services/atlas/atlasPlacesService.ts` and exposed as `useHome().atlasPlaces`/`addPlacesToAtlas`/`removePlaceFromAtlas`, the same offline-first pattern as `SavedPlace`/`Atlas`; `AtlasDetail.tsx` resolves rows to `PlaceDetail` via `savedPlaces` + `toPlaceDetail()` (see `ATLAS-DETAIL.md`, `HOME.md`) |
 
 ## `route.ts` — parse/route API types
 

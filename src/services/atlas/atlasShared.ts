@@ -4,6 +4,8 @@
 
 export const ATLAS_SELECT_COLUMNS = 'id, owner_id, title, emoji, description, visibility, created_at, updated_at';
 
+export const ATLAS_PLACES_SELECT_COLUMNS = 'id, atlas_id, place_id, added_by, note, sort_order, created_at';
+
 const MAX_ATLAS_TITLE_LENGTH = 255;
 
 export function truncateAtlasTitle(title: string): string {

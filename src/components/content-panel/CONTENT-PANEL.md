@@ -2,7 +2,7 @@
 
 ## Overview
 
-A draggable bottom sheet that snaps to three heights (`compact`, `default`, `full`). Supports conditional visibility (slide-in / slide-out) and an optional separate compact-mode view. Used by `HomePanel`, `PlaceDetail`, `PlanDetail`, and `AddPlaceToPlan`.
+A draggable bottom sheet that snaps to three heights (`compact`, `default`, `full`). Supports conditional visibility (slide-in / slide-out) and an optional separate compact-mode view. Used by `HomePanel`, `PlaceDetail`, `PlanDetail`, and `AddPlace`.
 
 ## File
 

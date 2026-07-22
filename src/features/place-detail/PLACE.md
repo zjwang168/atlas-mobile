@@ -93,6 +93,8 @@ type PlaceDetailProps = {
 
 Changing `placeId` from `null → string` triggers the enter animation and looks the place up in `HomeContext.savedPlaces` (converted via `toPlaceDetail`). If no saved place matches the id, a "Place not found" state is shown instead. Changing back to `null` triggers the dismiss animation.
 
+`PlaceDetail` is opened via `HomeContext`'s `placeDetail` overlay (`{ kind: 'placeDetail'; placeId; returnTo?: Overlay }`, see `HOME.md`). `HomeScreen` owns the single `<PlaceDetail>` instance and restores `overlay` to `returnTo` on dismiss instead of always going to `{ kind: 'none' }`, so closing the panel returns to whichever panel opened it (e.g. `AtlasDetail`) rather than the home screen. The trigger is responsible for passing its own current overlay as `returnTo` — see `PlaceCard.tsx` (`../my-places/all-places/PlaceCard.tsx`), the only place that opens this overlay.
+
 ## Hours Utility (`utils/placeHours.ts`)
 
 ```ts

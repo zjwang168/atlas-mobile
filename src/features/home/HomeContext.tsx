@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState } from 'react-native';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
-import { createAtlas as createAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
+import { createAtlas as createAtlasService, deleteAtlas as deleteAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
+import { addPlacesToAtlas as addPlacesToAtlasService, fetchAtlasPlaces, removePlaceFromAtlas as removePlaceFromAtlasService, subscribeAtlasPlaces } from '../../services/atlas/atlasPlacesService';
 import type { ParsedPlace } from '../../services/import/importService';
 import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
 import { flushQueue } from '../../services/local/syncQueue';
@@ -9,7 +10,7 @@ import type { SavedPlace } from '../../services/place/placeService';
 import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } from '../../services/place/placeService';
 import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
 import type { Atlas } from '../../types/atlas';
-import type { PlannedPlace } from '../my-plan/create-plan/plan-place/types';
+import type { AtlasPlace, PlaceDetail } from '../../types/place';
 
 // --- Chat History ---
 
@@ -36,10 +37,10 @@ export type Overlay =
   | { kind: 'none' }
   | { kind: 'search' }
   | { kind: 'debug' }
-  | { kind: 'placeDetail'; placeId: string }
+  | { kind: 'placeDetail'; placeId: string; returnTo?: Overlay }
   | { kind: 'planDetail'; planId: string }
   | { kind: 'atlasDetail'; atlasId: string }
-  | { kind: 'addPlaceToPlan'; onSelect: (places: PlannedPlace[]) => void }
+  | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }
   | { kind: 'createPlan' };
 
 type HomeContextValue = {
@@ -93,6 +94,14 @@ type HomeContextValue = {
   refreshAtlases: () => Promise<void>;
   /** Creates a new atlas (local cache first, syncs to Supabase); returns null on failure */
   createAtlas: (title: string) => Promise<Atlas | null>;
+  /** Deletes an atlas (local cache first, syncs to Supabase); atlas_places rows cascade */
+  deleteAtlas: (id: string) => Promise<void>;
+  /** Every atlas_places row for every atlas (local cache + Supabase sync); filter by atlas_id for one atlas */
+  atlasPlaces: AtlasPlace[];
+  /** Adds places to an atlas (local cache first, syncs to Supabase); skips places already in the atlas */
+  addPlacesToAtlas: (atlasId: string, placeIds: string[]) => Promise<void>;
+  /** Removes a place from an atlas by its atlas_places row id (local cache first, syncs to Supabase) */
+  removePlaceFromAtlas: (joinRowId: string) => Promise<void>;
   /** 当前激活的 sidekick */
   activeSidekick: 'none' | 'aiChat' | 'places';
   setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
@@ -130,6 +139,10 @@ const HomeContext = createContext<HomeContextValue>({
   atlases: [],
   refreshAtlases: async () => {},
   createAtlas: async () => null,
+  deleteAtlas: async () => {},
+  atlasPlaces: [],
+  addPlacesToAtlas: async () => {},
+  removePlaceFromAtlas: async () => {},
   activeSidekick: 'none',
   setActiveSidekick: () => {},
   userLocation: [-122.3321, 47.6062],
@@ -155,6 +168,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [atlases, setAtlases] = useState<Atlas[]>([]);
+  const [atlasPlaces, setAtlasPlaces] = useState<AtlasPlace[]>([]);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
   const [deletedChatHistory, setDeletedChatHistory] = useState<ChatHistoryItem[]>([]);
   const [activeHistoryItem, setActiveHistoryItem] = useState<ChatHistoryItem | null>(null);
@@ -187,6 +201,15 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshAtlasPlaces = useCallback(async () => {
+    try {
+      const rows = await fetchAtlasPlaces();
+      setAtlasPlaces(rows);
+    } catch (e) {
+      console.error('[HomeContext] refreshAtlasPlaces failed:', e);
+    }
+  }, []);
+
   const createAtlas = useCallback(async (title: string) => {
     try {
       return await createAtlasService(title);
@@ -196,14 +219,43 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const deleteAtlas = useCallback(async (id: string) => {
+    try {
+      await deleteAtlasService(id);
+    } catch (e) {
+      console.error('[HomeContext] deleteAtlas failed:', e);
+      Alert.alert('Couldn’t delete atlas', 'Something went wrong deleting this atlas. Please try again.');
+    }
+  }, []);
+
+  const addPlacesToAtlas = useCallback(async (atlasId: string, placeIds: string[]) => {
+    try {
+      await addPlacesToAtlasService(atlasId, placeIds);
+    } catch (e) {
+      console.error('[HomeContext] addPlacesToAtlas failed:', e);
+      Alert.alert('Couldn’t add places', 'Something went wrong adding those places to the atlas. Please try again.');
+    }
+  }, []);
+
+  const removePlaceFromAtlas = useCallback(async (joinRowId: string) => {
+    try {
+      await removePlaceFromAtlasService(joinRowId);
+    } catch (e) {
+      console.error('[HomeContext] removePlaceFromAtlas failed:', e);
+      Alert.alert('Couldn’t remove place', 'Something went wrong removing that place from the atlas. Please try again.');
+    }
+  }, []);
+
   // 初始加载已保存地点，让地图在启动时显示已保存的标记
   useEffect(() => {
     refreshSavedPlaces();
     refreshAtlases();
+    refreshAtlasPlaces();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => subscribeSavedPlaces(setSavedPlaces), []);
   useEffect(() => subscribeAtlases(setAtlases), []);
+  useEffect(() => subscribeAtlasPlaces(setAtlasPlaces), []);
 
   useEffect(() => {
     let mounted = true;
@@ -242,13 +294,15 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       refreshSavedPlaces();
       setAtlases([]);
       refreshAtlases();
+      setAtlasPlaces([]);
+      refreshAtlasPlaces();
     });
 
     return () => {
       mounted = false;
       data.subscription.unsubscribe();
     };
-  }, [refreshSavedPlaces, refreshAtlases]);
+  }, [refreshSavedPlaces, refreshAtlases, refreshAtlasPlaces]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -366,6 +420,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       atlases,
       refreshAtlases,
       createAtlas,
+      deleteAtlas,
+      atlasPlaces,
+      addPlacesToAtlas,
+      removePlaceFromAtlas,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       setChatHistory,
@@ -395,6 +453,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       atlases,
       refreshAtlases,
       createAtlas,
+      deleteAtlas,
+      atlasPlaces,
+      addPlacesToAtlas,
+      removePlaceFromAtlas,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       selectedPlaceCoordinate,

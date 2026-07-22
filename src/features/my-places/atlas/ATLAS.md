@@ -13,7 +13,7 @@ The "Atlas" sub-tab in the MyPlaces panel — a scrollable row of category filte
 
 The `add` icon calls React Native's `Alert.prompt` — a native iOS modal (Cancel / Create, single text field) — and calls `useHome().createAtlas(title)` when confirmed with a non-empty name. `Alert.prompt` is iOS-only; the button currently no-ops on Android.
 
-Atlases are backed by `useHome().atlases`, sourced from `services/atlas/atlasService.ts` — an AsyncStorage cache-then-revalidate layer synced to the Supabase `atlas` table, the same architecture `savedPlaces` uses (see `SERVICES.md`, `services/local/LOCAL.md`). `createAtlas` writes an optimistic local row immediately (visible before the network round-trip), then syncs to Supabase, queued for retry if offline. Their place lists are separate — see `ATLAS-DETAIL.md`.
+Atlases are backed by `useHome().atlases`, sourced from `services/atlas/atlasService.ts` — an AsyncStorage cache-then-revalidate layer synced to the Supabase `atlas` table, the same architecture `savedPlaces` uses (see `SERVICES.md`, `services/local/LOCAL.md`). `createAtlas` writes an optimistic local row immediately (visible before the network round-trip), then syncs to Supabase, queued for retry if offline; `deleteAtlas` (triggered from `AtlasDetail`, not this tab — see `ATLAS-DETAIL.md`) works the same way in reverse. Their place lists are a separate `atlas_places` join, backed the same way by `services/atlas/atlasPlacesService.ts` — see `ATLAS-DETAIL.md`.
 
 No props.
 

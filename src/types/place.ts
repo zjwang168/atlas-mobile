@@ -66,10 +66,10 @@ export type PlaceDetail = Place & {
 /** Row shape of the Supabase `atlas_places` join table (renamed from `collection_places`). */
 export type AtlasPlace = {
   id: string;
-  atlasId: string;
-  placeId: string;
-  addedBy: string | null;
+  atlas_id: string;
+  place_id: string;
+  added_by: string | null;
   note: string | null;
-  sortOrder: number;
-  createdAt: string;
+  sort_order: number;
+  created_at: string;
 };
