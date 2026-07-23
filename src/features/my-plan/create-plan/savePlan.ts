@@ -2,13 +2,25 @@
  * savePlan.ts — plan persistence service
  *
  * All writes go through savePlan(); all reads through findSavedPlan().
- * Swap the two implementations below for real API calls when the server is ready.
+ * Backed by the real `plans` / `plan_itinerary_place_flexible` /
+ * `plan_itinerary_days` / `plan_itinerary_places` Supabase tables via
+ * `services/plan/planService.ts` and `services/plan/planItineraryService.ts`
+ * — this module just adapts between the wizard's `PlacesState` shape and
+ * those DB-row-shaped services.
  */
 
-import { mockPlans } from '../../../../mock-data/mockPlans';
-import { LOCAL_CACHE_KEYS } from '../../../services/local/cacheKeys';
-import { getCached, getCurrentUserId, setCached } from '../../../services/local/localStore';
+import { fetchSavedPlaces, resolvePlaceThumbnail, type SavedPlace } from '../../../services/place/placeService';
+import {
+  addFlexiblePlaces,
+  addScheduledPlaceToDay,
+  ensurePlanItineraryDay,
+  fetchFlexiblePlaces,
+  fetchPlanItinerary,
+  fetchPlanSummaries,
+} from '../../../services/plan/planItineraryService';
+import { createPlan, deletePlan, fetchPlans, findPlan } from '../../../services/plan/planService';
 import type { DateRange } from './CreatePlan';
+import { enumerateDates } from './plan-place/utils';
 import type { PlacesState, PlannedPlace } from './plan-place/types';
 
 // ---------------------------------------------------------------------------
@@ -38,40 +50,55 @@ export type SavedPlan = {
 };
 
 // ---------------------------------------------------------------------------
-// Local store (replace with server state when ready)
+// Helpers
 // ---------------------------------------------------------------------------
 
-const seededPlans = new Map<string, SavedPlan>();
-
-function generateId(): string {
-  return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+/** Resolve place_id -> display fields from the user's real saved places (offline-first cache). */
+async function fetchPlaceLookup(): Promise<Map<string, SavedPlace>> {
+  const saved = await fetchSavedPlaces();
+  return new Map(saved.map((place) => [place.id, place]));
 }
 
-function countPlaces(places: PlacesState): number {
-  const datedCount = Object.values(places.byDate).reduce((acc, arr) => acc + arr.length, 0);
-  return places.free.length + datedCount;
+function toPlannedPlace(instanceId: string, placeId: string, lookup: Map<string, SavedPlace>): PlannedPlace {
+  const place = lookup.get(placeId);
+  return {
+    id: instanceId,
+    placeId,
+    name: place?.name ?? 'Unknown place',
+    subtitle: place?.subtitle ?? '',
+    imageUrl: place ? resolvePlaceThumbnail(place) || undefined : undefined,
+  };
 }
 
-function buildSchedule(byDate: PlacesState['byDate']): PlanDateSlot[] {
-  return Object.entries(byDate)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, places]) => ({ date, places }))
-    .filter((day) => day.places.length > 0);
-}
+async function buildSavedPlan(planId: string): Promise<SavedPlan | undefined> {
+  const plan = await findPlan(planId);
+  if (!plan) return undefined;
 
-async function readPlans(): Promise<SavedPlan[]> {
-  const userId = await getCurrentUserId();
-  const cached = userId ? await getCached<SavedPlan[]>(userId, LOCAL_CACHE_KEYS.plans) : null;
-  const merged = new Map<string, SavedPlan>();
-  for (const plan of seededPlans.values()) merged.set(plan.id, plan);
-  for (const plan of cached ?? []) merged.set(plan.id, plan);
-  return [...merged.values()];
-}
+  const [flexibleRows, itinerary, lookup] = await Promise.all([
+    fetchFlexiblePlaces(planId),
+    fetchPlanItinerary(planId),
+    fetchPlaceLookup(),
+  ]);
 
-async function writePlans(plans: SavedPlan[]): Promise<void> {
-  const userId = await getCurrentUserId();
-  if (!userId) return;
-  await setCached<SavedPlan[]>(userId, LOCAL_CACHE_KEYS.plans, plans);
+  const freePlaces = flexibleRows.map((row) => toPlannedPlace(row.id, row.place_id, lookup));
+  const schedule: PlanDateSlot[] = itinerary.map(({ day, items }) => ({
+    date: day.date,
+    places: items.map((item) => ({
+      ...toPlannedPlace(item.id, item.place_id, lookup),
+      timeSlot: item.visit_slot ?? undefined,
+    })),
+  }));
+
+  return {
+    id: plan.id,
+    title: plan.title,
+    location: plan.destination ?? '',
+    dateRange: { start: plan.start_date, end: plan.end_date },
+    placeCount: freePlaces.length + schedule.reduce((acc, day) => acc + day.places.length, 0),
+    imageUrl: plan.image_url ?? undefined,
+    freePlaces,
+    schedule,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -80,38 +107,70 @@ async function writePlans(plans: SavedPlan[]): Promise<void> {
 
 /** Persist a new plan. Returns the saved plan with a generated id. */
 export async function savePlan(input: PlanInput): Promise<SavedPlan> {
-  const id = generateId();
-  const plan: SavedPlan = {
-    id,
+  const plan = await createPlan({
     title: input.location || 'Untitled Plan',
-    location: input.location,
-    dateRange: input.range,
-    placeCount: countPlaces(input.places),
-    freePlaces: input.places.free,
-    schedule: buildSchedule(input.places.byDate),
-  };
+    destination: input.location || null,
+    startDate: input.range.start,
+    endDate: input.range.end,
+  });
 
-  const plans = await readPlans();
-  await writePlans([plan, ...plans.filter((existing) => existing.id !== id)]);
+  if (input.places.free.length > 0) {
+    await addFlexiblePlaces(plan.id, input.places.free.map((place) => place.placeId));
+  }
 
-  // Keep the card list in sync
-  mockPlans.push({ id, title: plan.title, placeCount: plan.placeCount, imageUrl: plan.imageUrl });
+  const dates = Object.keys(input.places.byDate).filter((date) => (input.places.byDate[date] ?? []).length > 0);
+  const dateIndex = new Map(enumerateDates(input.range).map((date, index) => [date, index]));
+  for (const date of dates) {
+    const places = input.places.byDate[date] ?? [];
+    const day = await ensurePlanItineraryDay(plan.id, date, dateIndex.get(date) ?? 0);
+    let sortOrder = 0;
+    for (const place of places) {
+      await addScheduledPlaceToDay(day.id, place.placeId, place.timeSlot ?? 'morning', sortOrder++);
+    }
+  }
 
-  return plan;
+  const saved = await buildSavedPlan(plan.id);
+  if (!saved) throw new Error(`Failed to load newly created plan ${plan.id}`);
+  return saved;
 }
 
 /** Look up a saved plan by id. Returns undefined if not found. */
 export async function findSavedPlan(id: string): Promise<SavedPlan | undefined> {
-  const plans = await readPlans();
-  return plans.find((plan) => plan.id === id);
+  return buildSavedPlan(id);
 }
 
-/** List saved plans for local plan grids until the server-backed plans API is ready. */
+/** List saved plans for the MyPlan grid, with real place counts and a default cover image. */
 export async function listSavedPlans(): Promise<SavedPlan[]> {
-  return readPlans();
+  const plans = await fetchPlans();
+  if (plans.length === 0) return [];
+
+  const [summaries, lookup] = await Promise.all([
+    fetchPlanSummaries(plans.map((plan) => plan.id)),
+    fetchPlaceLookup(),
+  ]);
+
+  return plans.map((plan) => {
+    const summary = summaries[plan.id];
+    // plan.image_url is an explicit cover the user set; fall back to the first
+    // added place's thumbnail (real photo, or a generated Mapbox static-map
+    // pin when the place has no photo — same fallback toPlaceDetail() uses)
+    // when unset.
+    const coverPlace = summary?.coverPlaceId ? lookup.get(summary.coverPlaceId) : undefined;
+    const coverThumbnail = coverPlace ? resolvePlaceThumbnail(coverPlace) || undefined : undefined;
+    return {
+      id: plan.id,
+      title: plan.title,
+      location: plan.destination ?? '',
+      dateRange: { start: plan.start_date, end: plan.end_date },
+      placeCount: summary?.placeCount ?? 0,
+      imageUrl: plan.image_url ?? coverThumbnail,
+      freePlaces: [],
+      schedule: [],
+    };
+  });
 }
 
-/** Directly seed a plan into the store (used by mock data initialisation). */
-export function seedPlan(plan: SavedPlan): void {
-  seededPlans.set(plan.id, plan);
+/** Delete a saved plan. */
+export async function deleteSavedPlan(id: string): Promise<void> {
+  await deletePlan(id);
 }

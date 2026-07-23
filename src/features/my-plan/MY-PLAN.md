@@ -9,6 +9,7 @@
 ```
 src/features/my-plan/
   MyPlan.tsx      ← root component rendered inside HomePanel
+  PlanCard.tsx    ← grid cell (plan or "Create a plan" card) — only used here, not a shared component
   MY-PLAN.md      ← this document
 ```
 
@@ -34,24 +35,46 @@ type MyPlanProps = {
 
 - Two-column `FlatList` of `PlanCard` items.
 - First item is always the "Create a plan" card (`create` prop on `PlanCard`).
-- Edit mode (`toggleEditMode`) shows a delete badge on each plan card.
-- Deletion triggers `usePlanDelete.requestDelete()` which shows a confirmation alert.
+- Edit mode (local `editMode` state) shows a delete badge on each plan card.
+- Tapping the delete badge shows a confirmation `Alert`; confirming removes the plan from the grid and calls `deleteSavedPlan()`, rolling the grid change back if the Supabase delete fails.
 - Tapping a real plan card calls `setOverlay({ kind: 'planDetail', planId })`.
 
 ### Create mode
 
 Activated when the user taps the "Create a plan" card. The grid and the `CreatePlan` wizard are both permanently mounted as overlapping absolute-positioned layers (mirroring `ContentPanel`'s own compact/default crossfade), each with its own opacity, so there's never an unmount/remount at the swap point. The transition is a strict timeline rather than a simultaneous crossfade: 160ms fade out → 60ms pause → content swap (+ `CreatePlan`'s `reset()` imperative handle, since it no longer remounts to pick up a fresh mount-effect reset) → 60ms pause → 160ms fade in.
 
-The panel-height change (`snapTo('full')` / `snapTo('default')`) is called directly and synchronously alongside the fade — not via a state prop into `ContentPanel` — so both animations start in the same tick instead of the height change lagging a render behind. They still run on independent timelines (fixed 160ms fade vs. `ContentPanel`'s spring, whose settle time depends on distance) and aren't synchronized to finish together.
+The panel-height change (`snapTo('tall')` / `snapTo('default')`) is called directly and synchronously alongside the fade — not via a state prop into `ContentPanel` — so both animations start in the same tick instead of the height change lagging a render behind. They still run on independent timelines (fixed 160ms fade vs. `ContentPanel`'s spring, whose settle time depends on distance) and aren't synchronized to finish together.
 
 On `onPlanCreated`:
-1. The new plan is prepended to the grid via `usePlanDelete.addPlan()`.
+1. The new plan is prepended directly to `dbPlans` state.
 2. Create mode is dismissed.
 3. `PlanDetail` overlay is opened immediately for the new plan.
 
 ### Compact mode
 
 When `compact={true}`, renders only a two-element header row (title + avatar). Used by `ContentPanel`'s compact snap state in `HomePanel`.
+
+## `PlanCard`
+
+Grid cell for the `MyPlan` two-column `FlatList` — a normal plan card (thumbnail + title + place count) or the "Create a plan" empty-state card. Only used by `MyPlan`, so it's co-located here rather than in `src/components/`.
+
+```ts
+type PlanCardProps = {
+  title: string;
+  placeCount: number;
+  imageUrl?: string;        // shown in the square thumbnail; falls back to MapPinCover (stylized map + pin) when absent
+  create?: boolean;         // renders the dashed-border "+" empty state instead
+  deletionMode?: boolean;   // shows a close badge in the top-right corner
+  onPress?: () => void;
+  onDeletePress?: () => void; // called when the delete badge is tapped
+};
+```
+
+| `create` | `deletionMode` | Appearance |
+|---|---|---|
+| `false` | `false` | Thumbnail + title + place count |
+| `false` | `true` | + delete badge overlay on the thumbnail |
+| `true` | any | Dashed border + `+` icon, no delete badge |
 
 ## Related Docs
 
@@ -65,7 +88,7 @@ When working on `MyPlan`, these docs cover the two major flows it hosts inline:
 
 | Import | Purpose |
 |---|---|
-| `usePlanDelete` | Plan list state, edit mode, deletion, add |
+| `savePlan.ts` (`listSavedPlans`, `deleteSavedPlan`) | Plan list data, deletion — real Supabase-backed, see `create-plan/CREATE-PLAN.md` |
+| `PlanCard` | Grid cell, co-located in this directory |
 | `CreatePlan` | Inline wizard |
 | `useHome` | Open `PlanDetail` overlay |
-| `mockPlans` | Initial plan data (replace with API) |

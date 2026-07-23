@@ -341,6 +341,14 @@ function staticMapThumb(lat: number, lng: number): string {
   );
 }
 
+/** Resolve a place's thumbnail: the real saved photo if there is one,
+    otherwise a generated Mapbox static-map pin for its coordinates. Shared
+    by `toPlaceDetail()` and any other caller that needs a place thumbnail
+    without the full `PlaceDetail` shape (e.g. `savePlan.ts`'s plan covers). */
+export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string {
+  return place.photo_url || staticMapThumb(place.latitude, place.longitude);
+}
+
 /** Adapt a DB row to the PlaceDetail shape the detail screens expect.
     Fields we don't persist yet get sensible defaults. */
 export function toPlaceDetail(row: SavedPlace): PlaceDetail {
@@ -351,7 +359,7 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     latitude: row.latitude,
     longitude: row.longitude,
     address: row.region ?? '',
-    thumbnailUrl: row.photo_url || staticMapThumb(row.latitude, row.longitude),
+    thumbnailUrl: resolvePlaceThumbnail(row),
     schedule: [],
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
     summary: row.subtitle ?? '',

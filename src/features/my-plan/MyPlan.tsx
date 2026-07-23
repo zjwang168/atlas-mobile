@@ -1,16 +1,14 @@
-import PlanCard from '@/components/plan-card/PlanCard';
-import { usePlanDelete } from '@/components/plan-card/usePlanDelete';
+import PlanCard from './PlanCard';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import { supabase } from '@/services/supabase/supabaseClient';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, TouchableOpacity, View } from 'react-native';
+import { Alert, ActivityIndicator, Animated, FlatList, TouchableOpacity, View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import { useHome } from '../home/HomeContext';
 import CreatePlan, { CreatePlanHandle } from './create-plan/CreatePlan';
-import { listSavedPlans, type SavedPlan } from './create-plan/savePlan';
+import { deleteSavedPlan, listSavedPlans, type SavedPlan } from './create-plan/savePlan';
 
 type PlanGridItem = {
   id: string;
@@ -65,32 +63,6 @@ const PlanGridCell = memo(function PlanGridCell({
   );
 });
 
-/** Fetch plans from the Supabase `projects` table. */
-async function fetchPlansFromSupabase(): Promise<PlanGridItem[]> {
-  try {
-    const { data, error } = await supabase
-      .from('projects')
-      .select('id, title, destination, start_date, end_date, created_at')
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    if (error) {
-      console.warn('[MyPlan] Failed to fetch plans:', error.message);
-      return [];
-    }
-
-    return (data ?? []).map((project: Record<string, unknown>) => ({
-      id: project.id as string,
-      title: (project.title as string) || (project.destination as string) || 'Untitled Plan',
-      placeCount: 0, // Will be updated when project_places are queried
-      imageUrl: undefined,
-    }));
-  } catch (e) {
-    console.error('[MyPlan] fetchPlans error:', e);
-    return [];
-  }
-}
-
 type MyPlanProps = {
   onAvatarPress?: () => void;
   onScroll?: (y: number) => void;
@@ -123,41 +95,35 @@ function MyPlan({
   const createPlanRef = useRef<CreatePlanHandle>(null);
   const [dbPlans, setDbPlans] = useState<PlanGridItem[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(true);
-  const { plans, editMode, toggleEditMode, requestDelete, addPlan } = usePlanDelete();
+  const [editMode, setEditMode] = useState(false);
   const { setOverlay, setTabBarVisible } = useHome();
 
-  // 从 Supabase 加载真实计划数据，取代 mockPlans
+  // Load real plans from Supabase (via savePlan.ts's planService-backed listSavedPlans).
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchPlansFromSupabase(), listSavedPlans()]).then(([loaded, localPlans]) => {
+    listSavedPlans().then((loaded) => {
       if (cancelled) return;
-      const merged = new Map<string, PlanGridItem>();
-      for (const plan of localPlans) {
-        merged.set(plan.id, {
-          id: plan.id,
-          title: plan.title,
-          placeCount: plan.placeCount,
-          imageUrl: plan.imageUrl,
-        });
-      }
-      for (const plan of loaded) merged.set(plan.id, plan);
-      setDbPlans([...merged.values()]);
+      setDbPlans(loaded.map((plan) => ({
+        id: plan.id,
+        title: plan.title,
+        placeCount: plan.placeCount,
+        imageUrl: plan.imageUrl,
+      })));
       setLoadingPlans(false);
-      // 将 Supabase 计划同步到 usePlanDelete（清空 mock 数据后逐个添加）
-      // usePlanDelete 内部使用 mockPlans，这里我们用自己的 dbPlans 展示
     }).catch((error) => {
       if (cancelled) return;
-      console.warn('[MyPlan] Failed to load local plans:', error);
+      console.warn('[MyPlan] Failed to load plans:', error);
       setLoadingPlans(false);
     });
     return () => { cancelled = true; };
   }, []);
 
-  const displayPlans = dbPlans.length > 0 ? dbPlans : plans;
-  const gridData = useMemo(() => buildGridData(displayPlans), [displayPlans]);
+  const toggleEditMode = useCallback(() => setEditMode((prev) => !prev), []);
+
+  const gridData = useMemo(() => buildGridData(dbPlans), [dbPlans]);
 
   const enterCreateMode = useCallback(() => {
-    snapTo?.('full');
+    snapTo?.('tall');
     setTabBarVisible(false);
     Animated.sequence([
       Animated.timing(gridOpacity, { toValue: 0, duration: FADE_DURATION, useNativeDriver: true }),
@@ -191,19 +157,33 @@ function MyPlan({
 
   const handlePlanCreated = useCallback((plan: SavedPlan) => {
     const newItem: PlanGridItem = { id: plan.id, title: plan.title, placeCount: plan.placeCount, imageUrl: plan.imageUrl };
-    addPlan(newItem);
     setDbPlans((prev) => [newItem, ...prev]);
     exitCreateMode();
     setOverlay({ kind: 'planDetail', planId: plan.id });
-  }, [addPlan, exitCreateMode, setOverlay]);
+  }, [exitCreateMode, setOverlay]);
 
   const onSelectPlan = useCallback((id: string) => {
     setOverlay({ kind: 'planDetail', planId: id });
   }, [setOverlay]);
 
   const onRequestDelete = useCallback((id: string) => {
-    requestDelete(id);
-  }, [requestDelete]);
+    const plan = dbPlans.find((p) => p.id === id);
+    if (!plan) return;
+    Alert.alert('Delete Plan', `Are you sure you want to delete "${plan.title}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          setDbPlans((prev) => prev.filter((p) => p.id !== id));
+          deleteSavedPlan(id).catch((error) => {
+            console.warn('[MyPlan] Failed to delete plan:', error);
+            setDbPlans((prev) => [plan, ...prev]);
+          });
+        },
+      },
+    ]);
+  }, [dbPlans]);
 
   const keyExtractor = useCallback((item: PlanGridItem) => item.id, []);
 
@@ -265,7 +245,7 @@ function MyPlan({
             My plan
           </Text>
           <View style={{ height: 40, justifyContent: 'center' }}>
-            {displayPlans.length > 0 && (
+            {dbPlans.length > 0 && (
               <Button variant="ghost" size="sm" onPress={toggleEditMode}>
                 <Text style={{ fontSize: 15, fontWeight: '500', color: '#007aff' }}>
                   {editMode ? 'Done' : 'Edit'}
@@ -280,14 +260,8 @@ function MyPlan({
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 }}>
             <ActivityIndicator size="small" color="#888" />
           </View>
-        ) : displayPlans.length === 0 ? (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60, paddingHorizontal: 32 }}>
-            <Text style={{ fontSize: 14, color: '#888', textAlign: 'center' }}>
-              No plans yet — import a link and tap "Add to plan".
-            </Text>
-          </View>
         ) : (
-          /* 2-column plan grid */
+          /* 2-column plan grid — gridData always includes the "Create a plan" card, even with 0 real plans */
           <FlatList
             style={{ flex: 1 }}
             data={gridData}
@@ -312,6 +286,7 @@ function MyPlan({
           onClose={exitCreateMode}
           onPlanCreated={handlePlanCreated}
           reportScrollY={onScroll ?? (() => {})}
+          inline
         />
       </Animated.View>
     </View>

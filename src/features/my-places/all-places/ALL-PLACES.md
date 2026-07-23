@@ -18,7 +18,7 @@ The row is wrapped in `ReanimatedSwipeable` (`react-native-gesture-handler`): sw
 
 The tags row is rendered as its own horizontally-scrollable row below the swipeable, outside it — so it never moves during the delete-swipe gesture and can grow to hold any number of tags without affecting the swipeable card's layout.
 
-Rows are adapted from DB shape (`SavedPlace`) to `PlaceDetail` via `toPlaceDetail()`; fields not yet persisted (schedule, visitStrategy, …) get sensible defaults, and the thumbnail falls back to a Mapbox static-map pin when there's no real photo.
+Rows are adapted from DB shape (`SavedPlace`) to `PlaceDetail` via `toPlaceDetail()`; fields not yet persisted (schedule, visitStrategy, …) get sensible defaults, and the thumbnail falls back to `MapPinCover` (`@/components/map-pin-cover/MapPinCover` — a stylized map + pin, not a real Mapbox static image) when there's no real photo.
 
 ## API
 
