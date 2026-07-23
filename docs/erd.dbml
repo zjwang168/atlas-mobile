@@ -69,30 +69,34 @@ Table atlas_places {
   created_at timestamptz
 }
 
-Table projects {
+Table plans {
   id uuid [pk]
-  owner_id uuid [ref: > users.id]
+  owner_id uuid [ref: > users.id, note: 'legacy, unused by RLS']
+  user_id uuid [note: 'RLS ownership column, default auth.uid(), mirrors places.user_id / atlas.user_id']
   title varchar
   destination varchar
   start_date date
   end_date date
   description text
   visibility varchar
+  image_url text
   created_at timestamptz
   updated_at timestamptz
 }
 
-Table project_members {
+Table plan_members {
   id uuid [pk]
-  project_id uuid [ref: > projects.id]
+  plan_id uuid [ref: > plans.id]
   user_id uuid [ref: > users.id]
   role varchar
   created_at timestamptz
 }
 
-Table project_places {
+// A place may appear more than once in the same plan — no unique(plan_id, place_id).
+// Ownership for RLS is proven via the parent plans.user_id, not a column here.
+Table plan_itinerary_place_flexible {
   id uuid [pk]
-  project_id uuid [ref: > projects.id]
+  plan_id uuid [ref: > plans.id]
   place_id uuid [ref: > places.id]
   added_by uuid [ref: > users.id]
   status varchar
@@ -100,21 +104,23 @@ Table project_places {
   created_at timestamptz
 }
 
-Table itinerary_days {
+// Ownership for RLS is proven via the parent plans.user_id, not a column here.
+Table plan_itinerary_days {
   id uuid [pk]
-  project_id uuid [ref: > projects.id]
+  plan_id uuid [ref: > plans.id]
   date date
   title varchar
   sort_order int
   created_at timestamptz
 }
 
-Table itinerary_items {
+// sort_order is scoped within (itinerary_day_id, visit_slot), not just the day.
+// Ownership for RLS is proven via itinerary_day_id -> plan_itinerary_days.plan_id -> plans.user_id.
+Table plan_itinerary_places {
   id uuid [pk]
-  itinerary_day_id uuid [ref: > itinerary_days.id]
+  itinerary_day_id uuid [ref: > plan_itinerary_days.id]
   place_id uuid [ref: > places.id]
-  start_time time
-  end_time time
+  visit_slot varchar
   note text
   sort_order int
   created_at timestamptz
@@ -123,7 +129,7 @@ Table itinerary_items {
 Table imports {
   id uuid [pk]
   user_id uuid [ref: > users.id]
-  project_id uuid [ref: > projects.id]
+  plan_id uuid [ref: > plans.id]
   atlas_id uuid [ref: > atlas.id]
   input_type varchar
   input_url text
@@ -154,7 +160,7 @@ Table extracted_places {
 Table chat_sessions {
   id uuid [pk]
   user_id uuid [ref: > users.id]
-  project_id uuid [ref: > projects.id]
+  plan_id uuid [ref: > plans.id]
   title varchar
   created_at timestamptz
   updated_at timestamptz

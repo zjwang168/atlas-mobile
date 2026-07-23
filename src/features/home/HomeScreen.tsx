@@ -380,6 +380,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
       <AtlasDetail
         atlasId={overlay.kind === 'atlasDetail' ? overlay.atlasId : null}
         onDismiss={() => setOverlay({ kind: 'none' })}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
       />
 

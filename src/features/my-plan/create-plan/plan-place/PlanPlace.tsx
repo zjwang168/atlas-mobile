@@ -17,6 +17,14 @@ type PlanPlaceProps = {
   location: string;
   range: DateRange;
   reportScrollY: (y: number) => void;
+  /** True when this wizard is MyPlan's permanently-mounted inline instance
+      (its own visibility is local `showCreatePlan` state, not `overlay`),
+      false for HomeScreen's overlay-driven instance (`overlay.kind === 'createPlan'`).
+      Determines the `returnTo` passed when opening `addPlace`: the inline
+      instance isn't reachable via `overlay.kind`, so `returnTo: { kind: 'createPlan' }`
+      would make HomeScreen incorrectly mount a *second*, unstyled CreatePlan
+      on top of it once AddPlace opens. */
+  inline?: boolean;
 };
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -33,10 +41,11 @@ function formatRangeSummary(location: string, range: DateRange): string {
   return location ? `${location} · ${startStr} – ${endStr}` : `${startStr} – ${endStr}`;
 }
 
-export default function PlanPlace({ onBack, onConfirm, location, range, reportScrollY }: PlanPlaceProps) {
+export default function PlanPlace({ onBack, onConfirm, location, range, reportScrollY, inline }: PlanPlaceProps) {
   const { setOverlay } = useHome();
   const insets = useSafeAreaInsets();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
+  const addPlaceReturnTo = inline ? ({ kind: 'none' } as const) : ({ kind: 'createPlan' } as const);
 
   // Stable callback identities so the memoized FlexiblePlaceField/DateRangeField
   // below can actually skip re-rendering when the *other* slice of `places`
@@ -53,18 +62,18 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
   const openForFree = useCallback(() => {
     setOverlay({
       kind: 'addPlace',
-      returnTo: { kind: 'createPlan' },
+      returnTo: addPlaceReturnTo,
       onSelect: (selectedPlaces) => {
         const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl }));
         updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
       },
     });
-  }, [setOverlay, updatePlaces]);
+  }, [setOverlay, updatePlaces, addPlaceReturnTo]);
 
   const openForDate = useCallback((date: string, timeSlot: TimeSlot) => {
     setOverlay({
       kind: 'addPlace',
-      returnTo: { kind: 'createPlan' },
+      returnTo: addPlaceReturnTo,
       onSelect: (selectedPlaces) => {
         const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl }));
         updatePlaces((prev) => {
@@ -74,7 +83,7 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
         });
       },
     });
-  }, [setOverlay, updatePlaces]);
+  }, [setOverlay, updatePlaces, addPlaceReturnTo]);
 
   const handleRemoveFree = useCallback((id: string) => {
     updatePlaces((prev) => ({ ...prev, free: prev.free.filter((p) => p.id !== id) }));

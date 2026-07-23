@@ -57,6 +57,14 @@ type ContentPanelProps = {
   maxHeight?: number;
   /** Reports the live panel height during animations and drags. */
   onHeightChange?: (height: number) => void;
+  /**
+   * Floor for snap states inherited via `snapGroup`. For a panel with no
+   * `compactContent`, group memory can otherwise settle it at `compact` — a
+   * height it has nothing sane to render — with no `compactContent` crossfade
+   * to fall back on. Only clamps group-inherited state; an explicit `snapState`
+   * prop or internal drag gesture is unaffected.
+   */
+  minSnap?: SnapState;
 };
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -76,6 +84,11 @@ const defaultSnapHeights = SNAP_HEIGHTS;
 
 const SNAP_ORDER: SnapState[] = ['compact', 'short', 'default', 'tall', 'full'];
 
+function clampToFloor(state: SnapState, floor?: SnapState): SnapState {
+  if (!floor) return state;
+  return SNAP_ORDER.indexOf(state) < SNAP_ORDER.indexOf(floor) ? floor : state;
+}
+
 // Height at which the panel starts losing its card border-radius / margins as it approaches full screen
 const FULL_TRANSITION_START = SCREEN_HEIGHT * 0.75;
 
@@ -93,11 +106,13 @@ export default function ContentPanel({
   defaultSnapHeight,
   maxHeight,
   onHeightChange,
+  minSnap,
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
   const activeSnapGroup = controlledSnapState === undefined ? snapGroup : undefined;
   const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(activeSnapGroup, initialSnap);
-  const effectiveControlledSnapState = controlledSnapState ?? (activeSnapGroup ? groupSnapState : undefined);
+  const effectiveControlledSnapState = controlledSnapState
+    ?? (activeSnapGroup ? clampToFloor(groupSnapState, minSnap) : undefined);
   const initialResolvedSnap = effectiveControlledSnapState ?? initialSnap;
   const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
   // Tracked in state (mirroring snapHeights.current.compact) so the crossfade

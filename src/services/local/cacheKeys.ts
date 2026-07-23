@@ -5,7 +5,7 @@ export const LOCAL_CACHE_KEYS = {
   savedPlacesIndex: 'savedPlacesIndex',
   atlases: 'atlases',
   atlasPlaces: 'atlasPlaces',
-  plans: 'plans',
+  planRows: 'planRows',
   writeQueue: 'writeQueue',
   deadLetters: 'deadLetters',
 } as const;

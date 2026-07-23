@@ -22,10 +22,11 @@ function ItemSeparator() {
 type AtlasDetailProps = {
   atlasId: string | null;
   onDismiss: () => void;
+  snapGroup?: string;
   onHeightChange?: (height: number) => void;
 };
 
-export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: AtlasDetailProps) {
+export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightChange }: AtlasDetailProps) {
   const { atlases, savedPlaces, setOverlay, atlasPlaces, addPlacesToAtlas, removePlaceFromAtlas, deleteAtlas } = useHome();
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -117,6 +118,8 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
       visible={isVisible}
       onHidden={() => setAtlas(null)}
       zIndex={40}
+      snapGroup={snapGroup}
+      minSnap="default"
       onHeightChange={onHeightChange}
       compactContent={({ snapTo }) =>
         atlas ? (

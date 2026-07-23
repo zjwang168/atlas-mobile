@@ -43,6 +43,7 @@ type CreatePlanProps = {
   onClose: () => void;                   // user discards the plan
   onPlanCreated?: (plan: SavedPlan) => void; // plan saved successfully
   reportScrollY: (y: number) => void;    // forward to ContentPanel for gesture coordination
+  inline?: boolean;                      // true for MyPlan's permanently-mounted instance; forwarded to PlanPlace, see its Behaviour section
 };
 
 export type CreatePlanHandle = {
@@ -50,7 +51,7 @@ export type CreatePlanHandle = {
 };
 ```
 
-Resets automatically on mount (for callers that mount/unmount it normally, e.g. `HomeScreen`'s `createPlan` overlay). `MyPlan` keeps `CreatePlan` permanently mounted for a flicker-free cross-fade with the plan grid, so it calls `ref.current.reset()` explicitly each time the user re-enters create mode instead of relying on mount timing.
+Resets automatically on mount (for callers that mount/unmount it normally, e.g. `HomeScreen`'s `createPlan` overlay). `MyPlan` keeps `CreatePlan` permanently mounted for a flicker-free cross-fade with the plan grid, so it calls `ref.current.reset()` explicitly each time the user re-enters create mode instead of relying on mount timing, and passes `inline` so `PlanPlace` knows it isn't reachable via `overlay.kind`.
 
 ### Steps
 
@@ -81,6 +82,8 @@ export type DateRange = { start: string | null; end: string | null }; // 'YYYY-M
 
 ## `savePlan` — persistence service
 
+Backed by the real Supabase `plans` / `plan_itinerary_place_flexible` / `plan_itinerary_days` / `plan_itinerary_places` tables via `services/plan/planService.ts` and `services/plan/planItineraryService.ts` — this module adapts between the wizard's `PlacesState` shape and those DB-row-shaped services. See `docs/schema.sql`/`docs/erd.dbml` for the schema this maps onto.
+
 ### Public API
 
 ```ts
@@ -90,8 +93,11 @@ export async function savePlan(input: PlanInput): Promise<SavedPlan>
 /** Look up a saved plan by id. Returns undefined if not found. */
 export async function findSavedPlan(id: string): Promise<SavedPlan | undefined>
 
-/** Seed a plan directly into the store (used by mock data initialisation). */
-export function seedPlan(plan: SavedPlan): void
+/** List saved plans for the MyPlan grid. */
+export async function listSavedPlans(): Promise<SavedPlan[]>
+
+/** Delete a saved plan. */
+export async function deleteSavedPlan(id: string): Promise<void>
 ```
 
 ### Types
@@ -111,16 +117,18 @@ type SavedPlan = {
   placeCount: number;
   imageUrl?: string;
   freePlaces: PlannedPlace[];
-  schedule: PlanDateSlot[];  // sorted by date, empty slots stripped
+  schedule: PlanDateSlot[];
 };
 
 type PlanDateSlot = {
   date: string;  // 'YYYY-MM-DD'
-  slots: Partial<Record<VisitSlot, PlannedPlace[]>>;
+  places: PlannedPlace[];  // flat list — each place carries its own optional `timeSlot`, not nested by slot
 };
 ```
 
-To swap for a real API: replace the mock blocks inside `savePlan` and `findSavedPlan` with `fetch()` calls.
+### Behaviour
+
+`listSavedPlans()` returns each plan's real `placeCount` and a default `imageUrl` (the earliest-added place's thumbnail across both flexible and scheduled places, via `planItineraryService.fetchPlanSummaries()` + `placeService.resolvePlaceThumbnail()`) but empty `freePlaces`/`schedule` — the grid doesn't need the full per-place breakdown, only `findSavedPlan()` (used by `PlanDetail`) loads that. `resolvePlaceThumbnail()` is the same real-photo-or-generated-Mapbox-pin fallback `toPlaceDetail()` uses, so a place with no uploaded photo still gets a distinct per-place thumbnail rather than nothing. `plans.image_url`, when explicitly set, takes priority over the derived cover. A place added to a plan lands in exactly one place server-side: `input.places.free` entries become `plan_itinerary_place_flexible` rows, `input.places.byDate` entries become `plan_itinerary_places` rows — there's no row-level link between the two.
 
 ---
 
@@ -128,7 +136,11 @@ To swap for a real API: replace the mock blocks inside `savePlan` and `findSaved
 
 Renders a "Flexible" drop zone and (when dates are set) a horizontal pager of per-day columns. Each column has four time slots: `morning`, `noon`, `afternoon`, `night`.
 
-Places are added by calling `useHome().setOverlay({ kind: 'addPlace', onSelect, returnTo: { kind: 'createPlan' } })` — the overlay delivers `PlaceDetail[]` back, which the wizard converts to `PlannedPlace[]` via `newPlannedPlace()`. `returnTo` is why `HomeScreen` keeps `CreatePlan` mounted underneath the `addPlace` overlay instead of unmounting it (see `HOME.md`) — `CreatePlan` resets its wizard state (`step`, `location`, `range`, `createPlanCache`) on every mount, so unmounting mid-flow to show `AddPlace` would otherwise wipe the in-progress plan when the user returned.
+Places are added by calling `useHome().setOverlay({ kind: 'addPlace', onSelect, returnTo })` — the overlay delivers `PlaceDetail[]` back, which the wizard converts to `PlannedPlace[]` via `newPlannedPlace()`.
+
+`returnTo` depends on the `inline` prop threaded down from `CreatePlan`/`MyPlan`, since `PlanPlace` is shared by two differently-hosted `CreatePlan` instances that must not both react to the same overlay state:
+- `inline` false (`HomeScreen`'s `overlay.kind === 'createPlan'` instance): `returnTo: { kind: 'createPlan' }` — this is why `HomeScreen` keeps that `CreatePlan` mounted underneath the `addPlace` overlay instead of unmounting it (see `HOME.md`); `CreatePlan` resets its wizard state (`step`, `location`, `range`, `createPlanCache`) on every mount, so unmounting mid-flow to show `AddPlace` would otherwise wipe the in-progress plan when the user returned.
+- `inline` true (`MyPlan`'s permanently-mounted instance): `returnTo: { kind: 'none' }` — this instance's visibility is local `showCreatePlan` state, not `overlay`, so it's never reachable via `overlay.kind`. Using `{ kind: 'createPlan' }` here would make `HomeScreen`'s render condition (`overlay.kind === 'addPlace' && overlay.returnTo?.kind === 'createPlan'`) match too, mounting a *second*, unstyled `CreatePlan` directly over the map on top of `MyPlan`'s own panel-wrapped instance the moment `AddPlace` opened.
 
 ### Drag-and-drop
 
@@ -174,29 +186,31 @@ type DndProviderProps = {
 ## `plan-place/types.ts`
 
 ```ts
-export type VisitSlot = 'morning' | 'noon' | 'afternoon' | 'night';
+export type TimeSlot = 'morning' | 'noon' | 'afternoon' | 'night';
 
 export type PlannedPlace = {
   id: string;      // unique instance id
   placeId: string; // source PlaceDetail.id
   name: string;
   subtitle: string;
+  imageUrl?: string;
+  timeSlot?: TimeSlot;
 };
 
 export type SlotKey =
   | { kind: 'free' }
-  | { kind: 'dated'; date: string; slot: VisitSlot };
+  | { kind: 'dated'; date: string; timeSlot: TimeSlot };
 
 export type PlacesState = {
   free: PlannedPlace[];
-  byDate: Record<string, Record<VisitSlot, PlannedPlace[]>>;
+  byDate: Record<string, PlannedPlace[]>;  // flat — each place carries its own optional `timeSlot`, not nested by slot
 };
 
 // Convert a SlotKey to a stable string key for Maps / Sets
 export function slotKeyToString(key: SlotKey): string
 
 // Create a new PlannedPlace instance from a PlaceDetail-like source
-export function newPlannedPlace(place: { id: string; name: string; subtitle: string }): PlannedPlace
+export function newPlannedPlace(place: { id: string; name: string; subtitle: string; imageUrl?: string }): PlannedPlace
 ```
 
 ---

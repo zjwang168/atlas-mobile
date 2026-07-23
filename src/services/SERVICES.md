@@ -47,6 +47,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline
 export function toPlaceDetail(row: SavedPlace): PlaceDetail
+export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string  // real photo if saved, else a generated Mapbox static-map pin for its coordinates; used by toPlaceDetail() and savePlan.ts's plan covers
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
 ```
 
@@ -74,6 +75,35 @@ export function subscribeAtlasPlaces(listener: (rows: AtlasPlace[]) => void): ()
 ```
 
 `HomeContext` wraps `addPlacesToAtlas` / `removePlaceFromAtlas` / `deleteAtlas` (on `useHome()`) with an `Alert.alert` on failure, unlike the other `HomeContext` write wrappers (`deleteSavedPlace`, `createAtlas`), which only `console.error` — call the `useHome()` versions from feature code rather than these service functions directly.
+
+### `plan/planService.ts`
+
+CRUD for the user's plans, backed by Supabase and a read-through local cache (see `local/`). Unlike `place/placeService.ts` / `atlas/atlasService.ts`, writes are online-first for now — no offline write-queue integration yet.
+
+```ts
+export async function fetchPlans(): Promise<PlanRow[]>
+export async function findPlan(id: string): Promise<PlanRow | undefined>
+export async function createPlan(input: CreatePlanInput): Promise<PlanRow>  // optimistic local row; rolls back and rethrows on failure (no retry queue yet)
+export async function deletePlan(id: string): Promise<void>  // plan_itinerary_place_flexible/plan_itinerary_days cascade server-side
+export function subscribePlans(listener: (plans: PlanRow[]) => void): () => void
+```
+
+### `plan/planItineraryService.ts`
+
+Reads/writes for a plan's places — `plan_itinerary_place_flexible` (flexible, unscheduled) and `plan_itinerary_days` + `plan_itinerary_places` (scheduled onto a day + visit slot). Same v1 online-first scope as `planService.ts`. A place lands in exactly one of `plan_itinerary_place_flexible` or `plan_itinerary_places` — there's no row-level link between the two, so "flexible" vs. "scheduled" is which table wrote it, not a derived join.
+
+```ts
+export async function fetchFlexiblePlaces(planId: string): Promise<PlanItineraryPlaceFlexibleRow[]>
+export async function addFlexiblePlaces(planId: string, placeIds: string[]): Promise<PlanItineraryPlaceFlexibleRow[]>  // the same place id may be added more than once
+export async function removeFlexiblePlace(joinRowId: string): Promise<void>
+export async function fetchPlanItinerary(planId: string): Promise<{ day: PlanItineraryDayRow; items: PlanItineraryPlaceRow[] }[]>
+export async function ensurePlanItineraryDay(planId: string, date: string, sortOrder: number): Promise<PlanItineraryDayRow>  // finds or creates the day row; call once per date, not once per place
+export async function addScheduledPlaceToDay(dayId: string, placeId: string, visitSlot: VisitSlot, sortOrder: number): Promise<PlanItineraryPlaceRow>
+export async function removeScheduledPlace(itemId: string): Promise<void>
+export async function fetchPlanSummaries(planIds: string[]): Promise<Record<string, PlanSummary>>  // batch place-count + cover-candidate lookup for the MyPlan grid, 3 queries total regardless of plan count
+```
+
+`src/features/my-plan/create-plan/savePlan.ts` adapts between these two services' DB-row shapes and the `my-plan` wizard's `PlacesState`/`SavedPlan` shape — see `CREATE-PLAN.md`.
 
 ## Planned
 

@@ -39,6 +39,22 @@ import type { Atlas } from '@/types/atlas';
 
 `Atlas` mirrors the Supabase `atlas` table (renamed from `collections`), including its `emoji` column — read/written by `services/atlas/atlasService.ts`, the same offline-first pattern as `SavedPlace`/`placeService.ts`.
 
+## `plan.ts` — plan row types
+
+```ts
+import type { PlanRow, PlanItineraryPlaceFlexibleRow, PlanItineraryDayRow, PlanItineraryPlaceRow, VisitSlot } from '@/types/plan';
+```
+
+| Type | Used by |
+|---|---|
+| `PlanRow` | Mirrors the Supabase `plans` table — read/written by `services/plan/planService.ts` |
+| `PlanItineraryPlaceFlexibleRow` | Mirrors `plan_itinerary_place_flexible` (a plan's flexible, unscheduled places) — read/written by `services/plan/planItineraryService.ts` |
+| `PlanItineraryDayRow` | Mirrors `plan_itinerary_days` — read/written by `services/plan/planItineraryService.ts` |
+| `PlanItineraryPlaceRow` | Mirrors `plan_itinerary_places` (a place scheduled onto a day + `visit_slot`) — read/written by `services/plan/planItineraryService.ts` |
+| `VisitSlot` | `'morning' \| 'noon' \| 'afternoon' \| 'night'` — matches `plan-place/types.ts`'s `TimeSlot` structurally but is a separate nominal type for the DB row shape |
+
+`src/features/my-plan/create-plan/savePlan.ts` adapts these DB-row types into the `my-plan` wizard's own `SavedPlan`/`PlannedPlace` shapes — see `src/features/my-plan/create-plan/CREATE-PLAN.md`.
+
 ## Stub type files (not yet populated)
 
 | File | Intended purpose |
