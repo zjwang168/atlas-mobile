@@ -1,28 +1,67 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  GlassView,
+  isGlassEffectAPIAvailable,
+  isLiquidGlassAvailable,
+} from 'expo-glass-effect';
+import { BlurView } from 'expo-blur';
+import * as Clipboard from 'expo-clipboard';
+import type { Icon } from 'phosphor-react-native';
+import { ArrowUpIcon } from 'phosphor-react-native/src/icons/ArrowUp';
+import { ArrowRightIcon } from 'phosphor-react-native/src/icons/ArrowRight';
+import { CaretLeftIcon } from 'phosphor-react-native/src/icons/CaretLeft';
+import { ClockIcon } from 'phosphor-react-native/src/icons/Clock';
+import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
+import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
+import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
+import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
+import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
+import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
+  Share,
   StyleSheet,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
+import Animated, { LinearTransition } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/ui/text';
-import ContentPanel from '@/components/content-panel/ContentPanel';
+import TopBlurFade from '@/components/ui/top-blur-fade';
 import { chatWithAtlas, createChatSession, fetchConversation } from '@/services/api/apiService';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
+
+const COLOR = {
+  primary: '#12C170',
+  background: '#FFFFFF',
+  foreground: '#09090B',
+  textTertiary: '#8E8E93',
+  border: '#E4E4E7',
+} as const;
+
+const LIQUID_GLASS_AVAILABLE =
+  isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
+
+const COMPOSER_LAYOUT_TRANSITION = LinearTransition.duration(180);
 
 type Message = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
 };
+
+type MessageFeedback = 'up' | 'down';
 
 type PlaceActionCard = {
   places: PendingAction['places'];
@@ -337,22 +376,63 @@ function buildWelcomeMessage(places: ParsedPlace[], title?: string): string {
 type AIChatBoxProps = {
   places: ParsedPlace[];
   onClose: () => void;
+  onOpenHistory?: () => void;
   title?: string;
   visible?: boolean;
   conversationId?: string | null;
-  onHeightChange?: (height: number) => void;
   onPlacesCommitted?: (places: ParsedPlace[], action: PendingMode) => void;
 };
+
+type GlassIconButtonProps = {
+  icon: Icon;
+  label: string;
+  onPress?: () => void;
+};
+
+function GlassIconButton({ icon: IconComponent, label, onPress }: GlassIconButtonProps) {
+  return (
+    <View style={styles.glassButtonShadow}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        disabled={!onPress}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.glassButton,
+          pressed && styles.glassButtonPressed,
+          !onPress && styles.glassButtonDisabled,
+        ]}
+      >
+        {LIQUID_GLASS_AVAILABLE ? (
+          <GlassView
+            style={StyleSheet.absoluteFill}
+            glassEffectStyle="regular"
+            tintColor="rgba(255,255,255,0.35)"
+            isInteractive
+          />
+        ) : (
+          <View pointerEvents="none" style={styles.glassButtonFallback} />
+        )}
+        <IconComponent
+          size={24}
+          weight="regular"
+          color={COLOR.foreground}
+        />
+      </Pressable>
+    </View>
+  );
+}
 
 export default function AIChatBox({
   places,
   onClose,
+  onOpenHistory,
   title,
   visible = true,
   conversationId = null,
-  onHeightChange,
   onPlacesCommitted,
 }: AIChatBoxProps) {
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -364,14 +444,27 @@ export default function AIChatBox({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [inputContentHeight, setInputContentHeight] = useState(21);
+  const [messageFeedback, setMessageFeedback] = useState<
+    Record<string, MessageFeedback | undefined>
+  >({});
   const flatListRef = useRef<FlatList>(null);
   const hydratedConversationIdRef = useRef<string | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const lastWelcomeKeyRef = useRef<string>('');
-  const subtitle = useMemo(
-    () => title || (places.length > 0 ? `${places.length} places on map` : 'Travel planning assistant'),
-    [places.length, title],
-  );
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSubscription = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
+    const hideSubscription = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   const ensureSession = async (): Promise<string> => {
     if (sessionId) return sessionId;
@@ -422,11 +515,19 @@ export default function AIChatBox({
         if (cancelled) return;
 
         const session = detail.session;
-        const restoredMessages: Message[] = (detail.messages || []).map((message, index) => ({
-          id: `${message.role}_${index}_${Date.now()}`,
-          role: message.role === 'user' ? 'user' : 'assistant',
-          text: message.content,
-        }));
+        const restoredMessages: Message[] = (detail.messages || [])
+          .filter(
+            (message) =>
+              !(
+                message.role === 'user' &&
+                message.content.trim().startsWith('CONFIRM_ADD_PLACES ')
+              ),
+          )
+          .map((message, index) => ({
+            id: `${message.role}_${index}_${Date.now()}`,
+            role: message.role === 'user' ? 'user' : 'assistant',
+            text: message.content,
+          }));
 
         const sessionPlaces = detail.session.locations ?? [];
         const hasOpeningAssistant = restoredMessages[0]?.role === 'assistant';
@@ -596,6 +697,29 @@ export default function AIChatBox({
     const isUser = item.role === 'user';
     const cardParsed = extractPlaceActionCards(item.text);
     const displayText = cardParsed.text || item.text;
+    const feedbackText = displayText.trim() || item.text.trim();
+    const selectedFeedback = messageFeedback[item.id];
+    const toggleFeedback = (feedback: MessageFeedback) => {
+      setMessageFeedback((current) => ({
+        ...current,
+        [item.id]: current[item.id] === feedback ? undefined : feedback,
+      }));
+    };
+    const copyResponse = () => {
+      void Clipboard.setStringAsync(feedbackText);
+    };
+    const shareResponse = () => {
+      void Share.share({ message: feedbackText }).catch((error) => {
+        console.warn('[AIChatBox] share response failed:', error);
+      });
+    };
+    const showMoreActions = () => {
+      Alert.alert('Response actions', undefined, [
+        { text: 'Copy', onPress: copyResponse },
+        { text: 'Share', onPress: shareResponse },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    };
     const renderCards = (card: PlaceActionCard) =>
       card.places.slice(0, 3).map((place) => {
         const singleCard = buildSinglePlaceCard(place, card.status);
@@ -610,18 +734,22 @@ export default function AIChatBox({
                 disabled={disabledPin}
                 style={[
                   styles.actionCardButton,
-                  styles.actionCardButtonSecondary,
                   disabledPin && styles.actionCardButtonDisabled,
                 ]}
               >
                 <Text
                   style={[
-                    styles.actionCardButtonSecondaryText,
+                    styles.actionCardButtonText,
                     disabledPin && styles.actionCardButtonTextDisabled,
                   ]}
                 >
-                  Pin in Chat
+                  Add to this map
                 </Text>
+                <ArrowRightIcon
+                  size={16}
+                  weight="bold"
+                  color={disabledPin ? '#9CA3AF' : COLOR.foreground}
+                />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => handleCardAction(singleCard, 'save_to_my_places')}
@@ -639,6 +767,11 @@ export default function AIChatBox({
                 >
                   Save to My Places
                 </Text>
+                <ArrowRightIcon
+                  size={16}
+                  weight="bold"
+                  color={disabledSave ? '#9CA3AF' : COLOR.foreground}
+                />
               </TouchableOpacity>
             </View>
           </View>
@@ -646,47 +779,131 @@ export default function AIChatBox({
       });
     return (
       <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
-        <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-          {isUser ? (
+        {isUser ? (
+          <View style={styles.userBubble}>
             <Text style={[styles.messageText, styles.userText]}>
               {item.text}
             </Text>
-          ) : (
-            <Markdown style={markdownStyles}>{displayText}</Markdown>
-          )}
-          {cardParsed.cards.length > 0 ? cardParsed.cards.map((card) => renderCards(card)) : null}
-        </View>
+          </View>
+        ) : (
+          <View style={styles.assistantContent}>
+            <View style={styles.assistantMessageText}>
+              <Text style={styles.assistantLabel}>Atlas AI</Text>
+              {displayText ? <Markdown style={markdownStyles}>{displayText}</Markdown> : null}
+            </View>
+            {cardParsed.cards.length > 0
+              ? cardParsed.cards.map((card) => renderCards(card))
+              : null}
+            <View style={styles.feedbackBar}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Helpful response"
+                accessibilityState={{ selected: selectedFeedback === 'up' }}
+                onPress={() => toggleFeedback('up')}
+                style={({ pressed }) => [
+                  styles.feedbackButton,
+                  pressed && styles.feedbackButtonPressed,
+                ]}
+              >
+                <ThumbsUpIcon
+                  size={16}
+                  weight={selectedFeedback === 'up' ? 'fill' : 'bold'}
+                  color={selectedFeedback === 'up' ? COLOR.foreground : '#717171'}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Not helpful response"
+                accessibilityState={{ selected: selectedFeedback === 'down' }}
+                onPress={() => toggleFeedback('down')}
+                style={({ pressed }) => [
+                  styles.feedbackButton,
+                  pressed && styles.feedbackButtonPressed,
+                ]}
+              >
+                <ThumbsDownIcon
+                  size={16}
+                  weight={selectedFeedback === 'down' ? 'fill' : 'bold'}
+                  color={selectedFeedback === 'down' ? COLOR.foreground : '#717171'}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Copy response"
+                onPress={copyResponse}
+                style={({ pressed }) => [
+                  styles.feedbackButton,
+                  pressed && styles.feedbackButtonPressed,
+                ]}
+              >
+                <CopyIcon size={16} weight="bold" color="#717171" />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Share response"
+                onPress={shareResponse}
+                style={({ pressed }) => [
+                  styles.feedbackButton,
+                  pressed && styles.feedbackButtonPressed,
+                ]}
+              >
+                <ShareIcon size={16} weight="bold" color="#717171" />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="More response actions"
+                onPress={showMoreActions}
+                style={({ pressed }) => [
+                  styles.feedbackButton,
+                  pressed && styles.feedbackButtonPressed,
+                ]}
+              >
+                <DotsThreeIcon size={16} weight="bold" color="#717171" />
+              </Pressable>
+            </View>
+          </View>
+        )}
       </View>
     );
   };
 
-  return (
-    <ContentPanel
-      initialSnap="default"
-      visible={visible}
-      onHeightChange={onHeightChange}
-      zIndex={46}
-    >
-      {({ reportScrollY, bottomInset }) => (
-        <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.icon}>
-          <Ionicons name="sparkles" size={18} color="#2563EB" />
-        </View>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Atlas AI</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        </View>
-        <TouchableOpacity onPress={onClose} style={styles.closeButton} activeOpacity={0.75}>
-          <Ionicons name="close" size={20} color="#1A1A1A" />
-        </TouchableOpacity>
-      </View>
+  if (!visible) return null;
 
+  const hasComposerText = inputText.length > 0;
+  const headerTop = Math.max(insets.top, 56);
+  const headerOverlayHeight = headerTop + 68;
+  const composerHeight = hasComposerText
+    ? Math.min(196, Math.max(120, inputContentHeight + 72))
+    : 56;
+  const composerBottom = keyboardVisible ? 12 : 28;
+  const composerOverlayHeight = composerHeight + composerBottom + 56;
+  const headerMaterialHeight = headerOverlayHeight - 32;
+  const composerMaterialHeight = composerOverlayHeight - 50;
+
+  const sendButton = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Send message"
+      onPress={handleSend}
+      disabled={!inputText.trim() || pending}
+      style={({ pressed }) => [
+        styles.sendButton,
+        pressed && inputText.trim() && !pending && styles.sendButtonPressed,
+      ]}
+    >
+      {pending ? (
+        <ActivityIndicator size="small" color="#FFFFFF" />
+      ) : (
+        <ArrowUpIcon size={20} weight="regular" color="#FFFFFF" />
+      )}
+    </Pressable>
+  );
+
+  return (
+    <View style={styles.screen}>
       <KeyboardAvoidingView
-        style={styles.body}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <FlatList
           ref={flatListRef}
@@ -694,130 +911,239 @@ export default function AIChatBox({
           keyExtractor={(item) => item.id}
           renderItem={renderMessage}
           style={styles.list}
-          contentContainerStyle={{ paddingBottom: 16 }}
-          onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)}
-          scrollEventThrottle={16}
+          contentContainerStyle={[
+            styles.listContent,
+            {
+              paddingTop: headerOverlayHeight - 1,
+              paddingBottom: composerOverlayHeight,
+            },
+          ]}
+          contentInsetAdjustmentBehavior="never"
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          scrollIndicatorInsets={{
+            top: headerOverlayHeight,
+            bottom: composerHeight + composerBottom,
+          }}
           showsVerticalScrollIndicator={false}
         />
 
-        <View style={[styles.inputRow, { paddingBottom: Math.max(bottomInset, 10) }]}>
-          <TextInput
-            value={inputText}
-            onChangeText={setInputText}
-            placeholder="Ask Atlas AI..."
-            placeholderTextColor="#8E8E93"
-            style={styles.input}
-            onSubmitEditing={handleSend}
-            returnKeyType="send"
-            editable={!pending}
-          />
-          <TouchableOpacity
-            onPress={handleSend}
-            disabled={!inputText.trim() || pending}
-            style={[styles.sendButton, (!inputText.trim() || pending) && styles.sendButtonDisabled]}
+        <TopBlurFade
+          height={headerMaterialHeight}
+          intensity={5}
+          tint="systemThinMaterialLight"
+          scrim={1}
+        />
+
+        <TopBlurFade
+          edge="bottom"
+          height={composerMaterialHeight}
+          intensity={5}
+          tint="systemUltraThinMaterialLight"
+          scrim={1}
+        />
+
+        <View style={[styles.header, { paddingTop: headerTop }]}>
+          <View style={styles.headerControls}>
+            <GlassIconButton icon={CaretLeftIcon} label="Back" onPress={onClose} />
+            <GlassIconButton
+              icon={ClockIcon}
+              label="Open chat history"
+              onPress={onOpenHistory}
+            />
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.composerWrap,
+            { bottom: composerBottom },
+          ]}
+        >
+          <Animated.View
+            layout={COMPOSER_LAYOUT_TRANSITION}
+            style={[
+              styles.composer,
+              {
+                height: composerHeight,
+                marginHorizontal: hasComposerText ? 12 : 28,
+                borderRadius: hasComposerText ? 24 : 32,
+              },
+            ]}
           >
-            {pending ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="send" size={16} color="#FFFFFF" />}
-          </TouchableOpacity>
+            {LIQUID_GLASS_AVAILABLE ? (
+              <GlassView
+                pointerEvents="none"
+                style={StyleSheet.absoluteFill}
+                glassEffectStyle="regular"
+                tintColor="rgba(255,255,255,0.45)"
+              />
+            ) : (
+              <BlurView
+                pointerEvents="none"
+                style={StyleSheet.absoluteFill}
+                tint="systemMaterialLight"
+                intensity={100}
+              />
+            )}
+            <View pointerEvents="none" style={styles.composerFrost} />
+
+            <TextInput
+              value={inputText}
+              onChangeText={setInputText}
+              onContentSizeChange={({ nativeEvent }) => {
+                setInputContentHeight(Math.max(21, Math.ceil(nativeEvent.contentSize.height)));
+              }}
+              placeholder="Ask AtlasAI"
+              placeholderTextColor="#B0B0B0"
+              style={[
+                styles.composerInput,
+                hasComposerText ? styles.composerInputExpanded : styles.composerInputCompact,
+              ]}
+              multiline
+              textAlignVertical="top"
+              scrollEnabled={composerHeight >= 196}
+              editable={!pending}
+            />
+
+            <View
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={styles.composerLeadingAction}
+            >
+              <PlusIcon size={24} weight="regular" color={COLOR.foreground} />
+            </View>
+
+            <View style={styles.composerTrailingActions}>
+              <View
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                style={styles.utilityButton}
+              >
+                <MicrophoneIcon size={24} weight="regular" color={COLOR.foreground} />
+              </View>
+
+              {sendButton}
+            </View>
+          </Animated.View>
         </View>
       </KeyboardAvoidingView>
     </View>
-      )}
-    </ContentPanel>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 46,
+    backgroundColor: COLOR.background,
+  },
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: COLOR.background,
   },
   header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 2,
+    paddingHorizontal: 16,
+    backgroundColor: 'transparent',
+  },
+  headerControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 12,
+    justifyContent: 'space-between',
+    height: 44,
+    position: 'relative',
   },
-  icon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#EFF6FF',
+  glassButtonShadow: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    boxShadow: '0 10px 26px rgba(0,0,0,0.16)',
+  },
+  glassButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerText: {
-    flex: 1,
+  glassButtonFallback: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(255,255,255,0.48)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.82)',
   },
-  title: {
-    ...typography.display,
-    color: '#09090B',
+  glassButtonPressed: {
+    transform: [{ scale: 0.96 }],
   },
-  subtitle: {
-    marginTop: 2,
-    ...typography.bodySmall,
-    color: '#717171',
-  },
-  closeButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  historyButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  body: {
-    flex: 1,
+  glassButtonDisabled: {
+    opacity: 0.45,
   },
   list: {
     flex: 1,
+  },
+  listContent: {
+    flexGrow: 1,
     paddingHorizontal: 16,
+    paddingBottom: 16,
   },
   messageRow: {
-    marginBottom: 12,
+    width: '100%',
+    marginBottom: 24,
     flexDirection: 'row',
   },
   messageRowUser: {
     justifyContent: 'flex-end',
+    paddingLeft: 80,
   },
   messageRowAssistant: {
     justifyContent: 'flex-start',
   },
-  bubble: {
-    maxWidth: '82%',
-    borderRadius: 22,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-  },
   userBubble: {
-    borderTopRightRadius: 6,
-    backgroundColor: '#2563EB',
+    maxWidth: '100%',
+    borderRadius: 18,
+    borderCurve: 'continuous',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#E9FBF1',
   },
-  assistantBubble: {
-    borderTopLeftRadius: 6,
-    backgroundColor: '#F2F2F7',
+  assistantContent: {
+    flex: 1,
+    gap: 12,
+  },
+  assistantMessageText: {
+    gap: 8,
+  },
+  assistantLabel: {
+    color: '#717171',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+    letterSpacing: -0.16,
   },
   actionCard: {
-    gap: 8,
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(0,0,0,0.06)',
+    gap: 12,
   },
   actionCardTitle: {
     ...typography.body,
     color: '#111827',
-    fontWeight: '700',
+    fontWeight: '600',
+    letterSpacing: -0.16,
   },
   actionCardBody: {
     ...typography.bodySmall,
@@ -825,31 +1151,26 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   actionCardButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
+    alignItems: 'flex-start',
+    gap: 12,
   },
   actionCardButton: {
-    flex: 1,
+    minHeight: 40,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    backgroundColor: '#12C170',
-  },
-  actionCardButtonSecondary: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#12C170',
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.05)',
   },
   actionCardButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  actionCardButtonSecondaryText: {
-    color: '#12C170',
-    fontWeight: '700',
+    color: COLOR.foreground,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '600',
+    letterSpacing: -0.16,
   },
   actionCardButtonDisabled: {
     opacity: 0.4,
@@ -857,44 +1178,108 @@ const styles = StyleSheet.create({
   actionCardButtonTextDisabled: {
     color: '#9CA3AF',
   },
-  messageText: {
-    ...typography.bodySmall,
-    lineHeight: 20,
-  },
-  userText: {
-    color: '#FFFFFF',
-  },
-  assistantText: {
-    color: '#1A1A1A',
-  },
-  inputRow: {
+  feedbackBar: {
+    minHeight: 28,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(60,60,67,0.12)',
-    paddingHorizontal: 16,
-    paddingTop: 10,
   },
-  input: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 22,
-    backgroundColor: '#F2F2F7',
-    paddingHorizontal: 16,
-    color: '#1A1A1A',
-    fontSize: 15,
-  },
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  feedbackButton: {
+    width: 24,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2563EB',
   },
-  sendButtonDisabled: {
+  feedbackButtonPressed: {
     opacity: 0.45,
+    transform: [{ scale: 0.94 }],
+  },
+  messageText: {
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+    letterSpacing: -0.16,
+  },
+  userText: {
+    color: '#000000',
+  },
+  composerWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 3,
+  },
+  composer: {
+    position: 'relative',
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.88)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.09)',
+  },
+  composerFrost: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  composerInput: {
+    position: 'absolute',
+    padding: 0,
+    color: COLOR.foreground,
+    fontSize: 16,
+    lineHeight: 21,
+    letterSpacing: -0.31,
+  },
+  composerInputCompact: {
+    top: 16,
+    right: 100,
+    left: 52,
+    height: 24,
+  },
+  composerInputExpanded: {
+    top: 16,
+    right: 16,
+    bottom: 56,
+    left: 16,
+  },
+  composerLeadingAction: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  composerTrailingActions: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  utilityButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLOR.primary,
+  },
+  sendButtonPressed: {
+    transform: [{ scale: 0.94 }],
   },
   confirmBar: {
     marginHorizontal: 16,
@@ -1012,25 +1397,27 @@ const styles = StyleSheet.create({
 
 const markdownStyles = StyleSheet.create({
   body: {
-    color: '#1A1A1A',
-    ...typography.bodySmall,
-    lineHeight: 20,
+    color: '#000000',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+    letterSpacing: -0.16,
   },
   heading3: {
-    color: '#111827',
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '700',
+    color: '#000000',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '600',
     marginBottom: 6,
     marginTop: 0,
   },
   strong: {
-    fontWeight: '700',
+    fontWeight: '600',
     color: '#111827',
   },
   paragraph: {
     marginTop: 0,
-    marginBottom: 8,
+    marginBottom: 0,
   },
   bullet_list: {
     marginTop: 0,

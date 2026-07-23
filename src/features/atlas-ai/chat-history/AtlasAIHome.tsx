@@ -1,57 +1,33 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import BottomSheet from '@expo/ui/community/bottom-sheet';
+import { ChatCircleIcon } from 'phosphor-react-native/src/icons/ChatCircle';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
   Pressable,
+  SectionList,
   StyleSheet,
-  TouchableOpacity,
   View,
 } from 'react-native';
 
 import { Text } from '@/components/ui/text';
-import ContentPanel from '@/components/content-panel/ContentPanel';
-import { parseInput } from '@/services/import/importService';
-import { countChatHistory, loadChatHistory, saveChatHistory } from '@/services/supabase/supabaseClient';
-import { typography } from '@/theme/typography';
+import TopBlurFade from '@/components/ui/top-blur-fade';
+import { loadChatHistory } from '@/services/supabase/supabaseClient';
 import { useHome, type ChatHistoryItem } from '@/features/home/HomeContext';
 
-const GREEN = {
-  primary: '#12C170',
-  primaryLight: '#E9FBF1',
-  primaryLighter: '#F2FBF6',
+const COLOR = {
+  background: '#FFFFFF',
+  foreground: '#1A1A1A',
+  secondary: '#717171',
   primaryStrong: '#0C8149',
-  text: '#111827',
-  textMuted: '#6B7280',
-  border: '#D7F2E2',
-  borderSoft: '#EAF7EF',
 } as const;
 
-const SOURCE_ICON_BY_TYPE: Record<string, keyof typeof Ionicons.glyphMap> = {
-  smart_text: 'document-text-outline',
-  image_scan: 'image-outline',
-  find_image_places: 'camera-outline',
-  reddit_links: 'logo-reddit',
-  youtube_links: 'logo-youtube',
-  any_links: 'link-outline',
+const HISTORY_HEADER_INSET = 70;
+const HISTORY_HEADER_MATERIAL_HEIGHT = 120;
+
+type HistorySection = {
+  title: string;
+  data: ChatHistoryItem[];
 };
-
-function inferDisplaySourceType(item: Pick<ChatHistoryItem, 'title' | 'sourceUrl' | 'sourceType'>): keyof typeof SOURCE_ICON_BY_TYPE {
-  const sourceType = item.sourceType ?? '';
-  if (sourceType in SOURCE_ICON_BY_TYPE) return sourceType as keyof typeof SOURCE_ICON_BY_TYPE;
-
-  const title = (item.title || '').toLowerCase();
-  const sourceUrl = (item.sourceUrl || '').toLowerCase();
-  const haystack = `${title} ${sourceUrl}`;
-
-  if (title.includes('atlas ai chat')) return 'smart_text';
-  if (title.includes('youtube') || haystack.includes('youtube.com') || haystack.includes('youtu.be')) return 'youtube_links';
-  if (title.includes('reddit') || haystack.includes('reddit.com')) return 'reddit_links';
-  if (haystack.includes('find image') || haystack.includes('photo')) return 'find_image_places';
-  if (haystack.includes('image_scan') || haystack.includes('scan image')) return 'image_scan';
-  if (haystack.includes('http://') || haystack.includes('https://') || haystack.includes('www.')) return 'any_links';
-  return 'smart_text';
-}
 
 type AtlasAIHomeProps = {
   visible?: boolean;
@@ -63,69 +39,58 @@ type AtlasAIHomeProps = {
   onClose?: () => void;
 };
 
-function formatDate(iso: string) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour12: false,
-    });
-  } catch {
-    return iso;
-  }
+function getHistoryTimestamp(item: ChatHistoryItem): number {
+  const timestamp = new Date(item.updatedAt || item.createdAt).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function looksLikeUrl(value: string): boolean {
-  return /^(https?:\/\/|www\.)\S+$/i.test(value.trim());
+function getHistoryMonth(item: ChatHistoryItem): string {
+  const date = new Date(getHistoryTimestamp(item));
+  if (!Number.isFinite(date.getTime()) || date.getTime() === 0) return 'Earlier';
+  return date.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function getPlacesLabel(count: number): string {
+  return `${count} ${count === 1 ? 'place' : 'places'}`;
 }
 
 export default function AtlasAIHome({
   visible = true,
-  onHeightChange,
   onOpenChat,
-  onOpenPlaces,
   onLongPressDebug,
   onClose,
 }: AtlasAIHomeProps) {
   const {
     chatHistory,
     setChatHistory,
-    setActiveHistoryItem,
-    setParsedPlaces,
-    setActiveSidekick,
     setTabBarVisible,
   } = useHome();
-  const [input, setInput] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [totalChats, setTotalChats] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const initialPageLoadedRef = useRef(false);
 
   const cards = useMemo(() => chatHistory, [chatHistory]);
+  const sections = useMemo<HistorySection[]>(() => {
+    const grouped = new Map<string, ChatHistoryItem[]>();
+    const sortedCards = [...cards].sort(
+      (a, b) => getHistoryTimestamp(b) - getHistoryTimestamp(a),
+    );
+
+    for (const item of sortedCards) {
+      const month = getHistoryMonth(item);
+      const monthItems = grouped.get(month);
+      if (monthItems) monthItems.push(item);
+      else grouped.set(month, [item]);
+    }
+
+    return Array.from(grouped, ([title, data]) => ({ title, data }));
+  }, [cards]);
 
   useEffect(() => {
     setTabBarVisible(true);
   }, [setTabBarVisible]);
-
-  useEffect(() => {
-    if (initialPageLoadedRef.current) return;
-    initialPageLoadedRef.current = true;
-    countChatHistory()
-      .then((total) => setTotalChats(total))
-      .catch((error) => console.warn('[AtlasAIHome] countChatHistory failed:', error));
-  }, []);
-
-  const refreshHistory = useCallback(async () => {
-    const [items, total] = await Promise.all([loadChatHistory({ limit: 50 }), countChatHistory()]);
-    setChatHistory(items);
-    setTotalChats(total);
-    setHasMore(items.length >= 50 && total > items.length);
-  }, [setChatHistory]);
 
   const loadOlderHistory = useCallback(async () => {
     if (loadingMore || !hasMore || chatHistory.length === 0) return;
@@ -154,252 +119,205 @@ export default function AtlasAIHome({
     }
   }, [chatHistory, hasMore, loadingMore, setChatHistory]);
 
-  const handleCreateChat = useCallback(async () => {
-    const text = input.trim();
-    if (!text || submitting) return;
-
-    setSubmitting(true);
-    try {
-      const result = await parseInput(text);
-      const titleLower = (result.sourceTitle || text).toLowerCase();
-      const sourceType =
-        titleLower.includes('youtube') ? 'youtube_links'
-        : titleLower.includes('reddit') ? 'reddit_links'
-        : titleLower === 'atlas ai chat' || titleLower.includes('atlas ai chat') ? 'smart_text'
-        : looksLikeUrl(text) ? 'any_links'
-        : 'smart_text';
-      const item: ChatHistoryItem = {
-        id: `atlas_${Date.now()}`,
-        title: result.sourceTitle || text.slice(0, 60) || 'Atlas AI',
-        sourceUrl: text,
-        locationCount: result.places.length,
-        messageCount: 1,
-        places: result.places,
-        createdAt: new Date().toISOString(),
-        sourceType,
-      };
-
-      const saved = await saveChatHistory({
-        title: item.title,
-        sourceUrl: item.sourceUrl,
-        sourceType: item.sourceType,
-        locationCount: item.locationCount,
-        messageCount: item.messageCount,
-        places: item.places,
-      });
-
-      const nextItem = { ...item, id: saved.id, createdAt: saved.createdAt };
-      setParsedPlaces(result.places);
-      setActiveHistoryItem(nextItem);
-      setActiveSidekick('none');
-      await refreshHistory();
-      if (nextItem.locationCount > 0) {
-        onOpenPlaces(nextItem);
-      }
-      setInput('');
-    } catch (error) {
-      console.warn('[AtlasAIHome] create chat failed:', error);
-    } finally {
-      setSubmitting(false);
-    }
-  }, [input, onOpenPlaces, refreshHistory, setActiveHistoryItem, setActiveSidekick, setParsedPlaces, submitting]);
-
   return (
-    <ContentPanel initialSnap="default" visible={visible} onHeightChange={onHeightChange} zIndex={46}>
-      {({ reportScrollY, bottomInset }) => (
-        <View style={styles.container}>
-          <Pressable onLongPress={onLongPressDebug} delayLongPress={700} style={styles.header}>
-            <View style={styles.headerText}>
-              <Text style={styles.title}>Atlas AI (Chats)</Text>
+    <BottomSheet
+      index={visible ? 0 : -1}
+      snapPoints={['100%']}
+      enableDynamicSizing={false}
+      enablePanDownToClose
+      backgroundStyle={styles.sheetBackground}
+      onClose={onClose}
+    >
+      <View style={styles.container}>
+        <SectionList
+          sections={sections}
+          keyExtractor={(item) => item.id}
+          style={styles.list}
+          contentContainerStyle={styles.listContent}
+          contentInsetAdjustmentBehavior="never"
+          stickySectionHeadersEnabled={false}
+          showsVerticalScrollIndicator={false}
+          scrollIndicatorInsets={{ top: HISTORY_HEADER_INSET, bottom: 96 }}
+          onScrollBeginDrag={() => setTabBarVisible(true)}
+          onEndReachedThreshold={0.35}
+          onEndReached={loadOlderHistory}
+          renderSectionHeader={({ section }) => (
+            <Text style={styles.sectionTitle}>{section.title}</Text>
+          )}
+          renderSectionFooter={() => <View style={styles.sectionFooter} />}
+          renderItem={({ item, index, section }) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${item.title}, ${getPlacesLabel(item.locationCount ?? 0)}`}
+              onPress={() => onOpenChat(item)}
+              style={({ pressed }) => [
+                styles.historyRow,
+                index < section.data.length - 1 && styles.historyRowSpacing,
+                pressed && styles.historyRowPressed,
+              ]}
+            >
+              <ChatCircleIcon
+                size={24}
+                weight="regular"
+                color={COLOR.secondary}
+              />
+              <View style={styles.historyRowText}>
+                <Text style={styles.historyTitle} numberOfLines={1} ellipsizeMode="tail">
+                  {item.title}
+                </Text>
+                <Text style={styles.historyMeta}>
+                  {getPlacesLabel(item.locationCount ?? 0)}
+                </Text>
+              </View>
+            </Pressable>
+          )}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>No chat history yet</Text>
             </View>
-            <View style={styles.badge}>
-              <Ionicons name="sparkles" size={14} color={GREEN.primaryStrong} />
-              <Text style={styles.badgeText}>{totalChats || cards.length} chats</Text>
-            </View>
-            {onClose && (
-              <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.75}>
-                <Ionicons name="close" size={20} color={GREEN.text} />
-              </TouchableOpacity>
-            )}
+          }
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.loadingMore}>
+                <ActivityIndicator size="small" color={COLOR.primaryStrong} />
+                <Text style={styles.loadingMoreText}>Loading older chats...</Text>
+              </View>
+            ) : null
+          }
+        />
+
+        <TopBlurFade
+          height={HISTORY_HEADER_MATERIAL_HEIGHT}
+          intensity={40}
+          tint="systemThinMaterialLight"
+          scrim={1}
+        />
+
+        <TopBlurFade
+          edge="bottom"
+          height={96}
+          intensity={10}
+          tint="systemUltraThinMaterialLight"
+          scrim={1}
+        />
+
+        <View
+          pointerEvents="box-none"
+          style={styles.header}
+        >
+          <Pressable
+            onLongPress={onLongPressDebug}
+            delayLongPress={700}
+            style={styles.titleHitArea}
+          >
+            <Text pointerEvents="none" style={styles.title}>
+              Chat history
+            </Text>
           </Pressable>
-
-          <FlatList
-            data={cards}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={[styles.listContent, { paddingBottom: bottomInset + 180 }]}
-            showsVerticalScrollIndicator={false}
-            onScroll={(event) => {
-              reportScrollY(event.nativeEvent.contentOffset.y);
-              setTabBarVisible(true);
-            }}
-            onScrollBeginDrag={() => setTabBarVisible(true)}
-            scrollEventThrottle={16}
-            onEndReachedThreshold={0.35}
-            onEndReached={loadOlderHistory}
-            renderItem={({ item }) => {
-              const hasPlaces = (item.locationCount ?? 0) > 0;
-              const displaySourceType = inferDisplaySourceType(item);
-              const sourceIcon = SOURCE_ICON_BY_TYPE[displaySourceType] ?? 'sparkles';
-              return (
-                <View style={styles.cardWrap}>
-                  <TouchableOpacity
-                    activeOpacity={0.84}
-                    style={styles.card}
-                    onPress={() => onOpenChat(item)}
-                  >
-                    <View style={styles.cardRowTop}>
-                      <Ionicons name={sourceIcon as any} size={16} color={GREEN.primaryStrong} />
-                      <Text style={styles.cardTitle} numberOfLines={1} ellipsizeMode="tail">
-                        {item.title}
-                      </Text>
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        disabled={!hasPlaces}
-                        onPress={() => onOpenPlaces(item)}
-                        style={[styles.placesPill, !hasPlaces && styles.placesPillDisabled]}
-                      >
-                        <Ionicons
-                          name="map-outline"
-                          size={14}
-                          color={hasPlaces ? GREEN.primaryStrong : '#A1A1AA'}
-                        />
-                        <Text style={[styles.placesPillText, !hasPlaces && styles.placesPillTextDisabled]}>
-                          {hasPlaces ? `${item.locationCount} places` : 'No places yet'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                    <Text style={styles.cardMeta} numberOfLines={1}>
-                      {formatDate(item.createdAt)}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              );
-            }}
-          />
-          {loadingMore ? (
-            <View style={styles.loadingMore}>
-              <ActivityIndicator size="small" color={GREEN.primaryStrong} />
-              <Text style={styles.loadingMoreText}>Loading older chats...</Text>
-            </View>
-          ) : null}
-
         </View>
-      )}
-    </ContentPanel>
+      </View>
+    </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
+  sheetBackground: {
+    backgroundColor: COLOR.background,
+  },
   container: {
     flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 8,
+    position: 'relative',
+    backgroundColor: COLOR.background,
   },
   header: {
-    paddingHorizontal: 4,
-    paddingTop: 2,
-    paddingBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  headerText: {
-    flex: 1,
-  },
-  title: {
-    ...typography.display,
-    color: GREEN.text,
-    fontSize: 24,
-    lineHeight: 30,
-  },
-  badge: {
-    flexDirection: 'row',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 3,
+    height: 54,
     alignItems: 'center',
-    gap: 6,
-    borderRadius: 999,
-    backgroundColor: '#F3F4F6',
+    justifyContent: 'flex-start',
+    backgroundColor: 'transparent',
+  },
+  titleHitArea: {
+    height: 44,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  badgeText: {
-    ...typography.bodySmall,
-    color: GREEN.textMuted,
-    fontWeight: '700',
-  },
-  closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.05)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  title: {
+    color: '#333333',
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '600',
+    letterSpacing: -0.17,
+  },
+  list: {
+    flex: 1,
+  },
   listContent: {
-    paddingBottom: 120,
+    paddingTop: HISTORY_HEADER_INSET,
+    paddingBottom: 104,
+  },
+  sectionTitle: {
+    height: 24,
+    marginHorizontal: 20,
+    marginBottom: 12,
+    color: COLOR.secondary,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '600',
+    letterSpacing: -0.16,
+  },
+  sectionFooter: {
+    height: 20,
+  },
+  historyRow: {
+    height: 46,
+    marginHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 12,
   },
-  cardWrap: {
-    gap: 8,
+  historyRowSpacing: {
+    marginBottom: 12,
   },
-  card: {
-    minHeight: 96,
-    borderRadius: 24,
-    backgroundColor: '#FBFCFD',
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#E7EEF5',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: { width: 0, height: 8 },
-    shadowRadius: 14,
-    elevation: 3,
+  historyRowPressed: {
+    opacity: 0.55,
   },
-  cardRowTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    minHeight: 24,
-  },
-  cardTitle: {
+  historyRowText: {
     flex: 1,
-    ...typography.h3,
-    color: GREEN.text,
+    minWidth: 0,
+    gap: 2,
+  },
+  historyTitle: {
+    width: '100%',
+    color: COLOR.foreground,
     fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+    letterSpacing: -0.16,
+  },
+  historyMeta: {
+    width: '100%',
+    color: COLOR.secondary,
+    fontSize: 14,
     lineHeight: 20,
-    paddingRight: 10,
+    fontWeight: '400',
+    letterSpacing: -0.14,
   },
-  cardMeta: {
-    ...typography.bodySmall,
-    color: GREEN.textMuted,
-    flexShrink: 1,
-    lineHeight: 18,
-    fontSize: 12,
-    marginTop: 8,
-  },
-  placesPill: {
-    flexDirection: 'row',
+  emptyState: {
+    minHeight: 220,
     alignItems: 'center',
-    gap: 6,
-    borderRadius: 999,
-    backgroundColor: '#EAF7EF',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    alignSelf: 'flex-start',
-    flexShrink: 0,
-    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
   },
-  placesPillDisabled: {
-    backgroundColor: '#F3F4F6',
-  },
-  placesPillText: {
-    ...typography.bodySmall,
-    color: GREEN.primaryStrong,
-    fontWeight: '700',
-  },
-  placesPillTextDisabled: {
-    color: '#A1A1AA',
+  emptyStateText: {
+    color: COLOR.secondary,
+    fontSize: 16,
+    lineHeight: 24,
+    letterSpacing: -0.16,
   },
   loadingMore: {
     flexDirection: 'row',
@@ -409,8 +327,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   loadingMoreText: {
-    ...typography.bodySmall,
-    color: GREEN.textMuted,
+    color: COLOR.secondary,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '600',
   },
 });

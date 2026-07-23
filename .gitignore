@@ -50,6 +50,7 @@ docs/.obsidian
 .vscode/
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 backend/.cache/

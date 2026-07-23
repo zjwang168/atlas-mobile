@@ -31,6 +31,7 @@ const PANEL_SPRING_SETTLE_DELAY = 380;
 
 interface HomeScreenProps {
   onOpenImport?: () => void;
+  onOpenChatHistory?: () => void;
 }
 
 // ---- Helpers ----
@@ -66,13 +67,18 @@ const medianCenter = (places: ParsedPlace[]): [number, number] => {
 
 // ---- Root export — HomeProvider is now in App.tsx ----
 
-export default function HomeScreen({ onOpenImport }: HomeScreenProps) {
-  return <HomeScreenContent onOpenImport={onOpenImport} />;
+export default function HomeScreen({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
+  return (
+    <HomeScreenContent
+      onOpenImport={onOpenImport}
+      onOpenChatHistory={onOpenChatHistory}
+    />
+  );
 }
 
 // ---- Inner component — consumes the context ----
 
-function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
+function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
   const {
     overlay,
     setOverlay,
@@ -279,9 +285,9 @@ function HomeScreenContent({ onOpenImport }: HomeScreenProps) {
           setSelectedPlaceId(null);
           setActiveSidekick('none');
         }}
+        onOpenHistory={onOpenChatHistory}
         title={activeHistoryItem?.title}
         visible={activeSidekick === 'aiChat' && panelVisible}
-        onHeightChange={handlePanelHeightChange}
         conversationId={activeHistoryItem?.id ?? null}
         onPlacesCommitted={(newPlaces) => {
           const currentItem = activeHistoryItem;

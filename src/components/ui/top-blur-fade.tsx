@@ -1,21 +1,25 @@
 import MaskedView from '@react-native-masked-view/masked-view';
-import { BlurView } from 'expo-blur';
+import { BlurView, type BlurTint } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { memo } from 'react';
 import { Animated, StyleSheet } from 'react-native';
 import { easeGradient } from 'react-native-easing-gradient';
 
 type TopBlurFadeProps = {
+  /** Edge the material is attached to. */
+  edge?: 'top' | 'bottom';
   /** Total height of the faded blur strip. */
   height?: number;
   /** expo-blur intensity (0–100). */
   intensity?: number;
-  tint?: 'light' | 'dark' | 'default';
+  tint?: BlurTint;
   /** Overall opacity — pass an Animated value to fade the blur in on scroll. */
   opacity?: number | Animated.AnimatedInterpolation<number>;
   /** White wash at the strong end (0–1), layered over the blur like the native
       tab bar's scroll edge. 0 disables it. */
   scrim?: number;
+  /** Portion of the strip that keeps the blur fully opaque before fading out. */
+  fadeStart?: number;
 };
 
 // Smooth (bezier-eased) alpha ramp: opaque at the top → transparent at the
@@ -42,23 +46,50 @@ const { colors, locations } = easeGradient({
  * Animated value) to fade it in as content scrolls under it.
  */
 function TopBlurFade({
+  edge = 'top',
   height = 130,
   intensity = 90,
   tint = 'light',
   opacity = 1,
   scrim = 0.5,
+  fadeStart = 0,
 }: TopBlurFadeProps) {
+  const boundedFadeStart = Math.min(Math.max(fadeStart, 0), 0.98);
+  const maskColors = fadeStart > 0
+    ? edge === 'top'
+      ? (['black', 'black', 'transparent'] as [string, string, string])
+      : (['transparent', 'black', 'black'] as [string, string, string])
+    : edge === 'top'
+      ? (colors as [string, string, ...string[]])
+      : ([...colors].reverse() as [string, string, ...string[]]);
+  const maskLocations = fadeStart > 0
+    ? edge === 'top'
+      ? ([0, boundedFadeStart, 1] as [number, number, number])
+      : ([0, 1 - boundedFadeStart, 1] as [number, number, number])
+    : (locations as [number, number, ...number[]]);
+  const scrimColors: [string, string] =
+    edge === 'top'
+      ? [`rgba(255,255,255,${scrim})`, 'rgba(255,255,255,0)']
+      : ['rgba(255,255,255,0)', `rgba(255,255,255,${scrim})`];
+
   return (
     <Animated.View
       pointerEvents="none"
-      style={{ position: 'absolute', top: 0, left: 0, right: 0, height, opacity }}
+      style={{
+        position: 'absolute',
+        [edge]: 0,
+        left: 0,
+        right: 0,
+        height,
+        opacity,
+      }}
     >
       <MaskedView
         style={StyleSheet.absoluteFill}
         maskElement={
           <LinearGradient
-            colors={colors as [string, string, ...string[]]}
-            locations={locations as [number, number, ...number[]]}
+            colors={maskColors}
+            locations={maskLocations}
             start={{ x: 0, y: 0 }}
             end={{ x: 0, y: 1 }}
             style={StyleSheet.absoluteFill}
@@ -70,7 +101,7 @@ function TopBlurFade({
             tab bar's scroll-edge effect. */}
         {scrim > 0 && (
           <LinearGradient
-            colors={[`rgba(255,255,255,${scrim})`, 'rgba(255,255,255,0)']}
+            colors={scrimColors}
             start={{ x: 0, y: 0 }}
             end={{ x: 0, y: 1 }}
             style={StyleSheet.absoluteFill}
