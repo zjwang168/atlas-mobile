@@ -2,7 +2,7 @@
 
 ## Overview
 
-`AtlasAIHome` is the paginated list of past chat/import sessions, plus a text input to start a new one directly from the list. It reads/writes `chatHistory` on `HomeContext`, so any Supabase-backed history state is shared with the rest of the app. It is currently opened as a temporary overlay from `ImportScreen`'s header (see Integration) rather than mounted as a `HomeScreen` pager tab.
+`AtlasAIHome` is the paginated list of past chat/import sessions. It reads/writes `chatHistory` on `HomeContext`, so any Supabase-backed history state is shared with the rest of the app. It opens from the chat header as a native bottom sheet rather than as a `HomeScreen` pager tab.
 
 `HistoryPlacesPanel` is the places-list view for a single chat session. It is not currently mounted anywhere — see Integration for where it belongs once reinstated.
 
@@ -10,7 +10,7 @@
 
 ```
 src/features/atlas-ai/chat-history/
-  AtlasAIHome.tsx          ← chat history list, pagination, inline "new chat" input
+  AtlasAIHome.tsx          ← native history sheet, grouped list, pagination
   HistoryPlacesPanel.tsx   ← places list for the active chat session (renders on the Places tab)
   CHAT-HISTORY.md          ← this document
 ```
@@ -28,16 +28,19 @@ type AtlasAIHomeProps = {
 };
 ```
 
-- `onOpenChat` — user tapped a card; caller typically sets it as the active history item and opens `AIChatBox` (`src/features/atlas-ai/ai-chat/`).
-- `onOpenPlaces` — user tapped the "N places" pill; caller typically switches to the Places tab centered on that item's places.
+- `onOpenChat` — user tapped a history row; caller sets it as the active history item and opens `AIChatBox` (`src/features/atlas-ai/ai-chat/`).
+- `onOpenPlaces` — retained for caller compatibility; the current list displays the place count as row metadata and opens the chat when the row is tapped.
 - `onLongPressDebug` — long-press on the header opens the debug overlay.
-- `onClose` — user tapped the close button; caller hides `AtlasAIHome` (e.g. `setVisible(false)`/unmount). `ContentPanel` itself has no swipe-to-dismiss gesture, only snap points, so without this the component has no way to disappear once shown.
+- `onClose` — called by the close button or native swipe-to-dismiss gesture.
 
 ## Behaviour
 
-- Loads the first page (`loadChatHistory({ limit: 50 })`) plus a total count (`countChatHistory`) on mount, then paginates older items via `onEndReached` (`loadOlderHistory`), tracked with `hasMore`/`loadingMore`.
-- Lets the user create a new chat/import session inline: typing text and submitting calls `parseInput`, saves the result via `saveChatHistory`, and — if places were found — calls `onOpenPlaces` immediately.
-- Infers a display icon/source type per card (`inferDisplaySourceType`) from `sourceType` when present, falling back to keyword heuristics on the title/URL.
+- Uses `@expo/ui`'s native `BottomSheet`: one full-height `100%` detent so the sheet stays attached to the left, right, and bottom screen edges, with the system grabber/corner treatment, swipe-to-dismiss, and dimmed backdrop.
+- Keeps the title in an absolute transparent overlay. The section list scrolls underneath it, with the same thin top material fade used by the main chat interface; the native downward swipe is the sheet's close interaction.
+- Groups sessions by `updatedAt`/`createdAt` month and renders simple rows rather than cards or count pills.
+- Uses a Phosphor `ChatCircle` icon, a one-line title, and the pluralized place count as secondary text.
+- Paginates older items via `onEndReached` (`loadOlderHistory`), tracked with `hasMore`/`loadingMore`.
+- Uses the same bottom material treatment as the chat screen: `systemUltraThinMaterialLight`, intensity `10`, and scrim `1`.
 - Does **not** implement delete/trash — the previous `ChatHistoryPanel.tsx` (removed as dead code; it was never mounted anywhere) had a trash/restore flow that was not carried over here. `deleteChatHistoryItem`/`restoreChatHistoryItem` still exist on `HomeContext` if that needs to be rebuilt.
 
 ## Integration
@@ -56,7 +59,7 @@ type AtlasAIHomeProps = {
 )}
 ```
 
-Both handlers close the Import sheet and this overlay, dropping the user back onto `HomeScreen` with `activeHistoryItem` set to the tapped session. `onOpenChat` additionally opens `AIChatBox` (`activeSidekick: 'aiChat'`); `onOpenPlaces` leaves `activeSidekick` alone and just seeds `parsedPlaces` so the map re-centers on that session's places.
+The current row interaction uses `onOpenChat`, which closes the sheet and opens `AIChatBox` with the tapped history item. `onOpenPlaces` remains in the component API for compatibility with the surrounding app but is not presented as a separate control in this design.
 
 This is a temporary entry point — `AtlasAIHome` was previously mounted as a `HomeScreen` pager tab (see git history) and may move back there.
 

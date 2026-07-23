@@ -50,6 +50,7 @@ docs/.obsidian
 .vscode/
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 backend/.cache/
@@ -61,3 +62,4 @@ backend/.cache/
 .mcp.json
 *.backup
 *.log
+yarn.lock

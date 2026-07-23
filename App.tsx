@@ -518,6 +518,7 @@ function AppContent() {
           <MapErrorBoundary>
             <HomeScreen
               onOpenImport={() => setOverlay('import')}
+              onOpenChatHistory={() => setShowChatHistory(true)}
             />
           </MapErrorBoundary>
 
