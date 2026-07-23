@@ -6,7 +6,7 @@ A user can:
 
 - create places
 - create collections
-- create projects
+- create plans
 - import content
 - participate in chats
 - interact with places
@@ -15,7 +15,7 @@ Relationships:
 
 - User 1:N Places
 - User 1:N Collections
-- User 1:N Projects
+- User 1:N Plans
 - User 1:N Imports
 - User 1:N ChatSessions
 - User 1:N UserPlaceInteractions
@@ -29,7 +29,7 @@ A place represents a saved location, restaurant, activity, or destination.
 A place can:
 
 - belong to multiple collections
-- belong to multiple projects
+- belong to multiple plans
 - originate from imported content
 - contain AI-generated summaries
 - receive user interactions
@@ -37,14 +37,14 @@ A place can:
 Relationships:
 
 - Place N:N Collections
-- Place N:N Projects
+- Place N:N Plans
 - Place 1:N PlaceSources
 - Place 1:N UserPlaceInteractions
 
 Implemented through:
 
-- collection_places
-- project_places
+- atlas_places
+- plan_places
 
 ---
 
@@ -64,13 +64,13 @@ Relationships:
 
 Implemented through:
 
-- collection_places
+- atlas_places
 
 ---
 
-## Project
+## Plan
 
-Projects are structured planning spaces.
+Plans are structured planning spaces.
 
 Examples:
 
@@ -78,7 +78,7 @@ Examples:
 - NYC Weekend
 - Korea Food Tour
 
-Projects can:
+Plans can:
 
 - contain places
 - contain itinerary days
@@ -89,16 +89,16 @@ Projects can:
 
 Relationships:
 
-- Project N:N Places
-- Project N:N Users
-- Project 1:N ItineraryDays
-- Project 1:N Imports
-- Project 1:N ChatSessions
+- Plan N:N Places
+- Plan N:N Users
+- Plan 1:N ItineraryDays
+- Plan 1:N Imports
+- Plan 1:N ChatSessions
 
 Implemented through:
 
-- project_places
-- project_members
+- plan_itinerary_place_flexible
+- plan_members
 
 ---
 
@@ -122,7 +122,7 @@ Imports can generate:
 Relationships:
 
 - User 1:N Imports
-- Project 1:N Imports
+- Plan 1:N Imports
 - Import 1:N ExtractedPlaces
 
 ---
@@ -151,17 +151,19 @@ Examples:
 Relationships:
 
 - ChatSession 1:N ChatMessages
-- Project 1:N ChatSessions
+- Plan 1:N ChatSessions
 
 ---
 
 ## Itinerary System
 
-Projects contain itinerary structures.
+Plans contain itinerary structures.
+
+A place saved to a plan (`plan_itinerary_place_flexible`) is "flexible" until it also has a `plan_itinerary_places` row; once scheduled onto a day, its `visit_slot` (morning / noon / afternoon / night) buckets it within that day. `plan_itinerary_places` has no precise `start_time`/`end_time` — only the coarse `visit_slot` bucket. The same place may appear more than once across `plan_itinerary_place_flexible` and/or `plan_itinerary_places` within one plan.
 
 Relationships:
 
-- Project 1:N ItineraryDays
+- Plan 1:N ItineraryDays
 - ItineraryDay 1:N ItineraryItems
 - ItineraryItem N:1 Place
 

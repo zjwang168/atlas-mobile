@@ -1,113 +1,126 @@
 import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-/**
- * Mapbox access token retrieval strategy:
- * 1. Primary: Constants.expoConfig.extra.mapboxAccessToken (from app.config.js)
- * 2. Fallback: process.env.MAPBOX_ACCESS_TOKEN (from .env loaded at build time)
- *
- * The token is stored in .env (gitignored) and injected via app.config.js.
- */
 const MAPBOX_ACCESS_TOKEN: string =
   (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
   (process.env.MAPBOX_ACCESS_TOKEN as string) ||
   '';
 
-// ---- Types ----
-
-/** Represents a single marker on the map */
 export interface MapMarker {
-  /** Unique identifier for the marker */
   id: string;
-  /** Latitude coordinate */
   latitude: number;
-  /** Longitude coordinate */
   longitude: number;
-  /** Display title shown when marker is tapped */
   title?: string;
-  /** Optional subtitle/description */
   description?: string;
 }
 
-/** Props for the MapboxMap component */
-interface MapboxMapProps {
-  /** Array of markers to display on the map */
-  markers: MapMarker[];
-  /** Initial camera center coordinates [longitude, latitude] (Mapbox uses [lng, lat]) */
-  centerCoordinate?: [number, number];
-  /** Initial zoom level (default: 12) */
-  zoomLevel?: number;
-  /** Additional styles for the map container */
-  style?: ViewStyle;
-  /** Callback when a marker is pressed */
-  onMarkerPress?: (marker: MapMarker) => void;
+export type MapPadding = {
+  paddingTop: number;
+  paddingBottom: number;
+  paddingLeft: number;
+  paddingRight: number;
+};
 
-  /** Optional GeoJSON LineString to render a route polyline on the map */
+interface MapboxMapProps {
+  markers: MapMarker[];
+  centerCoordinate?: [number, number];
+  zoomLevel?: number;
+  style?: ViewStyle;
+  onMarkerPress?: (marker: MapMarker) => void;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
-  /** Optional re-ordered markers to display along the route (overrides `markers` when set) */
   routeMarkers?: MapMarker[];
+  /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
+  padding?: MapPadding;
+  selectedMarkerId?: string | null;
 }
 
-// ---- Component ----
+// Small ease applied to every live padding update so the map visibly trails
+// the panel edge by a beat instead of snapping to it 1:1 every frame.
+const PADDING_FOLLOW_DURATION_MS = 300;
 
-/**
- * A reusable Mapbox-powered map component.
- * Renders a full-screen map with customizable markers.
- */
-const MapboxMap: React.FC<MapboxMapProps> = ({
+export interface MapboxMapHandle {
+  /**
+   * Update bottom camera padding directly via the camera ref, bypassing React
+   * state/re-render entirely. Used for per-frame panel-drag tracking, where
+   * pushing every frame through props would re-render the whole map tree.
+   * Each call re-targets a short (300ms) ease, so rapid successive calls
+   * naturally produce a lagging "follow" motion rather than an instant jump.
+   */
+  setPaddingBottom: (paddingBottom: number, durationMs?: number) => void;
+}
+
+const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap({
   markers,
-  centerCoordinate = [-122.3321, 47.6062], // Default: Seattle [lng, lat]
+  centerCoordinate = [-122.3321, 47.6062],
   zoomLevel = 12,
   style,
   onMarkerPress,
   routeGeoJSON,
   routeMarkers,
-}) => {
-  // Use routeMarkers if provided, otherwise fall back to the regular markers
+  padding,
+  selectedMarkerId,
+}, ref) {
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
+  const { top: safeTop } = useSafeAreaInsets();
+  // Position compass just below the RightNav pill (safeTop + 8 offset + 92px pill height + 12px gap)
+  const compassTop = safeTop + 48;
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Set Mapbox access token once when the component mounts.
-    // Using try/catch to prevent native module initialization failures
-    // from crashing the entire JS thread.
     try {
       if (!MAPBOX_ACCESS_TOKEN) {
-        const errMsg =
-          'Mapbox access token is missing. Please ensure MAPBOX_ACCESS_TOKEN is set in .env and rebuild.';
-        console.error('[MapboxMap] ' + errMsg);
-        setError(errMsg);
+        setError('Mapbox access token is missing. Check MAPBOX_ACCESS_TOKEN in .env and rebuild.');
         return;
       }
       MapboxGL.setAccessToken(MAPBOX_ACCESS_TOKEN);
-      console.log('[MapboxMap] Access token configured successfully');
       setIsReady(true);
     } catch (err) {
-      const errMsg =
-        'Failed to set Mapbox access token: ' +
-        (err instanceof Error ? err.message : String(err));
-      console.error('[MapboxMap]', errMsg);
-      setError(errMsg);
+      setError('Failed to initialise Mapbox: ' + (err instanceof Error ? err.message : String(err)));
     }
   }, []);
 
+  const prevCenterRef = useRef(centerCoordinate);
+  const prevZoomRef = useRef(zoomLevel);
+  const prevPaddingRef = useRef(padding);
   useEffect(() => {
-    // Recenter the camera when centerCoordinate changes
-    if (cameraRef.current) {
-      cameraRef.current.setCamera({
-        centerCoordinate,
-        zoomLevel,
-        animationDuration: 500,
-      });
-    }
-  }, [centerCoordinate, zoomLevel]);
+    const [lng, lat] = centerCoordinate;
+    const [prevLng, prevLat] = prevCenterRef.current;
+    const centerChanged = lng !== prevLng || lat !== prevLat;
+    const zoomChanged = zoomLevel !== prevZoomRef.current;
+    const paddingChanged =
+      padding?.paddingBottom !== prevPaddingRef.current?.paddingBottom ||
+      padding?.paddingTop !== prevPaddingRef.current?.paddingTop ||
+      padding?.paddingLeft !== prevPaddingRef.current?.paddingLeft ||
+      padding?.paddingRight !== prevPaddingRef.current?.paddingRight;
+    if (!centerChanged && !zoomChanged && !paddingChanged) return;
+    prevCenterRef.current = centerCoordinate;
+    prevZoomRef.current = zoomLevel;
+    prevPaddingRef.current = padding;
+    cameraRef.current?.setCamera({
+      centerCoordinate,
+      zoomLevel,
+      animationDuration: 2000,
+      padding,
+    });
+  }, [centerCoordinate, zoomLevel, padding]);
 
-  // Show loading state while Mapbox is initializing
+  useImperativeHandle(ref, () => ({
+    setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
+      const nextPadding: MapPadding = { paddingTop: 0, paddingBottom, paddingLeft: 0, paddingRight: 0 };
+      prevPaddingRef.current = nextPadding;
+      cameraRef.current?.setCamera({
+        padding: nextPadding,
+        animationDuration: durationMs,
+      });
+    },
+  }), []);
+
   if (error) {
     return (
       <View style={[styles.container, styles.centerContent]}>
@@ -133,19 +146,16 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
         style={{ width, height }}
         styleURL={MapboxGL.StyleURL.Street}
         compassEnabled={true}
+        compassPosition={{ top: compassTop, right: 16 }}
         logoEnabled={false}
-        attributionEnabled={true}
+        attributionEnabled={false}
+        scaleBarEnabled={false}
       >
-        {/* Camera controller for programmatic navigation */}
         <MapboxGL.Camera
           ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate,
-            zoomLevel,
-          }}
+          defaultSettings={{ centerCoordinate, zoomLevel }}
         />
 
-        {/* Render route polyline (if provided) */}
         {routeGeoJSON && (
           <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
             <MapboxGL.LineLayer
@@ -161,26 +171,23 @@ const MapboxMap: React.FC<MapboxMapProps> = ({
           </MapboxGL.ShapeSource>
         )}
 
-        {/* Render markers (routeMarkers if provided, otherwise markers) */}
         {displayMarkers.map((marker) => (
           <MapboxGL.MarkerView
             key={marker.id}
             coordinate={[marker.longitude, marker.latitude]}
           >
-            <View
-              style={styles.markerContainer}
-              onTouchEnd={() => onMarkerPress?.(marker)}
-            >
-              <View style={styles.marker} />
+            <View style={styles.markerContainer} onTouchEnd={() => onMarkerPress?.(marker)}>
+              <View style={[
+                styles.marker,
+                selectedMarkerId === marker.id && styles.markerSelected,
+              ]} />
             </View>
           </MapboxGL.MarkerView>
         ))}
       </MapboxGL.MapView>
     </View>
   );
-};
-
-// ---- Styles ----
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -190,11 +197,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-  },
-  map: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
   },
   markerContainer: {
     alignItems: 'center',
@@ -212,6 +214,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+  },
+  markerSelected: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#12C170',
+    borderWidth: 4,
   },
   errorIcon: {
     fontSize: 48,
@@ -237,4 +246,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default MapboxMap;
+export default React.memo(MapboxMap);

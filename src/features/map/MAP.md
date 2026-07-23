@@ -1,203 +1,99 @@
-# Mapbox Integration Guide
+# Map Feature
 
-## Part 1: Changes Summary — Migrating from `react-native-maps` to `@rnmapbox/maps`
+## Overview
 
-The following documents all changes made to replace the original Apple Maps (`react-native-maps`) implementation with Mapbox (`@rnmapbox/maps`).
+`MapboxMap` is a full-screen map component built on `@rnmapbox/maps`. It renders place markers, an optional route polyline, and handles camera positioning. Used exclusively by `HomeScreen`.
 
-### Files Created
+## File Structure
 
-| File | Purpose |
-|------|---------|
-| `src/features/map/MapboxMap.tsx` | Reusable Mapbox map component with marker rendering, camera controls, and loading/error states |
-
-### Files Modified
-
-| File | What Changed |
-|------|-------------|
-| `App.tsx` | Wrapped `HomeScreen` in `MapErrorBoundary` to catch native module rendering errors gracefully |
-| `src/features/home/HomeScreen.tsx` | Replaced `<MapView>` / `<Marker>` from `react-native-maps` with `<MapboxMap>` component. Removed `BottomSheet` and profile/action buttons. Added a floating "OurAtlas" info card at the bottom. |
-| `app.config.js` | Added `@rnmapbox/maps` plugin config `{ RNMapboxMapsImpl: 'mapbox' }` and `extra.mapboxAccessToken` from `.env` |
-| `package.json` | Replaced `react-native-maps` with `@rnmapbox/maps@^10.3.1` |
-| `.env` | Added `MAPBOX_ACCESS_TOKEN` (public token for map rendering) |
-
-### Architecture Changes
-
-**Before** (`react-native-maps`):
 ```
-HomeScreen
-├── MapView (Apple Maps via react-native-maps)
-│   └── Marker (native pin annotations)
-├── BottomSheet (draggable list via @gorhom/bottom-sheet)
-│   └── place rows list
-└── Floating bottom bar (search + profile + import buttons)
+src/features/map/
+  MapboxMap.tsx    ← map component
+  MAP.md           ← this document
 ```
 
-**After** (`@rnmapbox/maps`):
-```
-HomeScreen
-├── MapboxMap
-│   ├── MapboxGL.MapView (Mapbox Streets style)
-│   ├── MapboxGL.Camera (programmatic navigation)
-│   └── MapboxGL.MarkerView (custom React Native marker views)
-└── Floating info card ("OurAtlas — 2 places to explore")
-```
+## Shared Constants
 
-### Dependency Changes
+`src/utils/constants.ts` defines the defaults used throughout the map feature. Import from there instead of inlining values:
 
-- **Removed**: `react-native-maps` (Apple Maps)
-- **Added**: `@rnmapbox/maps@^10.3.1` (Mapbox SDK v11.20.1 for iOS)
-- **Kept**: `@gorhom/bottom-sheet` (removed from HomeScreen but still available for future use)
-
-### Build & Configuration Changes
-
-1. **`app.config.js`**: Added the `@rnmapbox/maps` Expo plugin with `RNMapboxMapsImpl: 'mapbox'` to use the official Mapbox native SDK
-2. **Environment variables**: `MAPBOX_ACCESS_TOKEN` is loaded from `.env` and injected into `Constants.expoConfig.extra.mapboxAccessToken`
-3. **iOS native project**: `npx expo prebuild --clean` generates the `ios/` directory with `@rnmapbox/maps` pod dependencies (MapboxCommon, MapboxCoreMaps, MapboxMaps)
-
----
-
-## Part 2: Customizing Map Markers, Icons & Visual Design
-
-### Current Marker Implementation
-
-Markers in `MapboxMap.tsx` are rendered as `MapboxGL.MarkerView` components — these allow embedding **custom React Native views** directly on the map:
-
-```tsx
-<MapboxGL.MarkerView
-  key={marker.id}
-  coordinate={[marker.longitude, marker.latitude]}
->
-  <View style={styles.markerContainer}>
-    <View style={styles.marker} />
-  </View>
-</MapboxGL.MarkerView>
+```ts
+import {
+  DEFAULT_MAP_CENTER,  // [-122.3321, 47.6062] — Seattle [lng, lat]
+  DEFAULT_ZOOM_LEVEL,  // 12
+  ROUTE_LINE_COLOR,    // '#007AFF'
+  ROUTE_LINE_WIDTH,    // 4
+  API_BASE_URL,        // 'http://localhost:8000'
+} from '@/utils/constants';
 ```
 
-### Customizing Marker Appearance
+> Note: `MapboxMap.tsx` currently inlines these values directly. When touching this file, migrate to the constants import.
 
-#### 1. Change the Pin Style (Colors, Shape, Shadow)
+## Props
 
-Edit the `marker` style in `MapboxMap.tsx`:
+```ts
+interface MapboxMapProps {
+  markers: MapMarker[];                              // default place markers
+  centerCoordinate?: [number, number];               // [longitude, latitude], default: Seattle
+  zoomLevel?: number;                                // default: 12
+  style?: ViewStyle;
+  onMarkerPress?: (marker: MapMarker) => void;
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>; // draws a polyline when provided
+  routeMarkers?: MapMarker[];                        // replaces markers when a route is active
+  padding?: MapPadding;                              // camera padding; discrete changes animate over 500ms
+  selectedMarkerId?: string | null;
+}
 
-```tsx
-marker: {
-  width: 24,           // pin diameter
-  height: 24,
-  borderRadius: 12,    // circular; use 4 for rounded square
-  backgroundColor: '#007AFF', // Mapbox blue
-  borderWidth: 3,
-  borderColor: '#FFFFFF',
-  // Shadow (iOS)
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.3,
-  shadowRadius: 4,
-  // Shadow (Android)
-  elevation: 5,
-},
+interface MapMarker {
+  id: string;
+  latitude: number;
+  longitude: number;
+  title?: string;
+  description?: string;
+}
+
+interface MapboxMapHandle {
+  setPaddingBottom: (paddingBottom: number, durationMs?: number) => void; // imperative camera padding update via ref, bypassing React re-render; default 300ms ease
+}
 ```
 
-#### 2. Add an Icon / Image Inside the Pin
+`MapboxMap` is wrapped in `React.memo` and exposes `MapboxMapHandle` via `forwardRef`. Callers that need to track a fast-changing value (e.g. a draggable panel's height, reported every animation frame) should call `ref.current.setPaddingBottom(value)` directly instead of feeding it through the `padding` prop — pushing a per-frame value through props would re-render the whole component tree and fight the `padding` prop's own 500ms-animated `setCamera` call. See `HomeScreen.tsx`'s `handlePanelHeightChange` for the reference usage: it keeps the panel height in a ref (not state) and only recomputes the `padding` prop on the rare, discrete event of the panel's visibility toggling.
 
-Replace the plain `View` with an image or emoji:
+`setPaddingBottom`'s default 300ms ease is intentional: called on every animation frame during a panel drag, each call re-targets the in-flight camera animation before the previous one finishes, so the map visibly trails the panel edge by a beat rather than snapping to it instantly. Pass `durationMs: 0` for an immediate, non-lagging update if a future caller needs 1:1 tracking.
 
-```tsx
-<MapboxGL.MarkerView coordinate={[lng, lat]}>
-  <View style={markerStyles.pin}>
-    <Text style={markerStyles.pinEmoji}>📍</Text>
-  </View>
-</MapboxGL.MarkerView>
+## Access Token
+
+The Mapbox public token is loaded from `.env` (`MAPBOX_ACCESS_TOKEN`) and injected via `app.config.js` into `Constants.expoConfig.extra.mapboxAccessToken`. The `.env` file is gitignored — share the token via the group chat.
+
+Setup:
+1. Create `.env` in the project root
+2. Add `MAPBOX_ACCESS_TOKEN=pk.eyJ...`
+3. Run `npx expo prebuild --clean` (first time only), then `npx expo run:ios`
+
+## Route Data Source
+
+Route data (`ParseResult`, `GeocodedLocation`) comes from `src/services/api/apiService.ts`:
+
+```ts
+import { parseLink } from '@/services/api/apiService';
+// ParseResult type: src/types/route.ts
 ```
 
-Or use a custom image:
+`HomeScreen` calls `parseLink(url)`, converts the result to `MapMarker[]` and `GeoJSON.LineString`, and passes them as props to `MapboxMap`. See `HOME.md` for the full data flow.
 
-```tsx
-import { Image } from 'react-native';
+## Route Rendering
 
-<MapboxGL.MarkerView coordinate={[lng, lat]}>
-  <Image
-    source={require('../../assets/custom-marker.png')}
-    style={{ width: 32, height: 32 }}
-  />
-</MapboxGL.MarkerView>
-```
+When `routeGeoJSON` is provided, a blue polyline is drawn via `MapboxGL.ShapeSource` + `MapboxGL.LineLayer`. When `routeMarkers` is provided it replaces the default `markers` array — so only route stops are shown while a route is active.
 
-#### 3. Different Marker Styles by Category
+## Camera
 
-```tsx
-const getMarkerStyle = (category: string) => {
-  switch (category) {
-    case 'restaurant':
-      return { backgroundColor: '#FF6B6B', emoji: '🍽️' };
-    case 'park':
-      return { backgroundColor: '#51CF66', emoji: '🌳' };
-    case 'museum':
-      return { backgroundColor: '#748FFC', emoji: '🏛️' };
-    default:
-      return { backgroundColor: '#007AFF', emoji: '📍' };
-  }
-};
-```
+The camera is controlled programmatically via a `MapboxGL.Camera` ref. `centerCoordinate` and `zoomLevel` changes trigger a smooth 500ms re-center. `HomeScreen` passes the mean of all route points as `centerCoordinate` when a route is active.
 
-### Icon / Image Resources
+`HomeScreen` derives the `padding` prop's `paddingBottom` from the active bottom panel's last settled snap group state (via `ContentPanel`'s exported `SNAP_HEIGHTS`), not a fixed constant — so a discrete recenter (e.g. selecting a different marker while `PlaceDetail` is open at a non-default snap height) keeps the map's visible focus matched to whatever height the panel currently occupies, whether `compact`, `default`, or `full`. Continuous drag tracking still goes through `setPaddingBottom` on the ref.
 
-- Use PNG or SVG assets in `assets/` directory
-- Recommended marker size: **32×32 to 48×48 points** (retina @2x/@3x)
-- For SVG support, the project includes `react-native-svg`
+## Map Style
 
-### Using Mapbox Style Layers (Advanced)
+Currently `MapboxGL.StyleURL.Street`. Other options: `Outdoors`, `Light`, `Dark`, `Satellite`, `SatelliteStreet`, or a custom `mapbox://styles/…` URL.
 
-For performance with many markers (>100), use `MapboxGL.ShapeSource` + `MapboxGL.SymbolLayer` instead of individual `MarkerView` components:
+## Marker Customization
 
-```tsx
-<MapboxGL.ShapeSource id="places" shape={geoJsonData}>
-  <MapboxGL.SymbolLayer
-    id="place-icons"
-    style={{
-      iconImage: 'marker-15',
-      iconSize: 1.5,
-      iconColor: '#007AFF',
-      textField: ['get', 'name'],
-      textSize: 12,
-      textOffset: [0, -2],
-    }}
-  />
-</MapboxGL.ShapeSource>
-```
-
-### Changing the Map Style
-
-The current style is `MapboxGL.StyleURL.Street`. Other built-in options:
-
-```tsx
-MapboxGL.StyleURL.Street       // default, detailed roads & labels
-MapboxGL.StyleURL.Outdoors     // terrain with contour lines
-MapboxGL.StyleURL.Light        // subtle, light background
-MapboxGL.StyleURL.Dark         // dark mode
-MapboxGL.StyleURL.Satellite    // satellite imagery
-MapboxGL.StyleURL.SatelliteStreet // satellite + road overlay
-```
-
-Or use a custom Mapbox style URL:
-
-```tsx
-styleURL="mapbox://styles/your-username/ckxxxxxx"
-```
-
-### A lot more design change we can make. To be discovered.
-
----
-
-## Access Token Setup
-
-> **Note for the team**: The Mapbox access token will be shared in the group chat.
->
-> To use it locally:
-> 1. Create a `.env` file in the project root (if not present)
-> 2. Add the following line:
-> ```
-> MAPBOX_ACCESS_TOKEN=pk.eyJ...your-token-here
-> ```
-> 3. Run `npx expo prebuild --clean` (first time only) then `npx expo run:ios`
->
-> ⚠️ `.env` is gitignored — do not commit it. Only the public token (`pk.`) is used for rendering; no secret token is needed for local development.
+Markers are rendered as `MapboxGL.MarkerView` with a custom React Native `View`. Edit the `marker` style in `MapboxMap.tsx` to change size, color, or shape. For large marker counts (>100), switch to `MapboxGL.ShapeSource` + `MapboxGL.SymbolLayer` for better performance.

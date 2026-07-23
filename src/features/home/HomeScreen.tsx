@@ -1,265 +1,420 @@
-// src/features/home/HomeScreen.tsx
-import React, { useCallback, useMemo, useState } from 'react';
-import {
-  SafeAreaView,
-  StatusBar,
-  StyleSheet
-} from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Dimensions, StatusBar, StyleSheet, View } from 'react-native';
 
-import { mockPlaces } from '../../data/mockPlaces';
-import { parseLink } from '../../services/apiService';
-import { ChatMessage, GeocodedLocation, ParseResult } from '../../types/route';
-import MapboxMap, { MapMarker } from '../map/MapboxMap';
-import SearchBar from './SearchBar';
-import Sidekick from './Sidekick';
+import TopNav from '../../components/top-nav/TopNav';
+import TopBlurFade from '../../components/ui/top-blur-fade';
+import type { ParsedPlace } from '../../services/import/importService';
+import type { SavedPlace } from '../../services/place/placeService';
+import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
+import { SNAP_HEIGHTS } from '../../components/content-panel/ContentPanel';
+import { useContentPanelSnapGroup } from '../../components/content-panel/ContentPanelSnapProvider';
+import AddPlace from '../add-place/AddPlace';
+import CreatePlan from '../my-plan/create-plan/CreatePlan';
+import type { SavedPlan } from '../my-plan/create-plan/savePlan';
+import PlanDetail from '../my-plan/plan-detail/PlanDetail';
+import PlaceDetail from '../place-detail/PlaceDetail';
+import AtlasDetail from '../my-places/atlas/atlas-detail/AtlasDetail';
+import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
+import DebugPanel from '@/dev/DebugPanel';
+import { useHome } from './HomeContext';
+import HomePanel from './HomePanel';
+import HomeTabBar, { TAB_PLACES, TAB_PLAN } from './HomeTabBar';
+import SearchPanel from '../search/SearchPanel';
+
+const HOME_PANEL_SNAP_GROUP = 'home-main';
+// Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
+// 200 / mass 0.9) — see below for why the map's padding recompute waits this long
+// after a group snap change instead of reacting immediately.
+const PANEL_SPRING_SETTLE_DELAY = 380;
 
 // ---- Types ----
 
-/** Represents a place data item from mock data */
-interface PlaceData {
-  id: string;
-  name: string;
-  subtitle: string;
-  latitude: number;
-  longitude: number;
+interface HomeScreenProps {
+  onOpenImport?: () => void;
+  onOpenChatHistory?: () => void;
 }
 
 // ---- Helpers ----
 
-/**
- * Converts PlaceData items into MapMarker format
- * expected by the MapboxMap component.
- */
-const toMapMarkers = (places: PlaceData[]): MapMarker[] =>
-  places.map((place) => ({
-    id: place.id,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    title: place.name,
-    description: place.subtitle,
+const toMapMarkersFromParsed = (places: ParsedPlace[]): MapMarker[] =>
+  places.map((p) => ({
+    id: p.id,
+    latitude: p.latitude,
+    longitude: p.longitude,
+    title: p.name,
+    description: p.subtitle,
   }));
 
-/** Convert ordered geocoded locations into MapMarker format */
-const toRouteMarkers = (locations: GeocodedLocation[]): MapMarker[] =>
-  locations.map((loc, index) => ({
-    id: `route-${index}`,
-    latitude: loc.latitude,
-    longitude: loc.longitude,
-    title: loc.name,
-    description: loc.full_address,
+const toMapMarkersFromSaved = (places: SavedPlace[]): MapMarker[] =>
+  places.map((p) => ({
+    id: p.id,
+    latitude: p.latitude,
+    longitude: p.longitude,
+    title: p.name,
+    description: p.subtitle,
   }));
 
-/** Convert ordered locations into a GeoJSON LineString for route rendering */
-const toRouteGeoJSON = (
-  locations: GeocodedLocation[],
-): GeoJSON.Feature<GeoJSON.LineString> => ({
-  type: 'Feature',
-  properties: {},
-  geometry: {
-    type: 'LineString',
-    coordinates: locations.map((loc) => [loc.longitude, loc.latitude]),
-  },
-});
+// Compute median center from parsed places
+const medianCenter = (places: ParsedPlace[]): [number, number] => {
+  if (places.length === 0) return [-122.3321, 47.6062];
+  const mid = (values: number[]) => {
+    const s = [...values].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+  return [mid(places.map((p) => p.longitude)), mid(places.map((p) => p.latitude))];
+};
 
-/** Generate a unique chat message ID */
-const uid = (): string => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+// ---- Root export — HomeProvider is now in App.tsx ----
 
-/** Format distance in km for readable display */
-function formatDistanceSummary(km: number): string {
-  if (km < 1) return `${Math.round(km * 1000)} m total`;
-  if (km < 10) return `${km.toFixed(1)} km total`;
-  return `${Math.round(km)} km total`;
+export default function HomeScreen({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
+  return (
+    <HomeScreenContent
+      onOpenImport={onOpenImport}
+      onOpenChatHistory={onOpenChatHistory}
+    />
+  );
 }
 
-// ---- Component ----
+// ---- Inner component — consumes the context ----
 
-interface HomeScreenProps {
-  /** Optional callback to open the ImportScreen overlay (used by App.tsx) */
-  onOpenImport?: () => void;
-}
+function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
+  const {
+    overlay,
+    setOverlay,
+    tabBarVisible,
+    chatHistory,
+    setChatHistory,
+    parsedPlaces,
+    setParsedPlaces,
+    refreshSavedPlaces,
+    selectedPlaceCoordinate,
+    setSelectedPlaceCoordinate,
+    selectedPlaceId,
+    setSelectedPlaceId,
+    activeHistoryItem,
+    setActiveHistoryItem,
+    activeSidekick,
+    setActiveSidekick,
+    userLocation,
+    savedPlaces,
+  } = useHome();
+  const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
+  // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
+  // panel switching mid-spring doesn't inherit a stale value) — but this screen's own
+  // subscription drives the map's discrete camera-padding recenter below, which is
+  // expensive enough that firing it mid-spring competes with the panel's own height
+  // animation on the JS thread and stutters it. Delaying this copy until roughly the
+  // spring's settle time keeps the recenter from overlapping the drag animation, same
+  // as when the group write itself was deferred to spring completion.
+  const [settledPanelSnapState, setSettledPanelSnapState] = useState(groupSnapState);
+  useEffect(() => {
+    if (groupSnapState === settledPanelSnapState) return;
+    const timeout = setTimeout(() => setSettledPanelSnapState(groupSnapState), PANEL_SPRING_SETTLE_DELAY);
+    return () => clearTimeout(timeout);
+  }, [groupSnapState, settledPanelSnapState]);
+  const tabBarOpacity = useRef(new Animated.Value(1)).current;
+  const pagerTranslateX = useRef(new Animated.Value(0)).current;
+  const pagerWidth = useMemo(() => Dimensions.get('window').width, []);
 
-const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenImport }) => {
-  // Transform mock data into map markers
-  const defaultMarkers: MapMarker[] = useMemo(() => toMapMarkers(mockPlaces), []);
+  useEffect(() => {
+    Animated.timing(tabBarOpacity, {
+      toValue: tabBarVisible ? 1 : 0,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [tabBarVisible]);
 
-  // State for parse/fetch flow
-  const [parseResult, setParseResult] = useState<ParseResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('Fetching Reddit post...');
-  const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
+  const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN], []);
 
-  // Track whether we have active route data to display
-  const hasRouteData = parseResult !== null && parseResult.locations.length > 0;
+  // Use parsedPlaces from HomeContext (set by App.tsx after parse)
+  const hasParsedPlaces = parsedPlaces.length > 0;
 
-  // Compute route display props
-  const routeGeoJSON = useMemo(() => {
-    if (!parseResult?.route.ordered_locations.length) return undefined;
-    return toRouteGeoJSON(parseResult.route.ordered_locations);
-  }, [parseResult]);
+  // 地图中心：优先使用选中地点坐标，其次使用 parsedPlaces 的中心，
+  // 再次使用用户 GPS 定位，最后用默认值（西雅图）
+  const mapCenter = useMemo(() => {
+    if (selectedPlaceCoordinate) return selectedPlaceCoordinate;
+    if (hasParsedPlaces) return medianCenter(parsedPlaces);
+    if (userLocation) return userLocation;
+    return [-122.3321, 47.6062] as [number, number];
+  }, [selectedPlaceCoordinate, hasParsedPlaces, parsedPlaces, userLocation]);
 
-  const routeMarkers = useMemo(() => {
-    if (!parseResult?.route.ordered_locations.length) return undefined;
-    return toRouteMarkers(parseResult.route.ordered_locations);
-  }, [parseResult]);
-
-  // Compute camera target from route locations (center of first and last point)
-  const routeCenter = useMemo((): [number, number] | undefined => {
-    if (!parseResult?.route.ordered_locations.length) return undefined;
-    const locs = parseResult.route.ordered_locations;
-    const latSum = locs.reduce((s, l) => s + l.latitude, 0);
-    const lngSum = locs.reduce((s, l) => s + l.longitude, 0);
-    const avgLat = latSum / locs.length;
-    const avgLng = lngSum / locs.length;
-    return [avgLng, avgLat];
-  }, [parseResult]);
-
-  /** Handle URL submission from the SearchBar */
-  const handleSend = useCallback(async (url: string) => {
-    setIsLoading(true);
-    setError(null);
-    setMessages([]);
-
-    // Animate through loading messages
-    const loadingSteps = [
-      'Fetching Reddit post...',
-      'AI analyzing locations...',
-      'Geocoding places...',
-      'Planning best route...',
-    ];
-    let stepIndex = 0;
-    const interval = setInterval(() => {
-      stepIndex = (stepIndex + 1) % loadingSteps.length;
-      setLoadingMessage(loadingSteps[stepIndex]);
-    }, 2000);
-
-    try {
-      const result = await parseLink(url);
-      setParseResult(result);
-
-      // Add system message with the result
-      const sysMsg: ChatMessage = {
-        id: uid(),
-        role: 'system',
-        text: `Found ${result.locations.length} places from "${result.title}". Route distance: ${result.route.total_distance_km} km.`,
-        timestamp: Date.now(),
-      };
-
-      // Add an assistant message with summary
-      let summary = `I extracted **${result.locations.length} places** from this post.\n\n`;
-      summary += `**Route**: ${formatDistanceSummary(result.route.total_distance_km)}\n\n`;
-      summary += '**Places in order**:\n';
-      result.route.ordered_locations.forEach((loc, i) => {
-        summary += `${i + 1}. ${loc.name}\n`;
-      });
-
-      if (result.removed_noise && result.removed_noise.length > 0) {
-        summary += '\n**Filtered out**:\n';
-        result.removed_noise.forEach((n) => {
-          summary += `• ${n}\n`;
-        });
-      }
-
-      const assistantMsg: ChatMessage = {
-        id: uid(),
-        role: 'assistant',
-        text: summary,
-        timestamp: Date.now(),
-      };
-
-      setMessages([sysMsg, assistantMsg]);
-    } catch (err: any) {
-      const errMsg = err?.message || 'An unexpected error occurred.';
-      setError(errMsg);
-
-      const errorMsg: ChatMessage = {
-        id: uid(),
-        role: 'system',
-        text: `⚠️ Error: ${errMsg}`,
-        timestamp: Date.now(),
-      };
-      setMessages([errorMsg]);
-    } finally {
-      clearInterval(interval);
-      setIsLoading(false);
-    }
-  }, []);
-
-  /** Handle follow-up messages in the Sidekick chat */
-  const handleSendMessage = useCallback(
-    async (text: string) => {
-      // Add user message
-      const userMsg: ChatMessage = {
-        id: uid(),
-        role: 'user',
-        text,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, userMsg]);
-
-      // Basic auto-reply for MVP (no separate DeepSeek call from frontend)
-      const autoReply: ChatMessage = {
-        id: uid(),
-        role: 'assistant',
-        text: `I found ${parseResult?.locations.length || 0} places. You can view them on the map! Try pasting another Reddit link to explore more.`,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, autoReply]);
-    },
-    [parseResult],
+  // savedPlaces 常驻标记
+  const savedMarkers = useMemo(
+    () => toMapMarkersFromSaved(savedPlaces),
+    [savedPlaces],
   );
 
-  /** Handle history button press */
-  const handleHistoryPress = useCallback(() => {
-    // MVP: toggle the bottom sheet to show past results
-    // For now, just log. In future: show a history list overlay.
-    console.log('[HomeScreen] History pressed');
+  // parsedPlaces 临时标记（有解析结果时显示）
+  const parsedMarkers = useMemo(
+    () => (hasParsedPlaces ? toMapMarkersFromParsed(parsedPlaces) : []),
+    [parsedPlaces, hasParsedPlaces],
+  );
+
+  // 合并标记：有 parsedPlaces 时优先显示解析结果，否则显示已保存地点
+  const mapMarkers = useMemo(() => {
+    if (hasParsedPlaces) return parsedMarkers;
+    return savedMarkers;
+  }, [savedMarkers, parsedMarkers, hasParsedPlaces]);
+
+  // 动态 zoom 级别
+  const mapZoom = useMemo(() => {
+    if (selectedPlaceCoordinate) return 15;
+    if (hasParsedPlaces) return 10;
+    return 12;
+  }, [selectedPlaceCoordinate, hasParsedPlaces]);
+
+  const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
+  // Any bottom panel that should push the map center up — the main pager panel,
+  // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
+  // drives the same padding-tracking path.
+  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  // Tracks the live panel height without React state — the panel reports it every
+  // animation frame while dragging/snapping, and nothing else needs to reactively
+  // read it, so pushing it through setState would re-render the whole screen 60x/sec.
+  const bottomPanelHeightRef = useRef(SNAP_HEIGHTS[settledPanelSnapState]);
+  const mapRef = useRef<MapboxMapHandle>(null);
+  // Recomputed whenever the active bottom panel toggles OR its resolved snap state
+  // changes, so a discrete camera recenter (e.g. selecting a different marker while
+  // the panel is at a non-default snap height) uses padding matching the panel's
+  // *current* height instead of a frozen default — this still goes through
+  // MapboxMap's prop-driven, animated camera path so hiding/showing the panel eases
+  // the map padding smoothly. Per-frame drag tracking stays on the ref-based path below.
+  const mapPadding = useMemo(() => ({
+    paddingTop: 0,
+    paddingBottom: bottomPanelActive ? SNAP_HEIGHTS[settledPanelSnapState] : 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+  }), [bottomPanelActive, settledPanelSnapState]);
+  useEffect(() => {
+    bottomPanelHeightRef.current = mapPadding.paddingBottom;
+  }, [mapPadding]);
+  // Per-frame panel height updates — pushed straight to the map's camera via ref,
+  // bypassing React re-render entirely.
+  const handlePanelHeightChange = useCallback((height: number) => {
+    bottomPanelHeightRef.current = height;
+    mapRef.current?.setPaddingBottom(bottomPanelActive ? height : 0);
+  }, [bottomPanelActive]);
+
+  const handleAddPress = useCallback(() => {
+    onOpenImport?.();
+  }, [onOpenImport]);
+  const animateToTab = useCallback((tab: string) => {
+    const idx = Math.max(0, tabOrder.indexOf(tab));
+    Animated.spring(pagerTranslateX, {
+      toValue: -idx * pagerWidth,
+      useNativeDriver: true,
+      damping: 20,
+      stiffness: 180,
+      mass: 0.85,
+    }).start();
+    setActiveTab(tab);
+  }, [pagerTranslateX, pagerWidth, tabOrder]);
+  const handleTabChange = useCallback((tab: string) => {
+    animateToTab(tab);
+  }, [animateToTab]);
+  useEffect(() => {
+    animateToTab(activeTab);
   }, []);
+  // --- Search & History handlers ---
+  const handleSearchPress = useCallback(() => {
+    setOverlay({ kind: 'search' });
+  }, [setOverlay]);
+
+  const handleMarkerPress = useCallback((marker: MapMarker) => {
+    setSelectedPlaceId(marker.id);
+    setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
+  }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
-      {/* Search bar floating at top */}
-      <SearchBar
-        onSend={handleSend}
-        isLoading={isLoading}
-        onHistoryPress={handleHistoryPress}
+      {/* Single full-screen map behind everything */}
+      <MapboxMap
+        ref={mapRef}
+        markers={mapMarkers}
+        centerCoordinate={mapCenter}
+        zoomLevel={mapZoom}
+        padding={mapPadding}
+        selectedMarkerId={selectedPlaceId}
+        onMarkerPress={handleMarkerPress}
       />
 
-      {/* Mapbox map filling the entire screen */}
-      <MapboxMap
-        markers={defaultMarkers}
-        centerCoordinate={routeCenter ?? [-122.3321, 47.6062]}
-        zoomLevel={hasRouteData ? 10 : 12}
-        routeGeoJSON={routeGeoJSON}
-        routeMarkers={routeMarkers}
-        onMarkerPress={(marker) => {
-          console.log('Marker pressed:', marker.title);
-          // TODO: Navigate to PlaceDetailScreen
+      <TopBlurFade />
+      <TopNav onSearchPress={handleSearchPress} />
+
+      <View style={styles.pagerViewport} pointerEvents="box-none">
+        <Animated.View
+          style={[
+            styles.pager,
+            {
+              width: pagerWidth * tabOrder.length,
+              transform: [{ translateX: pagerTranslateX }],
+            },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
+            <HomePanel
+              activeTab={TAB_PLACES}
+              snapGroup={HOME_PANEL_SNAP_GROUP}
+              visible={panelVisible}
+              onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
+            />
+          </View>
+          <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
+            <HomePanel
+              activeTab={TAB_PLAN}
+              snapGroup={HOME_PANEL_SNAP_GROUP}
+              visible={panelVisible}
+              onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
+            />
+          </View>
+        </Animated.View>
+      </View>
+
+      <AIChatBox
+        key={activeHistoryItem?.id ?? 'atlas-ai-empty'}
+        places={activeHistoryItem?.places ?? parsedPlaces}
+        onClose={() => {
+          setActiveHistoryItem(null);
+          setParsedPlaces([]);
+          setSelectedPlaceCoordinate(null);
+          setSelectedPlaceId(null);
+          setActiveSidekick('none');
+        }}
+        onOpenHistory={onOpenChatHistory}
+        title={activeHistoryItem?.title}
+        visible={activeSidekick === 'aiChat' && panelVisible}
+        conversationId={activeHistoryItem?.id ?? null}
+        onPlacesCommitted={(newPlaces) => {
+          const currentItem = activeHistoryItem;
+          if (!currentItem) return;
+
+          const existing = currentItem.places ?? [];
+          const merged = [...existing];
+          newPlaces.forEach((place) => {
+            const duplicate = merged.some(
+              (item) =>
+                item.name === place.name &&
+                Math.abs(item.latitude - place.latitude) < 0.0002 &&
+                Math.abs(item.longitude - place.longitude) < 0.0002,
+            );
+            if (!duplicate) merged.push(place);
+          });
+
+          const nextItem = {
+            ...currentItem,
+            places: merged,
+            locationCount: merged.length,
+          };
+          setActiveHistoryItem(nextItem);
+          setParsedPlaces(merged);
+          setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
+          setChatHistory(chatHistory.map((item) => (item.id === nextItem.id ? nextItem : item)));
+          refreshSavedPlaces().catch((error) => {
+            console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
+          });
         }}
       />
 
-      {/* Sidekick bottom sheet */}
-      <Sidekick
-        parseResult={parseResult}
-        isLoading={isLoading}
-        loadingMessage={loadingMessage}
-        messages={messages}
-        onSendMessage={handleSendMessage}
-        error={error}
+      {/* Native tab bar — fades out when overlay features request it */}
+      <Animated.View
+        style={{ opacity: tabBarOpacity }}
+        pointerEvents={tabBarVisible ? 'box-none' : 'none'}
+      >
+        <HomeTabBar
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          onAddPress={handleAddPress}
+        />
+      </Animated.View>
+
+      {/* Full-screen overlays — driven by HomeContext, above everything */}
+
+      {/* Search Panel */}
+      {overlay.kind === 'search' && (
+        <SearchPanel onClose={() => setOverlay({ kind: 'none' })} />
+      )}
+
+      {overlay.kind === 'debug' && (
+        <DebugPanel onClose={() => setOverlay({ kind: 'none' })} />
+      )}
+
+      {/* CreatePlan full-screen overlay — triggered by "Add to plan" from SaveScreen.
+          Stays mounted underneath the AddPlace overlay when AddPlace was opened
+          from within the wizard (returnTo.kind === 'createPlan'), so returning
+          from AddPlace doesn't remount CreatePlan and trigger its mount-time
+          reset() — see CreatePlan.tsx. */}
+      {(overlay.kind === 'createPlan' || (overlay.kind === 'addPlace' && overlay.returnTo?.kind === 'createPlan')) && (
+        <View style={StyleSheet.absoluteFill}>
+          <CreatePlan
+            onClose={() => {
+              setOverlay({ kind: 'none' });
+              // Clear parsed places so map resets to default markers
+              setParsedPlaces([]);
+            }}
+            onPlanCreated={(plan: SavedPlan) => {
+              setOverlay({ kind: 'planDetail', planId: plan.id });
+            }}
+            reportScrollY={() => {}}
+          />
+        </View>
+      )}
+
+      <PlaceDetail
+        placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
+        onDismiss={() => setOverlay(overlay.kind === 'placeDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
+        onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
       />
-    </SafeAreaView>
+
+      <PlanDetail
+        planId={overlay.kind === 'planDetail' ? overlay.planId : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
+      />
+
+      <AtlasDetail
+        atlasId={overlay.kind === 'atlasDetail' ? overlay.atlasId : null}
+        onDismiss={() => setOverlay({ kind: 'none' })}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
+      />
+
+      <AddPlace
+        visible={overlay.kind === 'addPlace'}
+        onDismiss={() => setOverlay(overlay.kind === 'addPlace' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
+        onSelect={(places) => {
+          if (overlay.kind !== 'addPlace') return;
+          overlay.onSelect(places);
+          setOverlay(overlay.returnTo ?? { kind: 'none' });
+        }}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'addPlace' ? handlePanelHeightChange : undefined}
+        excludeIds={overlay.kind === 'addPlace' ? overlay.excludeIds : undefined}
+      />
+    </View>
   );
-};
+}
 
 // ---- Styles ----
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
+  },
+  pager: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+  },
+  pagerViewport: {
+    ...StyleSheet.absoluteFill,
+    overflow: 'hidden',
   },
 });
-
-export default HomeScreen;

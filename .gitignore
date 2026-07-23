@@ -45,3 +45,21 @@ yarn-error.*
 
 # Obsidian
 docs/.obsidian
+
+# VSCode
+.vscode/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+backend/.cache/
+
+# media
+*.mp4
+
+# MCP
+.mcp.json
+*.backup
+*.log
+yarn.lock

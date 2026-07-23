@@ -1,1 +1,0 @@
-This folder contains those components shared across the entire application.
