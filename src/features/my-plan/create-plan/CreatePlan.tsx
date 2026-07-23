@@ -27,6 +27,10 @@ type CreatePlanProps = {
   onClose: () => void;
   onPlanCreated?: (plan: SavedPlan) => void;
   reportScrollY: (y: number) => void;
+  /** True when mounted as MyPlan's permanently-mounted inline instance rather
+      than HomeScreen's overlay-driven one. Forwarded to `PlanPlace` — see its
+      `inline` prop doc for why this matters for the `addPlace` overlay's `returnTo`. */
+  inline?: boolean;
 };
 
 /** Imperative handle so the parent (which now keeps CreatePlan permanently
@@ -39,7 +43,7 @@ export type CreatePlanHandle = {
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function CreatePlan(
-  { onClose, onPlanCreated, reportScrollY },
+  { onClose, onPlanCreated, reportScrollY, inline },
   ref,
 ) {
   const [step, setStep] = useState<CreatePlanStep>('destination');
@@ -131,6 +135,7 @@ const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function Create
           location={location}
           range={range}
           reportScrollY={reportScrollY}
+          inline={inline}
         />
       )}
     </View>

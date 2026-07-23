@@ -40,6 +40,13 @@ type ContentPanelProps = {
   height?: number;
   /** Overrides the 'default' snap height and animates to it immediately. */
   defaultSnapHeight?: number;
+  /**
+   * Floor for snap states inherited via snapGroup — a panel with no
+   * compactContent has nothing sane to render at 'compact', so group memory
+   * settling there shouldn't pull it down that far. Only clamps group
+   * inheritance; explicit snapState/gestures are unaffected.
+   */
+  minSnap?: SnapState;
 };
 ```
 
@@ -86,6 +93,8 @@ Animated `snapTo` changes update the internal target immediately, but React-visi
 `ContentPanelSnapProvider` owns shared snap memory for named panel groups. A `ContentPanel` with `snapGroup="home-main"` initializes from that group's last settled snap state and writes its new target back to the group one frame after `snapTo` is called (see Snap Heights for why not synchronously or at spring completion). This lets sibling panels inherit the same resting state without using React state as the animation driver.
 
 When a *different* panel in the group settles a new snap, the rest of the group resyncs to it instantly (no spring) — only the panel whose own gesture or override actually drove the change animates. This keeps a panel that's about to become visible already caught up, instead of its entrance transition racing a catch-up spring on its height.
+
+A group member with no `compactContent` should pass `minSnap` (see Props) — otherwise it can inherit `compact` from a sibling that does support it (the group's most common resting state, since it's usually where the always-visible member sits) and have nothing sane to render there.
 
 Priority order:
 

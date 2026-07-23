@@ -7,7 +7,7 @@ Each component has its own doc file — **read the doc before editing the compon
 | Component | Doc | Purpose |
 |---|---|---|
 | `content-panel/ContentPanel` | [CONTENT-PANEL.md](content-panel/CONTENT-PANEL.md) | Draggable bottom sheet with snap states |
-| `plan-card/PlanCard` + `usePlanDelete` | [PLAN-CARD.md](plan-card/PLAN-CARD.md) | Grid card for a travel plan |
+| `map-pin-cover/MapPinCover` | [MAP-PIN-COVER.md](map-pin-cover/MAP-PIN-COVER.md) | Stylized map + pin fallback cover for thumbnails with no photo |
 | `search-bar/SearchBar` | [SEARCH-BAR.md](search-bar/SEARCH-BAR.md) | URL input bar (currently unmounted) |
 | `top-nav/TopNav` | [TOP-NAV.md](top-nav/TOP-NAV.md) | Map overlay nav — search + globe + navigate |
 | `ui/*` | [UI.md](ui/UI.md) | All primitive wrappers (Button, Text, Input, Badge, Avatar, Card, AlertDialog) |

@@ -75,19 +75,13 @@ type PlanScheduleSectionProps = {
 
 ---
 
-## Mock Data Seeding
-
-`PlanDetail.tsx` calls `seedMockPlanDetails()` at module load time to populate the `savePlan` in-memory store with the plans from `mock-data/mockPlanDetails.ts`. Remove this call when real API persistence is wired.
-
----
-
 ## Data Model
 
-All types below are **defined in `src/features/my-plan/create-plan/savePlan.ts`** — import from there, do not re-declare:
+`savePlan.findSavedPlan()` loads a plan from the real Supabase `plans` / `plan_itinerary_place_flexible` / `plan_itinerary_days` / `plan_itinerary_places` tables (see `create-plan/CREATE-PLAN.md`). All types below are **defined in `src/features/my-plan/create-plan/savePlan.ts`** — import from there, do not re-declare:
 
 ```ts
 import type { SavedPlan, PlanDateSlot } from '@/features/my-plan/create-plan/savePlan';
-import type { PlannedPlace, VisitSlot } from '@/features/my-plan/create-plan/plan-place/types';
+import type { PlannedPlace, TimeSlot } from '@/features/my-plan/create-plan/plan-place/types';
 ```
 
 ```ts
@@ -104,6 +98,6 @@ type SavedPlan = {
 
 type PlanDateSlot = {
   date: string;  // 'YYYY-MM-DD'
-  slots: Partial<Record<VisitSlot, PlannedPlace[]>>;
+  places: PlannedPlace[];  // flat — each place carries its own optional `timeSlot`, not nested by slot
 };
 ```

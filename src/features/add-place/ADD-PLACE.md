@@ -15,7 +15,7 @@ src/features/add-place/
 ## Behaviour
 
 - Renders inside `ContentPanel` with `zIndex={50}` (highest in the stack).
-- Joins the `home-main` `ContentPanel` snap group (same as `HomePanel` and `PlaceDetail`) and forwards `onHeightChange`, so it gets the same settled-snap inheritance and map camera-padding treatment as the rest of the panel stack — see `HOME.md` Behaviour. `HomeScreen` owns wiring both; callers elsewhere don't pass these props themselves.
+- Joins the `home-main` `ContentPanel` snap group (same as `HomePanel` and `PlaceDetail`) and forwards `onHeightChange`, so it gets the same settled-snap inheritance and map camera-padding treatment as the rest of the panel stack — see `HOME.md` Behaviour. `HomeScreen` owns wiring both; callers elsewhere don't pass these props themselves. Passes `minSnap="default"` since it has no `compactContent` — see `CONTENT-PANEL.md` Snap Groups for why a panel without one needs a floor.
 - **Data source** — lists the caller's saved places (`useHome().savedPlaces`, offline-first local-cache-backed, see `LOCAL.md`), adapted to `PlaceDetail` via `toPlaceDetail()`. When `excludeIds` is passed, places whose id appears in it are hidden entirely rather than shown as disabled/pre-checked — callers that want duplicates selectable (e.g. the plan flow, where revisiting a place is valid) simply omit it.
 - **Search** — filters by name/subtitle in real time.
 - **Filter pills** — `Recommended`, `Best for Summer`, `Nearby`, `Not Yet Visited`. Toggle-to-deselect; currently cosmetic (actual filtering not wired).

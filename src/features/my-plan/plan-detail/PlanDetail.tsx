@@ -6,12 +6,8 @@ import { Text } from '@/components/ui/text';
 import ContentPanel from '../../../components/content-panel/ContentPanel';
 import { findSavedPlan } from '../create-plan/savePlan';
 import type { SavedPlan } from '../create-plan/savePlan';
-import { seedMockPlanDetails } from '../../../../mock-data/mockPlanDetails';
 import PlanCompactView from './PlanCompactView';
 import PlanScheduleSection from './plan-detail-sections/PlanScheduleSection';
-
-// Seed mock data once at module load
-seedMockPlanDetails();
 
 // ---------------------------------------------------------------------------
 // Date formatting helpers
