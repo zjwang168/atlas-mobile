@@ -1,10 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import BottomSheet, {
   BottomSheetBackdrop,
-  BottomSheetFooter,
-  BottomSheetTextInput,
   BottomSheetView,
-  type BottomSheetFooterProps,
 } from '@gorhom/bottom-sheet';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -18,10 +15,10 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
   useWindowDimensions,
-  type TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -223,6 +220,7 @@ export default function ImportScreen({
   const sheetRef = useRef<BottomSheet>(null);
   const inputRef = useRef<TextInput>(null);
   const openingDetailRef = useRef(false);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { height: windowHeight } = useWindowDimensions();
 
   const [section, setSection] = useState<ImportSection>('menu');
@@ -234,6 +232,7 @@ export default function ImportScreen({
   const [clipboardAvailable, setClipboardAvailable] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const snapPoints = useMemo(
     () =>
@@ -244,17 +243,36 @@ export default function ImportScreen({
   );
 
   useEffect(() => {
-    const showSubscription = Keyboard.addListener('keyboardWillShow', () =>
-      setKeyboardVisible(true),
-    );
-    const hideSubscription = Keyboard.addListener('keyboardWillHide', () =>
-      setKeyboardVisible(false),
-    );
+    const showSubscription = Keyboard.addListener('keyboardWillShow', (event) => {
+      Keyboard.scheduleLayoutAnimation(event);
+      setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates.height);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardWillHide', (event) => {
+      Keyboard.scheduleLayoutAnimation(event);
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
     };
   }, []);
+
+  const scheduleInputFocus = useCallback((delay = 80) => {
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = setTimeout(() => {
+      requestAnimationFrame(() => inputRef.current?.focus());
+      focusTimerRef.current = null;
+    }, delay);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (section !== 'social') return;
@@ -293,6 +311,7 @@ export default function ImportScreen({
 
   const returnToMenu = useCallback(() => {
     Keyboard.dismiss();
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
     openingDetailRef.current = false;
     setSection('menu');
     setSelectedMode(null);
@@ -304,8 +323,8 @@ export default function ImportScreen({
   const selectSocialMode = useCallback((mode: SocialMode) => {
     setSocialMode(mode);
     setSelectedMode(mode);
-    inputRef.current?.focus();
-  }, []);
+    scheduleInputFocus(0);
+  }, [scheduleInputFocus]);
 
   const selectImageMode = useCallback((mode: ImageMode) => {
     setImageMode(mode);
@@ -409,7 +428,12 @@ export default function ImportScreen({
   const handleSheetChange = useCallback(
     (index: number) => {
       if (index === -1) onClose();
-      if (index === 1) openingDetailRef.current = false;
+      if (index === 1) {
+        openingDetailRef.current = false;
+        if (section !== 'images' && section !== 'menu') {
+          scheduleInputFocus();
+        }
+      }
       if (
         index === 0 &&
         section !== 'menu' &&
@@ -421,7 +445,7 @@ export default function ImportScreen({
         setImages([]);
       }
     },
-    [onClose, section],
+    [onClose, scheduleInputFocus, section],
   );
 
   const renderBackdrop = useCallback(
@@ -473,31 +497,38 @@ export default function ImportScreen({
     </View>
   );
 
-  const renderFooter = useCallback(
-    (props: BottomSheetFooterProps) => {
-      if (section === 'menu' || section === 'images') return null;
+  const renderInputOverlay = () => {
+    if (section === 'menu' || section === 'images') return null;
 
-      const isSocial = section === 'social';
-      const isText = section === 'text';
-      const canSubmit = text.trim().length > 0;
-      const placeholder = isSocial
-        ? socialMode === 'redditLinks'
-          ? 'Paste a Reddit link...'
-          : 'Paste a YouTube link...'
-        : section === 'links'
-          ? 'Paste any web page URL...'
-          : 'Paste notes, an itinerary, or a list...';
+    const isSocial = section === 'social';
+    const isText = section === 'text';
+    const canSubmit = text.trim().length > 0;
+    const placeholder = isSocial
+      ? socialMode === 'redditLinks'
+        ? 'Paste a Reddit link...'
+        : 'Paste a YouTube link...'
+      : section === 'links'
+        ? 'Paste any web page URL...'
+        : 'Paste notes, an itinerary, or a list...';
 
-      return (
-        <BottomSheetFooter {...props} bottomInset={0}>
-          <View
-            style={[
-              styles.footer,
-              {
-                paddingBottom: keyboardVisible ? 8 : insets.bottom + 12,
-              },
-            ]}
-          >
+    return (
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.footerOverlay,
+          {
+            bottom: keyboardVisible ? keyboardHeight + 12 : 0,
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.footer,
+            {
+              paddingBottom: keyboardVisible ? 0 : insets.bottom + 12,
+            },
+          ]}
+        >
             {isSocial && clipboardAvailable ? (
               <View style={styles.clipboardCard}>
                 <View style={styles.clipboardCopy}>
@@ -574,8 +605,8 @@ export default function ImportScreen({
                 color={COLOR.textPrimary}
                 style={styles.inputLeadingIcon}
               />
-              <BottomSheetTextInput
-                ref={inputRef as never}
+              <TextInput
+                ref={inputRef}
                 value={text}
                 onChangeText={setText}
                 placeholder={placeholder}
@@ -617,22 +648,9 @@ export default function ImportScreen({
               </TouchableOpacity>
             </View>
           </View>
-        </BottomSheetFooter>
-      );
-    },
-    [
-      clipboardAvailable,
-      handleNativePaste,
-      handleSubmit,
-      insets.bottom,
-      keyboardVisible,
-      pasteClipboardLink,
-      section,
-      socialMode,
-      text,
-      webSearchEnabled,
-    ],
-  );
+      </View>
+    );
+  };
 
   const renderMenu = () => (
     <BottomSheetView style={styles.menuContent}>
@@ -775,17 +793,13 @@ export default function ImportScreen({
         onChange={handleSheetChange}
         enablePanDownToClose
         enableOverDrag={false}
-        keyboardBehavior="interactive"
-        keyboardBlurBehavior="restore"
         backdropComponent={renderBackdrop}
-        footerComponent={
-          section === 'menu' || section === 'images' ? undefined : renderFooter
-        }
         handleIndicatorStyle={styles.handleIndicator}
         backgroundStyle={styles.sheetBackground}
       >
         {section === 'menu' ? renderMenu() : renderDetail()}
       </BottomSheet>
+      {renderInputOverlay()}
     </View>
   );
 }
@@ -976,6 +990,12 @@ const styles = StyleSheet.create({
   footer: {
     gap: 10,
     paddingHorizontal: 12,
+  },
+  footerOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 10,
   },
   clipboardCard: {
     minHeight: 78,
