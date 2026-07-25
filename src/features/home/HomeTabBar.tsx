@@ -1,87 +1,205 @@
-import { memo, useCallback, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Tabs } from 'react-native-screens';
-
-const ICON_PLACES = require('../../../assets/tabs/tab-places.png');
-const ICON_PLACES_FILL = require('../../../assets/tabs/tab-places-fill.png');
-const ICON_PLAN = require('../../../assets/tabs/tab-plan.png');
-const ICON_PLAN_FILL = require('../../../assets/tabs/tab-plan-fill.png');
-const ICON_ADD = require('../../../assets/tabs/tab-add.png');
+import {
+  GlassView,
+  isGlassEffectAPIAvailable,
+  isLiquidGlassAvailable,
+} from 'expo-glass-effect';
+import { BlurView } from 'expo-blur';
+import type { Icon } from 'phosphor-react-native';
+import { BookmarkSimpleIcon } from 'phosphor-react-native/src/icons/BookmarkSimple';
+import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
+import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
+import { UserIcon } from 'phosphor-react-native/src/icons/User';
+import { memo, useCallback, useEffect, useRef } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 export const TAB_PLACES = 'myPlaces';
 export const TAB_PLAN = 'travelPlan';
 export const TAB_ADD = 'add';
+export const TAB_PROFILE = 'profile';
+export const TAB_CHAT = 'chat';
 
-const TAB_BAR_HOST_HEIGHT = 64;
+const COLOR = {
+  active: '#12C170',
+  icon: '#171717',
+} as const;
+
+const LIQUID_GLASS_AVAILABLE =
+  isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
+const TAB_WIDTH = 60;
 
 type HomeTabBarProps = {
   activeTab: string;
   onTabChange: (tab: string) => void;
   onAddPress: () => void;
+  onChatPress: () => void;
 };
 
-function HomeTabBar({ activeTab, onTabChange, onAddPress }: HomeTabBarProps) {
-  const insets = useSafeAreaInsets();
-  const [provenance, setProvenance] = useState(0);
+type TabItem = {
+  key: string;
+  label: string;
+  icon: Icon;
+  action?: 'add' | 'chat';
+};
 
-  const handleTabSelected = useCallback((e: any) => {
-    const { selectedScreenKey, provenance: p } = e.nativeEvent;
-    setProvenance(p);
-    if (selectedScreenKey === TAB_ADD) {
-      onAddPress();
-    } else {
-      onTabChange(selectedScreenKey);
+const TAB_ITEMS: TabItem[] = [
+  {
+    key: TAB_PLACES,
+    label: 'My Places',
+    icon: BookmarkSimpleIcon,
+  },
+  {
+    key: TAB_PLAN,
+    label: 'My Plan',
+    icon: SuitcaseSimpleIcon,
+  },
+  {
+    key: TAB_ADD,
+    label: 'Add',
+    icon: PlusIcon,
+    action: 'add',
+  },
+  {
+    key: TAB_PROFILE,
+    label: 'Profile',
+    icon: UserIcon,
+  },
+  {
+    key: TAB_CHAT,
+    label: 'Chat',
+    icon: ChatTeardropIcon,
+    action: 'chat',
+  },
+];
+
+function HomeTabBar({
+  activeTab,
+  onTabChange,
+  onAddPress,
+  onChatPress,
+}: HomeTabBarProps) {
+  const reducedMotion = useReducedMotion();
+  const activeIndex = Math.max(
+    0,
+    TAB_ITEMS.findIndex((item) => item.key === activeTab),
+  );
+  const selectorX = useSharedValue(activeIndex * TAB_WIDTH);
+  const barScale = useSharedValue(1);
+  const previousActiveTab = useRef(activeTab);
+
+  useEffect(() => {
+    const nextX = activeIndex * TAB_WIDTH;
+
+    if (reducedMotion) {
+      selectorX.value = nextX;
+      barScale.value = 1;
+      previousActiveTab.current = activeTab;
+      return;
     }
-  }, [onTabChange, onAddPress]);
 
-  const handleTabSelectionPrevented = useCallback(() => {
-    onAddPress();
-  }, [onAddPress]);
+    selectorX.value = withSpring(nextX, {
+      damping: 18,
+      stiffness: 220,
+      mass: 0.68,
+    });
+
+    if (previousActiveTab.current !== activeTab) {
+      barScale.value = withSequence(
+        withTiming(1.028, {
+          duration: 90,
+          easing: Easing.out(Easing.quad),
+        }),
+        withSpring(1, {
+          damping: 15,
+          stiffness: 250,
+          mass: 0.58,
+        }),
+      );
+    }
+
+    previousActiveTab.current = activeTab;
+  }, [activeIndex, activeTab, barScale, reducedMotion, selectorX]);
+
+  const selectorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: selectorX.value }],
+  }));
+
+  const barScaleStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: barScale.value }],
+  }));
+
+  const handlePress = useCallback((item: TabItem) => {
+    if (item.action === 'add') {
+      onAddPress();
+      return;
+    }
+    if (item.action === 'chat') {
+      onChatPress();
+      return;
+    }
+    onTabChange(item.key);
+  }, [onAddPress, onChatPress, onTabChange]);
 
   return (
-    <View
-      style={[styles.host, { height: TAB_BAR_HOST_HEIGHT + insets.bottom }]}
-      pointerEvents="box-none"
-    >
-      <Tabs.Host
-        navStateRequest={{ selectedScreenKey: activeTab, baseProvenance: provenance }}
-        onTabSelected={handleTabSelected}
-        onTabSelectionPrevented={handleTabSelectionPrevented}
-        nativeContainerStyle={{ backgroundColor: 'transparent' }}
-        ios={{ tabBarMinimizeBehavior: 'onScrollDown', tabBarTintColor: '#12C170' }}
-      >
-        <Tabs.Screen
-          screenKey={TAB_PLACES}
-          title="My Places"
-          ios={{
-            icon: { type: 'templateSource', templateSource: ICON_PLACES },
-            selectedIcon: { type: 'templateSource', templateSource: ICON_PLACES_FILL },
-          }}
-        >
-          <View style={styles.screen} pointerEvents="none" />
-        </Tabs.Screen>
+    <View style={styles.host} pointerEvents="box-none">
+      <Animated.View style={[styles.barShadow, barScaleStyle]}>
+        <View style={styles.bar}>
+          {LIQUID_GLASS_AVAILABLE ? (
+            <GlassView
+              pointerEvents="none"
+              style={StyleSheet.absoluteFill}
+              glassEffectStyle="regular"
+              tintColor="rgba(250,250,250,0.40)"
+            />
+          ) : (
+            <BlurView
+              pointerEvents="none"
+              style={StyleSheet.absoluteFill}
+              tint="systemUltraThinMaterialLight"
+              intensity={80}
+            />
+          )}
+          <View pointerEvents="none" style={styles.frost} />
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.selector, selectorStyle]}
+          />
 
-        <Tabs.Screen
-          screenKey={TAB_PLAN}
-          title="My Plan"
-          ios={{
-            icon: { type: 'templateSource', templateSource: ICON_PLAN },
-            selectedIcon: { type: 'templateSource', templateSource: ICON_PLAN_FILL },
-          }}
-        >
-          <View style={styles.screen} pointerEvents="none" />
-        </Tabs.Screen>
+          {TAB_ITEMS.map((item) => {
+            const selected = !item.action && item.key === activeTab;
+            const IconComponent = item.icon;
 
-        <Tabs.Screen
-          screenKey={TAB_ADD}
-          title="Add"
-          preventNativeSelection
-          ios={{ systemItem: 'search', icon: { type: 'imageSource', imageSource: ICON_ADD } }}
-        >
-          <View style={styles.screen} pointerEvents="none" />
-        </Tabs.Screen>
-      </Tabs.Host>
+            return (
+              <Pressable
+                key={item.key}
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected }}
+                onPress={() => handlePress(item)}
+                style={({ pressed }) => [
+                  styles.tab,
+                  pressed && styles.tabPressed,
+                ]}
+              >
+                <IconComponent
+                  size={24}
+                  weight={selected ? 'fill' : 'regular'}
+                  color={selected ? COLOR.active : COLOR.icon}
+                />
+              </Pressable>
+            );
+          })}
+        </View>
+      </Animated.View>
     </View>
   );
 }
@@ -93,9 +211,54 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
+    bottom: 24,
+    alignItems: 'center',
   },
-  screen: {
-    flex: 1,
+  barShadow: {
+    width: 308,
+    height: 52,
+    borderRadius: 32,
+    boxShadow: '0 8px 40px rgba(0,0,0,0.12)',
+  },
+  bar: {
+    width: 308,
+    height: 52,
+    padding: 4,
+    borderRadius: 32,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(250,250,250,0.18)',
+  },
+  frost: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(250,250,250,0.22)',
+  },
+  tab: {
+    width: TAB_WIDTH,
+    height: 44,
+    borderRadius: 30,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selector: {
+    position: 'absolute',
+    left: 4,
+    top: 4,
+    width: TAB_WIDTH,
+    height: 44,
+    borderRadius: 30,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  tabPressed: {
+    opacity: 0.64,
+    transform: [{ scale: 0.96 }],
   },
 });

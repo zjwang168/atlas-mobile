@@ -6,87 +6,315 @@ import BottomSheet, {
   BottomSheetView,
   type BottomSheetFooterProps,
 } from '@gorhom/bottom-sheet';
+import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Pressable, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions, type TextInput } from 'react-native';
+import {
+  Alert,
+  Animated,
+  Image,
+  Keyboard,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  useWindowDimensions,
+  type TextInput,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { typography } from '../../../theme/typography';
 
-export type ImportMode = 'smartText' | 'findTextPlaces' | 'redditLinks' | 'anyLinks' | 'youtubeLinks' | 'findImagePlaces';
+export type ImportMode =
+  | 'smartText'
+  | 'findTextPlaces'
+  | 'redditLinks'
+  | 'anyLinks'
+  | 'youtubeLinks'
+  | 'findImagePlaces';
 
-// Semantic colors — mirror the SPARC Figma color tokens.
-const COLOR = {
-  primary: '#12C170',
-  primaryLight: '#E9FBF1',
-  bg: '#FFFFFF',
-  bgSecondary: '#F7F7F7',
-  textPrimary: '#1A1A1A',
-  textSecondary: '#717171',
-  textTertiary: '#B0B0B0',
-  borderStrong: '#E0E0E0',
-  foreground: '#09090B',
-  grabber: '#CCCCCC',
-} as const;
-
-const RADIUS_BUBBLE = 18;
+type ImportSection = 'menu' | 'social' | 'images' | 'text' | 'links';
+type SocialMode = Extract<ImportMode, 'redditLinks' | 'youtubeLinks'>;
+type ImageMode = Extract<ImportMode, 'findTextPlaces' | 'findImagePlaces'>;
 
 type ImportScreenProps = {
   onClose: () => void;
   onSubmit: (text: string, mode: ImportMode, webSearch?: boolean) => void;
   onSubmitImageScan?: (imagesBase64: string[], mode?: ImportMode) => void;
-  onScanResult?: (result: any) => void;
-  /** Opens the Atlas AI chat history list (AtlasAIHome) over this sheet. */
+  onScanResult?: (result: unknown) => void;
+  /** Kept for App-level compatibility; chat history now belongs to Chat, not Add places. */
   onOpenChatHistory?: () => void;
 };
 
-const modes: { key: ImportMode; icon: string; title: string; subtitle: string }[] = [
-  { key: 'smartText', icon: 'document-text-outline', title: 'Smart Text', subtitle: 'Paste a prompt, note, or itinerary' },
-  { key: 'findTextPlaces', icon: 'image-outline', title: 'Find Text Places', subtitle: 'Scan image text for places' },
-  { key: 'redditLinks', icon: 'logo-reddit', title: 'Reddit Links', subtitle: 'Save places from Reddit threads' },
-  { key: 'anyLinks', icon: 'link-outline', title: 'Any Links', subtitle: 'Vision scan any web page' },
-  { key: 'youtubeLinks', icon: 'logo-youtube', title: 'YouTube Links', subtitle: 'Extract places from transcripts' },
-  { key: 'findImagePlaces', icon: 'camera-outline', title: 'Find Image Places', subtitle: 'Identify landmarks from photos' },
+type MenuCard = {
+  key: Exclude<ImportSection, 'menu'>;
+  title: string;
+  subtitle: string;
+  icon: 'social' | 'images' | 'text' | 'links';
+};
+
+const COLOR = {
+  primary: '#12C170',
+  primaryLight: '#E9FBF1',
+  bg: '#FFFFFF',
+  surface: '#FBFBFB',
+  surfaceSecondary: '#F5F5F5',
+  textPrimary: '#1A1A1A',
+  textSecondary: '#717171',
+  textTertiary: '#B0B0B0',
+  border: 'rgba(60,60,67,0.12)',
+  grabber: '#CCCCCC',
+} as const;
+
+const MENU_CARDS: MenuCard[] = [
+  {
+    key: 'social',
+    title: 'Social media',
+    subtitle: 'Import from YouTube or Reddit',
+    icon: 'social',
+  },
+  {
+    key: 'images',
+    title: 'Image recognition',
+    subtitle: 'Photos and screenshots',
+    icon: 'images',
+  },
+  {
+    key: 'text',
+    title: 'Paste text',
+    subtitle: 'Notes, itineraries, and lists',
+    icon: 'text',
+  },
+  {
+    key: 'links',
+    title: 'Any other links',
+    subtitle: 'Articles, blogs, and webpages',
+    icon: 'links',
+  },
 ];
 
-const TIPS: { mode: ImportMode; text: string }[] = [
-  { mode: 'findTextPlaces', text: 'Scan screenshots for places' },
-  { mode: 'findTextPlaces', text: 'Screenshot a X post & extract locations' },
-  { mode: 'findImagePlaces', text: 'Upload a photo to identify its location' },
-  { mode: 'smartText', text: 'Paste any text to extract spots' },
-  { mode: 'smartText', text: 'Try "Game of Thrones filming locations"' },
-  { mode: 'smartText', text: 'Try "Where did Taylor Swift marry?"' },
-  { mode: 'redditLinks', text: 'Save cool spots from Reddit' },
-  { mode: 'anyLinks', text: 'Paste a travel URL & save all' },
-  { mode: 'anyLinks', text: 'Any Links uses a pure vision model (Gemini 2.5 Compute Use) and may take longer for accuracy' },
-  { mode: 'smartText', text: 'Paste a X post to extract locations' },
-  { mode: 'smartText', text: 'Paste a Thread post to extract locations' },
-  { mode: 'youtubeLinks', text: 'Paste a YouTube link to extract places from the transcript' },
-];
+function looksLikeUrl(value: string): boolean {
+  return /^(https?:\/\/|www\.)\S+$/i.test(value.trim());
+}
 
-/**
- * "Add places" sheet — pulls up from the bottom over the home screen.
- *
- * Users pick a mode (Smart Text, Image Scan, Reddit Links, Any Links),
- * then provide input via text field or image picker accordingly.
- */
-export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onScanResult, onOpenChatHistory }: ImportScreenProps) {
+function resolveSocialMode(value: string, fallback: SocialMode): SocialMode {
+  const normalized = value.trim().toLowerCase();
+  if (/(youtube\.com|youtu\.be)/i.test(normalized)) return 'youtubeLinks';
+  if (/(reddit\.com|redd\.it|old\.reddit\.com)/i.test(normalized))
+    return 'redditLinks';
+  return fallback;
+}
+
+type SlidingSegmentedControlProps = {
+  labels: readonly [string, string];
+  selectedIndex: 0 | 1;
+  width: number;
+  onSelect: (index: 0 | 1) => void;
+};
+
+function SlidingSegmentedControl({
+  labels,
+  selectedIndex,
+  width,
+  onSelect,
+}: SlidingSegmentedControlProps) {
+  const position = useRef(new Animated.Value(selectedIndex)).current;
+  const segmentWidth = (width - 4) / 2;
+
+  useEffect(() => {
+    Animated.spring(position, {
+      toValue: selectedIndex,
+      stiffness: 300,
+      damping: 28,
+      mass: 0.8,
+      useNativeDriver: true,
+    }).start();
+  }, [position, selectedIndex]);
+
+  return (
+    <View style={[styles.segmentedControl, { width }]}>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.segmentIndicator,
+          {
+            width: segmentWidth,
+            transform: [
+              {
+                translateX: position.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, segmentWidth],
+                }),
+              },
+            ],
+          },
+        ]}
+      />
+      {labels.map((label, index) => {
+        const active = selectedIndex === index;
+        return (
+          <Pressable
+            key={label}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            onPress={() => onSelect(index as 0 | 1)}
+            style={styles.segmentButton}
+          >
+            <Text
+              style={[
+                styles.segmentText,
+                !active && styles.segmentTextInactive,
+              ]}
+            >
+              {label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function MenuCardIcon({ type }: { type: MenuCard['icon'] }) {
+  if (type === 'social') {
+    return (
+      <View style={styles.socialIconGroup}>
+        <View style={[styles.brandIconBubble, styles.redditIconBubble]}>
+          <Ionicons name="logo-reddit" size={22} color="#FF4500" />
+        </View>
+        <View style={[styles.brandIconBubble, styles.youtubeIconBubble]}>
+          <Ionicons name="logo-youtube" size={22} color="#FF0000" />
+        </View>
+      </View>
+    );
+  }
+
+  const iconName =
+    type === 'images'
+      ? 'images-outline'
+      : type === 'text'
+        ? 'document-text-outline'
+        : 'link-outline';
+
+  const bubbleStyle =
+    type === 'images'
+      ? styles.imageMenuIconBubble
+      : type === 'text'
+        ? styles.textMenuIconBubble
+        : styles.linkMenuIconBubble;
+  const iconColor =
+    type === 'images' ? '#1686E8' : type === 'text' ? '#E99A08' : COLOR.primary;
+
+  return (
+    <View style={[styles.menuIconBubble, bubbleStyle]}>
+      <Ionicons name={iconName} size={24} color={iconColor} />
+    </View>
+  );
+}
+
+export default function ImportScreen({
+  onClose,
+  onSubmit,
+  onSubmitImageScan,
+}: ImportScreenProps) {
   const insets = useSafeAreaInsets();
   const sheetRef = useRef<BottomSheet>(null);
   const inputRef = useRef<TextInput>(null);
-  const { width: screenWidth } = useWindowDimensions();
+  const openingDetailRef = useRef(false);
+  const { height: windowHeight } = useWindowDimensions();
 
+  const [section, setSection] = useState<ImportSection>('menu');
   const [selectedMode, setSelectedMode] = useState<ImportMode | null>(null);
+  const [socialMode, setSocialMode] = useState<SocialMode>('redditLinks');
+  const [imageMode, setImageMode] = useState<ImageMode>('findTextPlaces');
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
-  const [tipIndex, setTipIndex] = useState(0);
-  const [webSearchHighlighted, setWebSearchHighlighted] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const [clipboardAvailable, setClipboardAvailable] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
-  const snapPoints = useMemo(() => ['92%'], []);
+  const snapPoints = useMemo(
+    () =>
+      section === 'menu'
+        ? [Math.ceil(windowHeight * 0.58)]
+        : [Math.ceil(windowHeight * 0.58), '92%'],
+    [section, windowHeight],
+  );
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardWillShow', () =>
+      setKeyboardVisible(true),
+    );
+    const hideSubscription = Keyboard.addListener('keyboardWillHide', () =>
+      setKeyboardVisible(false),
+    );
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (section !== 'social') return;
+
+    let active = true;
+    Clipboard.hasStringAsync()
+      .then((hasText) => {
+        if (active) setClipboardAvailable(hasText);
+      })
+      .catch(() => {
+        // Clipboard access is optional; the manual input remains available.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [section]);
+
+  const openSection = useCallback(
+    (nextSection: Exclude<ImportSection, 'menu'>) => {
+      Keyboard.dismiss();
+      openingDetailRef.current = true;
+      setSection(nextSection);
+      setText('');
+      setImages([]);
+
+      if (nextSection === 'social') setSelectedMode(socialMode);
+      if (nextSection === 'images') setSelectedMode(imageMode);
+      if (nextSection === 'text') setSelectedMode('smartText');
+      if (nextSection === 'links') setSelectedMode('anyLinks');
+
+      requestAnimationFrame(() => sheetRef.current?.snapToIndex(1));
+    },
+    [imageMode, socialMode],
+  );
+
+  const returnToMenu = useCallback(() => {
+    Keyboard.dismiss();
+    openingDetailRef.current = false;
+    setSection('menu');
+    setSelectedMode(null);
+    setText('');
+    setImages([]);
+    requestAnimationFrame(() => sheetRef.current?.snapToIndex(0));
+  }, []);
+
+  const selectSocialMode = useCallback((mode: SocialMode) => {
+    setSocialMode(mode);
+    setSelectedMode(mode);
+    inputRef.current?.focus();
+  }, []);
+
+  const selectImageMode = useCallback((mode: ImageMode) => {
+    setImageMode(mode);
+    setSelectedMode(mode);
+    setImages([]);
+  }, []);
 
   const pickImages = useCallback(async () => {
-    const isSingleImage = selectedMode === 'findImagePlaces';
+    const isSingleImage = imageMode === 'findImagePlaces';
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: !isSingleImage,
@@ -94,69 +322,106 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
       quality: 0.7,
       base64: true,
     });
+
     if (!result.canceled && result.assets.length > 0) {
       setImages(result.assets.slice(0, isSingleImage ? 1 : 3));
     }
-  }, [selectedMode]);
+  }, [imageMode]);
 
   const removeImage = useCallback((index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
+    setImages((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index),
+    );
   }, []);
-
-  useEffect(() => {
-    if (selectedMode !== 'smartText') {
-      setWebSearchHighlighted(false);
-    }
-  }, [selectedMode]);
 
   const handleSubmit = useCallback(async () => {
     if (!selectedMode) return;
-    if (selectedMode === 'findTextPlaces' || selectedMode === 'findImagePlaces') {
+
+    if (section === 'images') {
       if (images.length === 0) return;
       const imageDataList = images
-        .map((img) => img.base64)
-        .filter((b64): b64 is string => Boolean(b64));
+        .map((image) => image.base64)
+        .filter((base64): base64 is string => Boolean(base64));
+
       if (imageDataList.length === 0) {
         Alert.alert('Error', 'No image data available.');
         return;
       }
-      // Switch to analyzing immediately so the user sees the waiting screen
-      // right away instead of sitting on My Places during sheet animation.
-      onSubmitImageScan?.(imageDataList, selectedMode);
+
+      onSubmitImageScan?.(imageDataList, imageMode);
       return;
     }
-    if (!text.trim()) return;
-    onSubmit(text.trim(), selectedMode, selectedMode === 'smartText' ? webSearchHighlighted : undefined);
-  }, [selectedMode, text, images, onSubmit, onSubmitImageScan, onScanResult, onClose]);
 
-  // Rotating tip banner — cycle every 3 seconds with fade transition
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Fade out → change text → fade in
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }).start(() => {
-        setTipIndex((prev) => (prev + 1) % TIPS.length);
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 300,
-          useNativeDriver: true,
-        }).start();
-      });
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [fadeAnim]);
+    const trimmedText = text.trim();
+    if (!trimmedText) return;
 
-  // Focus the input once the sheet settles open (more reliable than autoFocus
-  // mid-animation); unmount the overlay when it's fully closed.
+    if (section === 'social') {
+      const resolvedMode = resolveSocialMode(trimmedText, socialMode);
+      setSocialMode(resolvedMode);
+      setSelectedMode(resolvedMode);
+      onSubmit(trimmedText, resolvedMode);
+      return;
+    }
+
+    onSubmit(
+      trimmedText,
+      selectedMode,
+      selectedMode === 'smartText' ? webSearchEnabled : undefined,
+    );
+  }, [
+    imageMode,
+    images,
+    onSubmit,
+    onSubmitImageScan,
+    section,
+    selectedMode,
+    socialMode,
+    text,
+    webSearchEnabled,
+  ]);
+
+  const applyPastedLink = useCallback(
+    (value: string) => {
+      const candidate = value.trim();
+      if (!looksLikeUrl(candidate)) return;
+      const detected = resolveSocialMode(candidate, socialMode);
+      setSocialMode(detected);
+      setSelectedMode(detected);
+      setText(candidate);
+      setClipboardAvailable(false);
+      inputRef.current?.focus();
+    },
+    [socialMode],
+  );
+
+  const pasteClipboardLink = useCallback(async () => {
+    const value = await Clipboard.getStringAsync();
+    applyPastedLink(value);
+  }, [applyPastedLink]);
+
+  const handleNativePaste = useCallback(
+    (payload: Clipboard.PasteEventPayload) => {
+      if (payload.type === 'text') applyPastedLink(payload.text);
+    },
+    [applyPastedLink],
+  );
+
   const handleSheetChange = useCallback(
     (index: number) => {
       if (index === -1) onClose();
-      else inputRef.current?.focus();
+      if (index === 1) openingDetailRef.current = false;
+      if (
+        index === 0 &&
+        section !== 'menu' &&
+        !openingDetailRef.current
+      ) {
+        setSection('menu');
+        setSelectedMode(null);
+        setText('');
+        setImages([]);
+      }
     },
-    [onClose]
+    [onClose, section],
   );
 
   const renderBackdrop = useCallback(
@@ -165,261 +430,362 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
         {...props}
         appearsOnIndex={0}
         disappearsOnIndex={-1}
-        opacity={0.2}
+        opacity={0.22}
         pressBehavior="close"
       />
     ),
-    []
+    [],
+  );
+
+  const renderBackButton = () => (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Back to Add places"
+      onPress={returnToMenu}
+      style={({ pressed }) => [
+        styles.backButton,
+        pressed && styles.backButtonPressed,
+      ]}
+    >
+      <Ionicons name="arrow-back" size={25} color={COLOR.textPrimary} />
+    </Pressable>
+  );
+
+  const renderSocialHeader = () => (
+    <View style={[styles.detailHeader, styles.socialDetailHeader]}>
+      <SlidingSegmentedControl
+        labels={['Reddit', 'YouTube']}
+        selectedIndex={socialMode === 'redditLinks' ? 0 : 1}
+        width={220}
+        onSelect={(index) =>
+          selectSocialMode(index === 0 ? 'redditLinks' : 'youtubeLinks')
+        }
+      />
+      <View style={styles.socialBackButton}>{renderBackButton()}</View>
+    </View>
+  );
+
+  const renderSimpleHeader = (title: string) => (
+    <View style={styles.detailHeader}>
+      {renderBackButton()}
+      <Text style={styles.detailTitle}>{title}</Text>
+      <View style={styles.headerBalanceSpacer} />
+    </View>
   );
 
   const renderFooter = useCallback(
-    (props: BottomSheetFooterProps) => (
-      <BottomSheetFooter {...props} bottomInset={0}>
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
-          {/* Input area — changes based on selectedMode */}
-          {selectedMode === 'findTextPlaces' || selectedMode === 'findImagePlaces' ? (
-            /* Image modes: show image picker with thumbnails */
-            <View style={styles.imagePickerArea}>
-              {images.length > 0 ? (
-                <View style={styles.imagePickerContent}>
-                  {/* Image thumbnails row */}
-                  <View style={styles.imageThumbRow}>
-                    {images.map((img, idx) => {
-                      const RNImage = require('react-native').Image;
-                      return (
-                        <View key={idx} style={styles.imageThumbWrapper}>
-                          <View style={styles.imageThumbWrap}>
-                            <RNImage source={{ uri: img.uri }} style={styles.imageThumb} />
-                          </View>
-                          <TouchableOpacity
-                            style={styles.imageRemoveBtn}
-                            onPress={() => removeImage(idx)}
-                            hitSlop={8}
-                          >
-                            <Ionicons name="close-circle" size={22} color="#FF3B30" />
-                          </TouchableOpacity>
-                        </View>
-                      );
-                    })}
-                    {selectedMode === 'findTextPlaces' && images.length < 3 && (
-                      <TouchableOpacity style={styles.imageAddBtn} onPress={pickImages} activeOpacity={0.7}>
-                        <Ionicons name="add" size={24} color={COLOR.primary} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  {/* Send button */}
-                  <TouchableOpacity
-                    style={[styles.imageSendBtn, images.length === 0 && styles.sendButtonDisabled]}
-                    onPress={handleSubmit}
-                    disabled={images.length === 0}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
-                    <Text style={styles.imageSendText}>
-                      {selectedMode === 'findImagePlaces' ? 'Find Place' : `Scan ${images.length} image${images.length > 1 ? 's' : ''}`}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <TouchableOpacity style={styles.imagePickerButton} onPress={pickImages} activeOpacity={0.7}>
-                  <Ionicons name="images-outline" size={32} color={COLOR.primary} />
-                  <Text style={styles.imagePickerText}>
-                    {selectedMode === 'findImagePlaces' ? 'Select 1 Image' : 'Select up to 3 images'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : (
-            /* Text input modes (smartText, redditLinks, anyLinks, or none) */
-            <View style={styles.composer}>
-              {selectedMode === 'smartText' && (
-                <>
-                  <View style={styles.composerHeader}>
-                    <View style={styles.composerLabelWrap}>
-                     
-                     
-                    </View>
-                    <TouchableOpacity
-                      style={[styles.webSearchButton, webSearchHighlighted && styles.webSearchButtonActive]}
-                      onPress={() => {
-                        setWebSearchHighlighted((prev) => {
-                          const next = !prev;
-                          console.log(`[ImportScreen] Smart Text web search = ${next ? 'ON' : 'OFF'}`);
-                          return next;
-                        });
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="globe-outline"
-                        size={15}
-                        color={webSearchHighlighted ? '#FFFFFF' : COLOR.textPrimary}
-                      />
-                      <Text style={[styles.webSearchText, webSearchHighlighted && styles.webSearchTextActive]}>
-                        {webSearchHighlighted ? 'Web Search On' : 'Web Search Off'}
-                      </Text>
-                      <View style={[styles.webSearchDot, webSearchHighlighted && styles.webSearchDotActive]} />
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.composerNote}>
-                    {webSearchHighlighted
-                      ? 'Qwen 3.5 web search will be used.'
-                      : 'DeepSeek V4 Flash will be used.'}
-                  </Text>
-                  
-                </>
-              )}
-              {selectedMode === 'anyLinks' && (
-                <Text style={styles.anyLinksNote}>
-                  Any Links mode uses a pure vision model and may take longer to improve parsing accuracy.
-                  {'\n'}{'\n'}
-                  Gemini 3.5 Flash will be used.
-                </Text>
-              )}
+    (props: BottomSheetFooterProps) => {
+      if (section === 'menu' || section === 'images') return null;
 
-              <View style={styles.inputRow}>
-                <BottomSheetTextInput
-                  ref={inputRef as never}
-                  value={text}
-                  onChangeText={setText}
-                  placeholder={
-                    selectedMode === null
-                      ? 'Choose a mode above...'
-                      : selectedMode === 'smartText'
-                      ? 'Show me Breaking Bad filming locations...'
-                    : selectedMode === 'redditLinks'
-                      ? 'Copy a Reddit post/thread URL here...'
-                      : selectedMode === 'anyLinks'
-                      ? 'Paste any web page URL here...'
-                      : 'Extract places from URLs here...'
-                  }
-                  placeholderTextColor={COLOR.textTertiary}
-                  multiline
-                  autoFocus
-                  editable={selectedMode !== null}
-                  style={styles.input}
-                  textAlignVertical="top"
-                />
+      const isSocial = section === 'social';
+      const isText = section === 'text';
+      const canSubmit = text.trim().length > 0;
+      const placeholder = isSocial
+        ? socialMode === 'redditLinks'
+          ? 'Paste a Reddit link...'
+          : 'Paste a YouTube link...'
+        : section === 'links'
+          ? 'Paste any web page URL...'
+          : 'Paste notes, an itinerary, or a list...';
 
-                {selectedMode !== null && (
-                  <TouchableOpacity
-                    style={[
-                      styles.sendButton,
-                      !text.trim() && styles.sendButtonDisabled,
-                    ]}
-                    onPress={handleSubmit}
-                    disabled={!text.trim()}
-                    activeOpacity={0.8}
-                  >
+      return (
+        <BottomSheetFooter {...props} bottomInset={0}>
+          <View
+            style={[
+              styles.footer,
+              {
+                paddingBottom: keyboardVisible ? 8 : insets.bottom + 12,
+              },
+            ]}
+          >
+            {isSocial && clipboardAvailable ? (
+              <View style={styles.clipboardCard}>
+                <View style={styles.clipboardCopy}>
+                  <View style={styles.clipboardLabelRow}>
                     <Ionicons
-                      name="arrow-up"
-                      size={20}
-                      color={text.trim() ? COLOR.primary : COLOR.textTertiary}
+                      name="copy-outline"
+                      size={16}
+                      color={COLOR.textSecondary}
                     />
-                    </TouchableOpacity>
+                    <Text style={styles.clipboardLabel}>
+                      Paste copied link?
+                    </Text>
+                  </View>
+                  <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={styles.clipboardValue}
+                  >
+                    A copied link is ready to import
+                  </Text>
+                </View>
+                {Platform.OS === 'ios' && Clipboard.isPasteButtonAvailable ? (
+                  <Clipboard.ClipboardPasteButton
+                    acceptedContentTypes={['plain-text', 'url']}
+                    backgroundColor={COLOR.primary}
+                    foregroundColor="#FFFFFF"
+                    cornerStyle="capsule"
+                    displayMode="labelOnly"
+                    onPress={handleNativePaste}
+                    style={styles.nativePasteButton}
+                  />
+                ) : (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={pasteClipboardLink}
+                    style={styles.pasteButton}
+                  >
+                    <Text style={styles.pasteButtonText}>Paste</Text>
+                  </Pressable>
                 )}
               </View>
+            ) : null}
 
-              
+            {isText ? (
+              <Pressable
+                accessibilityRole="switch"
+                accessibilityState={{ checked: webSearchEnabled }}
+                onPress={() => setWebSearchEnabled((enabled) => !enabled)}
+                style={[
+                  styles.webSearchToggle,
+                  webSearchEnabled && styles.webSearchToggleActive,
+                ]}
+              >
+                <Ionicons
+                  name="globe-outline"
+                  size={17}
+                  color={webSearchEnabled ? '#FFFFFF' : COLOR.textPrimary}
+                />
+                <Text
+                  style={[
+                    styles.webSearchToggleText,
+                    webSearchEnabled && styles.webSearchToggleTextActive,
+                  ]}
+                >
+                  Web search {webSearchEnabled ? 'on' : 'off'}
+                </Text>
+              </Pressable>
+            ) : null}
+
+            <View style={[styles.inputRow, isText && styles.inputRowMultiline]}>
+              <Ionicons
+                name="add"
+                size={28}
+                color={COLOR.textPrimary}
+                style={styles.inputLeadingIcon}
+              />
+              <BottomSheetTextInput
+                ref={inputRef as never}
+                value={text}
+                onChangeText={setText}
+                placeholder={placeholder}
+                placeholderTextColor={COLOR.textTertiary}
+                multiline={isText}
+                numberOfLines={isText ? 4 : undefined}
+                scrollEnabled
+                lineBreakModeIOS={isText ? 'wordWrapping' : 'tail'}
+                lineBreakStrategyIOS={isText ? 'standard' : 'none'}
+                autoCapitalize={isText ? 'sentences' : 'none'}
+                autoCorrect={isText}
+                keyboardType={
+                  isSocial || section === 'links' ? 'url' : 'default'
+                }
+                returnKeyType={isText ? 'default' : 'go'}
+                onSubmitEditing={isText ? undefined : handleSubmit}
+                style={[
+                  styles.input,
+                  isText ? styles.inputMultiline : styles.inputSingleLine,
+                ]}
+                textAlignVertical={isText ? 'top' : 'center'}
+              />
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Import places"
+                style={[
+                  styles.sendButton,
+                  !canSubmit && styles.sendButtonDisabled,
+                ]}
+                onPress={handleSubmit}
+                disabled={!canSubmit}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="arrow-forward"
+                  size={21}
+                  color={canSubmit ? '#FFFFFF' : '#D6EEE2'}
+                />
+              </TouchableOpacity>
             </View>
-          )}
-        </View>
-      </BottomSheetFooter>
-    ),
-    [selectedMode, text, insets.bottom, handleSubmit, webSearchHighlighted]
+          </View>
+        </BottomSheetFooter>
+      );
+    },
+    [
+      clipboardAvailable,
+      handleNativePaste,
+      handleSubmit,
+      insets.bottom,
+      keyboardVisible,
+      pasteClipboardLink,
+      section,
+      socialMode,
+      text,
+      webSearchEnabled,
+    ],
   );
 
-  const buttonWidth = (screenWidth - 48) / 2; // 16 padding left + 12 gap + 16 padding right = 44... actually (screenWidth - 16*2 - 12) / 2 = (screenWidth - 44) / 2
+  const renderMenu = () => (
+    <BottomSheetView style={styles.menuContent}>
+      <View style={styles.menuToolbar}>
+        <Text style={styles.menuTitle}>Add places</Text>
+      </View>
+      <View style={styles.menuGrid}>
+        {[MENU_CARDS.slice(0, 2), MENU_CARDS.slice(2, 4)].map(
+          (row, rowIndex) => (
+            <View key={`menu-row-${rowIndex}`} style={styles.menuRow}>
+              {row.map((card) => (
+                <Pressable
+                  key={card.key}
+                  accessibilityRole="button"
+                  onPress={() => openSection(card.key)}
+                  style={({ pressed }) => [
+                    styles.menuCard,
+                    pressed && styles.menuCardPressed,
+                  ]}
+                >
+                  <MenuCardIcon type={card.icon} />
+                  <View style={styles.menuCardCopy}>
+                    <Text style={styles.menuCardTitle}>{card.title}</Text>
+                    <Text style={styles.menuCardSubtitle}>{card.subtitle}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ),
+        )}
+      </View>
+    </BottomSheetView>
+  );
+
+  const renderImages = () => (
+    <BottomSheetView style={styles.detailContent}>
+      {renderSimpleHeader('Image recognition')}
+      <View style={styles.imageSegmentedControl}>
+        <SlidingSegmentedControl
+          labels={['Read text', 'Identify location']}
+          selectedIndex={imageMode === 'findTextPlaces' ? 0 : 1}
+          width={278}
+          onSelect={(index) =>
+            selectImageMode(
+              index === 0 ? 'findTextPlaces' : 'findImagePlaces',
+            )
+          }
+        />
+      </View>
+
+      <Pressable
+        accessibilityRole="button"
+        onPress={pickImages}
+        style={styles.imageDropZone}
+      >
+        {images.length === 0 ? (
+          <>
+            <View style={styles.imageDropIcon}>
+              <Ionicons name="add" size={40} color={COLOR.primary} />
+            </View>
+            <Text style={styles.imageDropTitle}>Choose photos</Text>
+            <Text style={styles.imageDropSubtitle}>
+              {imageMode === 'findTextPlaces'
+                ? 'Select up to 3 screenshots'
+                : 'Select one photo of a place'}
+            </Text>
+          </>
+        ) : (
+          <View style={styles.imagePreviewRow}>
+            {images.map((image, index) => (
+              <View
+                key={`${image.uri}_${index}`}
+                style={styles.imagePreviewWrap}
+              >
+                <Image
+                  source={{ uri: image.uri }}
+                  style={styles.imagePreview}
+                />
+                <TouchableOpacity
+                  onPress={() => removeImage(index)}
+                  style={styles.removeImageButton}
+                  hitSlop={8}
+                >
+                  <Ionicons name="close-circle" size={24} color="#FF3B30" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+      </Pressable>
+
+      <TouchableOpacity
+        style={[
+          styles.imageSubmitButton,
+          images.length === 0 && styles.imageSubmitButtonDisabled,
+        ]}
+        onPress={handleSubmit}
+        disabled={images.length === 0}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.imageSubmitButtonText}>
+          {imageMode === 'findTextPlaces' ? 'Extract places' : 'Identify place'}
+        </Text>
+      </TouchableOpacity>
+    </BottomSheetView>
+  );
+
+  const renderDetail = () => {
+    if (section === 'social') {
+      return (
+        <BottomSheetView style={styles.detailContent}>
+          {renderSocialHeader()}
+        </BottomSheetView>
+      );
+    }
+    if (section === 'images') return renderImages();
+    if (section === 'text') {
+      return (
+        <BottomSheetView style={styles.detailContent}>
+          {renderSimpleHeader('Paste text')}
+        </BottomSheetView>
+      );
+    }
+    return (
+      <BottomSheetView style={styles.detailContent}>
+        {renderSimpleHeader('Any other links')}
+      </BottomSheetView>
+    );
+  };
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-    <BottomSheet
-      ref={sheetRef}
-      index={0}
-      snapPoints={snapPoints}
-      enableDynamicSizing={false}
-      onChange={handleSheetChange}
-      enablePanDownToClose
-      keyboardBehavior="interactive"
-      keyboardBlurBehavior="restore"
-      backdropComponent={renderBackdrop}
-      footerComponent={renderFooter}
-      handleIndicatorStyle={styles.handleIndicator}
-      backgroundStyle={styles.sheetBackground}
-    >
-      <BottomSheetView style={styles.content}>
-        {/* Title + close */}
-        <View style={styles.headerRow}>
-          <Text style={styles.title}>Add places</Text>
-          <View style={styles.headerActions}>
-            {onOpenChatHistory && (
-              <TouchableOpacity
-                style={styles.headerIconButton}
-                onPress={onOpenChatHistory}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="time-outline" size={20} color={COLOR.textPrimary} />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.headerIconButton}
-              onPress={() => sheetRef.current?.close()}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="close" size={20} color={COLOR.textPrimary} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        
-
-        {/* Mode selection grid (2x2) */}
-        <View style={styles.modesGrid}>
-          {modes.map((mode) => {
-            const isActive = selectedMode === mode.key;
-            return (
-              <Pressable
-                key={mode.key}
-                style={[
-                  styles.modeButton,
-                  { width: buttonWidth },
-                  isActive && styles.modeButtonActive,
-                ]}
-                onPress={() => {
-                  setSelectedMode(mode.key);
-                  setText('');
-                }}
-              >
-                <View style={[styles.modeIconBubble, isActive && styles.modeIconBubbleActive]}>
-                  <Ionicons
-                    name={mode.icon as any}
-                    size={22}
-                    color={isActive ? COLOR.primary : COLOR.textPrimary}
-                  />
-                </View>
-                <Text style={[styles.modeTitle, isActive && styles.modeTitleActive]}>
-                  {mode.title}
-                </Text>
-                <Text style={styles.modeSubtitle}>{mode.subtitle}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Rotating tip banner */}
-        <Animated.View style={[styles.tipBanner, { opacity: fadeAnim }]}>
-          <View style={styles.tipDot} />
-          <Text style={styles.tipText}>
-            {TIPS[tipIndex].mode === 'findTextPlaces' ? 'Find Text Places' :
-             TIPS[tipIndex].mode === 'findImagePlaces' ? 'Find Image Places' :
-             TIPS[tipIndex].mode === 'smartText' ? 'Smart Text' :
-             TIPS[tipIndex].mode === 'redditLinks' ? 'Reddit Links' : 'Any Links'}
-            {' · '}
-            {TIPS[tipIndex].text}
-          </Text>
-        </Animated.View>
-      </BottomSheetView>
-    </BottomSheet>
+      <BottomSheet
+        ref={sheetRef}
+        index={0}
+        snapPoints={snapPoints}
+        detached={false}
+        bottomInset={0}
+        enableDynamicSizing={false}
+        onChange={handleSheetChange}
+        enablePanDownToClose
+        enableOverDrag={false}
+        keyboardBehavior="interactive"
+        keyboardBlurBehavior="restore"
+        backdropComponent={renderBackdrop}
+        footerComponent={
+          section === 'menu' || section === 'images' ? undefined : renderFooter
+        }
+        handleIndicatorStyle={styles.handleIndicator}
+        backgroundStyle={styles.sheetBackground}
+      >
+        {section === 'menu' ? renderMenu() : renderDetail()}
+      </BottomSheet>
     </View>
   );
 }
@@ -427,8 +793,8 @@ export default function ImportScreen({ onClose, onSubmit, onSubmitImageScan, onS
 const styles = StyleSheet.create({
   sheetBackground: {
     backgroundColor: COLOR.bg,
-    borderTopLeftRadius: 38,
-    borderTopRightRadius: 38,
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
   },
   handleIndicator: {
     backgroundColor: COLOR.grabber,
@@ -436,375 +802,377 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 100,
   },
-  content: {
+  menuContent: {
+    paddingTop: 0,
+  },
+  menuToolbar: {
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuTitle: {
+    ...typography.h3,
+    color: COLOR.textPrimary,
+    letterSpacing: -0.17,
+  },
+  menuGrid: {
+    gap: 10,
+    paddingHorizontal: 14,
     paddingTop: 4,
   },
-
-  // Header
-  headerRow: {
+  menuRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingBottom: 16,
+    gap: 10,
   },
-  title: {
-    ...typography.display,
-    color: COLOR.foreground,
-    letterSpacing: -0.28,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerIconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  // Hero
-  heroCard: {
-    marginHorizontal: 16,
-    marginBottom: 14,
-    borderRadius: 28,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(18, 193, 112, 0.12)',
-    backgroundColor: '#FFFFFF',
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(18, 193, 112, 0.10)',
-    marginBottom: 12,
-  },
-  heroBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLOR.primary,
-    letterSpacing: 0.2,
-  },
-  heroTitle: {
-    fontSize: 24,
-    lineHeight: 28,
-    fontWeight: '800',
-    letterSpacing: -0.45,
-    color: COLOR.foreground,
-    marginBottom: 8,
-  },
-  heroSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: COLOR.textSecondary,
-  },
-
-  // Mode grid (2 columns)
-  modesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-  },
-  modeButton: {
-    minHeight: 112,
+  menuCard: {
+    flex: 1,
+    height: 146,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     borderRadius: 24,
-    backgroundColor: '#FCFCFC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.04)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.05,
-    shadowRadius: 18,
-    elevation: 1,
-  },
-  modeButtonActive: {
-    backgroundColor: COLOR.primaryLight,
-    borderWidth: 1.5,
-    borderColor: COLOR.primary,
-  },
-  modeIconBubble: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.04)',
-  },
-  modeIconBubbleActive: {
+    borderCurve: 'continuous',
     backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60,60,67,0.08)',
+    justifyContent: 'space-between',
+    boxShadow: '0 8px 26px rgba(0,0,0,0.07)',
   },
-  modeTitle: {
+  menuCardPressed: {
+    backgroundColor: '#F7F7F7',
+    transform: [{ scale: 0.985 }],
+  },
+  menuCardCopy: {
+    gap: 3,
+  },
+  menuCardTitle: {
+    fontSize: 16,
+    lineHeight: 21,
     fontWeight: '600',
-    fontSize: 15,
     color: COLOR.textPrimary,
-    textAlign: 'center',
+    letterSpacing: -0.25,
   },
-  modeTitleActive: {
-    color: COLOR.primary,
-  },
-  modeSubtitle: {
-    fontSize: 12,
+  menuCardSubtitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '400',
     color: COLOR.textSecondary,
-    textAlign: 'center',
   },
-
-  // Footer
-  footer: {
-    paddingHorizontal: 12,
-    gap: 12,
-  },
-
-  // Image picker (Image Scan mode)
-  imagePickerArea: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-  },
-  imagePickerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: COLOR.primaryLight,
-    borderWidth: 1.5,
-    borderColor: COLOR.primary,
-    borderRadius: RADIUS_BUBBLE,
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-  },
-  imagePickerText: {
-    ...typography.bodySmallEmphasis,
-    color: COLOR.primary,
-  },
-  imagePickerContent: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  imageThumbRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    marginBottom: 14,
-  },
-  imageThumbWrapper: {
-    position: 'relative',
+  menuIconBubble: {
+    width: 46,
+    height: 46,
+    borderRadius: 15,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  imageThumbWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 14,
-    backgroundColor: '#F0F0ED',
+  imageMenuIconBubble: {
+    backgroundColor: '#E7F4FF',
   },
-  imageThumb: {
-    width: 72,
-    height: 72,
-    borderRadius: 14,
+  textMenuIconBubble: {
+    backgroundColor: '#FFF3D6',
   },
-  imageRemoveBtn: {
-    position: 'absolute',
-    top: -8,
-    right: -8,
-    zIndex: 10,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 11,
+  linkMenuIconBubble: {
+    backgroundColor: '#E8F9EF',
   },
-  imageAddBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: COLOR.primary,
-    borderStyle: 'dashed',
-    backgroundColor: COLOR.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  imageSendBtn: {
+  socialIconGroup: {
+    width: 68,
     height: 48,
-    borderRadius: 999,
-    backgroundColor: COLOR.primary,
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  brandIconBubble: {
+    width: 46,
+    height: 46,
+    borderRadius: 15,
+    borderCurve: 'continuous',
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 32,
-    minWidth: 200,
-    alignSelf: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
-  imageSendText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
+  redditIconBubble: {
+    zIndex: 2,
+    backgroundColor: '#FFF0EA',
   },
-
-  // Composer
-  composer: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: 10,
-    backgroundColor: '#f9f7f7',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
-    borderRadius: 28,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 24,
-    elevation: 3,
+  youtubeIconBubble: {
+    marginLeft: -18,
+    backgroundColor: '#FFF0F0',
   },
-  composerHeader: {
+  detailContent: {
+    flex: 1,
+    paddingTop: 2,
+  },
+  detailHeader: {
+    height: 66,
+    paddingHorizontal: 20,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
   },
-  composerLabelWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexShrink: 1,
+  socialDetailHeader: {
+    justifyContent: 'center',
   },
-  composerLabelIcon: {
-    width: 22,
-    height: 22,
-    borderRadius: 999,
+  socialBackButton: {
+    position: 'absolute',
+    left: 20,
+    zIndex: 10,
+  },
+  backButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    zIndex: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(18, 193, 112, 0.12)',
+    backgroundColor: '#F2F2F2',
   },
-  composerLabel: {
-    fontSize: 13,
-    fontWeight: '700',
+  backButtonPressed: {
+    backgroundColor: '#E8E8E8',
+    transform: [{ scale: 0.96 }],
+  },
+  headerBalanceSpacer: {
+    width: 48,
+    height: 48,
+  },
+  detailTitle: {
+    ...typography.h3,
     color: COLOR.textPrimary,
   },
-  webSearchButton: {
+  segmentedControl: {
+    height: 44,
+    padding: 2,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 999,
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.06)',
-    minWidth: 132,
+    borderRadius: 22,
+    backgroundColor: '#EEEEF0',
+    overflow: 'hidden',
+  },
+  segmentIndicator: {
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+  },
+  segmentButton: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 1,
   },
-  webSearchButtonActive: {
-    backgroundColor: COLOR.primary,
-    borderColor: COLOR.primary,
-    shadowColor: COLOR.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 2,
-  },
-  webSearchText: {
-    fontSize: 14,
+  segmentText: {
+    fontSize: 15,
+    lineHeight: 20,
     fontWeight: '600',
     color: COLOR.textPrimary,
   },
-  webSearchTextActive: {
+  segmentTextInactive: {
+    color: COLOR.textSecondary,
+  },
+  footer: {
+    gap: 10,
+    paddingHorizontal: 12,
+  },
+  clipboardCard: {
+    minHeight: 78,
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLOR.border,
+    backgroundColor: 'rgba(250,250,250,0.94)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  clipboardCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 5,
+  },
+  clipboardLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  clipboardLabel: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: COLOR.textSecondary,
+  },
+  clipboardValue: {
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '400',
+    color: COLOR.textPrimary,
+  },
+  pasteButton: {
+    minWidth: 64,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLOR.primary,
+  },
+  nativePasteButton: {
+    width: 72,
+    height: 40,
+  },
+  pasteButtonText: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '600',
     color: '#FFFFFF',
   },
-  webSearchDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 999,
-    backgroundColor: 'rgba(26,26,26,0.35)',
-    marginLeft: 2,
+  webSearchToggle: {
+    alignSelf: 'flex-end',
+    minHeight: 36,
+    paddingHorizontal: 13,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLOR.surfaceSecondary,
   },
-  webSearchDotActive: {
-    backgroundColor: '#FFFFFF',
+  webSearchToggleActive: {
+    backgroundColor: COLOR.primary,
+  },
+  webSearchToggleText: {
+    ...typography.bodySmallEmphasis,
+    color: COLOR.textPrimary,
+  },
+  webSearchToggleTextActive: {
+    color: '#FFFFFF',
   },
   inputRow: {
+    minHeight: 58,
+    borderRadius: 29,
+    borderWidth: 2,
+    borderColor: COLOR.primary,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 15,
+    paddingRight: 8,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+  },
+  inputRowMultiline: {
+    minHeight: 116,
+    borderRadius: 26,
     alignItems: 'flex-end',
-    gap: 8,
-    backgroundColor: '#ffffff',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.05)',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingBottom: 8,
+  },
+  inputLeadingIcon: {
+    marginRight: 7,
   },
   input: {
     flex: 1,
-    ...typography.body,
+    paddingVertical: 0,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '400',
     color: COLOR.textPrimary,
-    maxHeight: 120,
-    paddingTop: 2,
-    paddingBottom: 2,
-    textAlignVertical: 'top',
+  },
+  inputSingleLine: {
+    height: 54,
+    maxHeight: 54,
+    overflow: 'hidden',
+  },
+  inputMultiline: {
+    height: 104,
+    paddingTop: 16,
+    paddingBottom: 10,
   },
   sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    backgroundColor: COLOR.primaryLight,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: COLOR.primary,
   },
   sendButtonDisabled: {
-    backgroundColor: COLOR.bgSecondary,
+    backgroundColor: COLOR.primaryLight,
   },
-  composerNote: {
-    fontSize: 12,
-    lineHeight: 16,
+  imageSegmentedControl: {
+    alignSelf: 'center',
+    marginTop: 8,
+  },
+  imageDropZone: {
+    flex: 1,
+    minHeight: 280,
+    marginHorizontal: 20,
+    marginTop: 18,
+    marginBottom: 14,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(60,60,67,0.15)',
+    borderRadius: 28,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  imageDropIcon: {
+    width: 88,
+    height: 88,
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLOR.primaryLight,
+  },
+  imageDropTitle: {
+    ...typography.bodyEmphasis,
+    color: COLOR.textPrimary,
+  },
+  imageDropSubtitle: {
+    ...typography.bodySmall,
     color: COLOR.textSecondary,
-    paddingHorizontal: 2,
   },
-  anyLinksNote: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: COLOR.textSecondary,
-    paddingHorizontal: 2,
-    marginBottom: 2,
-  },
-
-  // Rotating tip banner
-  tipBanner: {
+  imagePreviewRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#F7F7F7',
-    marginHorizontal: 12,
-    borderRadius: 14,
-    marginBottom: 8,
+    justifyContent: 'center',
+    gap: 12,
   },
-  tipDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#12C170',
+  imagePreviewWrap: {
+    position: 'relative',
   },
-  tipText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#717171',
-    fontWeight: '500',
+  imagePreview: {
+    width: 92,
+    height: 112,
+    borderRadius: 16,
+    borderCurve: 'continuous',
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -9,
+    right: -9,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  imageSubmitButton: {
+    height: 54,
+    marginHorizontal: 20,
+    marginBottom: 18,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLOR.primary,
+  },
+  imageSubmitButtonDisabled: {
+    backgroundColor: COLOR.surfaceSecondary,
+  },
+  imageSubmitButtonText: {
+    ...typography.bodyEmphasis,
+    color: COLOR.textPrimary,
   },
 });
