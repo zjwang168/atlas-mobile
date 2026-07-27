@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, StatusBar, StyleSheet, View } from 'react-native';
+import { Animated, Dimensions, StatusBar, StyleSheet, Text, View } from 'react-native';
 
 import TopNav from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
@@ -18,7 +18,11 @@ import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
 import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
-import HomeTabBar, { TAB_PLACES, TAB_PLAN } from './HomeTabBar';
+import HomeTabBar, {
+  TAB_PLACES,
+  TAB_PLAN,
+  TAB_PROFILE,
+} from './HomeTabBar';
 import SearchPanel from '../search/SearchPanel';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
@@ -117,16 +121,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const pagerTranslateX = useRef(new Animated.Value(0)).current;
   const pagerWidth = useMemo(() => Dimensions.get('window').width, []);
 
-  useEffect(() => {
-    Animated.timing(tabBarOpacity, {
-      toValue: tabBarVisible ? 1 : 0,
-      duration: 260,
-      useNativeDriver: true,
-    }).start();
-  }, [tabBarVisible]);
-
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
-  const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN], []);
+  const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
+  const [standaloneChatKey, setStandaloneChatKey] = useState(0);
+  const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
   // Use parsedPlaces from HomeContext (set by App.tsx after parse)
   const hasParsedPlaces = parsedPlaces.length > 0;
@@ -166,6 +164,24 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   }, [selectedPlaceCoordinate, hasParsedPlaces]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
+  const historyChatVisible = activeSidekick === 'aiChat' && panelVisible;
+  const chatVisible = standaloneChatVisible || historyChatVisible;
+  const effectiveTabBarVisible = tabBarVisible && !chatVisible;
+
+  useEffect(() => {
+    Animated.timing(tabBarOpacity, {
+      toValue: effectiveTabBarVisible ? 1 : 0,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [effectiveTabBarVisible, tabBarOpacity]);
+
+  useEffect(() => {
+    if (activeHistoryItem) {
+      setStandaloneChatVisible(false);
+    }
+  }, [activeHistoryItem]);
+
   // Any bottom panel that should push the map center up — the main pager panel,
   // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
   // drives the same padding-tracking path.
@@ -200,6 +216,15 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const handleAddPress = useCallback(() => {
     onOpenImport?.();
   }, [onOpenImport]);
+  const handleChatPress = useCallback(() => {
+    setStandaloneChatVisible(true);
+  }, []);
+  const handleNewChat = useCallback(() => {
+    setActiveHistoryItem(null);
+    setActiveSidekick('none');
+    setStandaloneChatVisible(true);
+    setStandaloneChatKey((current) => current + 1);
+  }, [setActiveHistoryItem, setActiveSidekick]);
   const animateToTab = useCallback((tab: string) => {
     const idx = Math.max(0, tabOrder.indexOf(tab));
     Animated.spring(pagerTranslateX, {
@@ -272,26 +297,57 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
               onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
             />
           </View>
+          <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
+            <View style={styles.profilePage}>
+              <Text style={styles.profileTitle}>Profile</Text>
+              <Text style={styles.profileSubtitle}>Your profile is coming soon.</Text>
+            </View>
+          </View>
         </Animated.View>
       </View>
 
       <AIChatBox
-        key={activeHistoryItem?.id ?? 'atlas-ai-empty'}
-        places={activeHistoryItem?.places ?? parsedPlaces}
+        key={
+          standaloneChatVisible
+            ? `atlas-ai-standalone-${standaloneChatKey}`
+            : (activeHistoryItem?.id ?? 'atlas-ai-empty')
+        }
+        places={standaloneChatVisible ? [] : (activeHistoryItem?.places ?? parsedPlaces)}
         onClose={() => {
+          setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
-          setParsedPlaces([]);
-          setSelectedPlaceCoordinate(null);
-          setSelectedPlaceId(null);
           setActiveSidekick('none');
         }}
         onOpenHistory={onOpenChatHistory}
-        title={activeHistoryItem?.title}
-        visible={activeSidekick === 'aiChat' && panelVisible}
-        conversationId={activeHistoryItem?.id ?? null}
-        onPlacesCommitted={(newPlaces) => {
-          const currentItem = activeHistoryItem;
-          if (!currentItem) return;
+        onNewChat={handleNewChat}
+        showLanding={standaloneChatVisible}
+        title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
+        visible={chatVisible}
+        conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
+        onPlacesCommitted={(newPlaces, action) => {
+          const currentItem = standaloneChatVisible ? null : activeHistoryItem;
+          if (!currentItem) {
+            if (action === 'pin_in_chat' || action === 'both') {
+              const merged = [...parsedPlaces];
+              newPlaces.forEach((place) => {
+                const duplicate = merged.some(
+                  (item) =>
+                    item.name === place.name &&
+                    Math.abs(item.latitude - place.latitude) < 0.0002 &&
+                    Math.abs(item.longitude - place.longitude) < 0.0002,
+                );
+                if (!duplicate) merged.push(place);
+              });
+              setParsedPlaces(merged);
+              if (merged[0]) {
+                setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
+              }
+            }
+            refreshSavedPlaces().catch((error) => {
+              console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
+            });
+            return;
+          }
 
           const existing = currentItem.places ?? [];
           const merged = [...existing];
@@ -323,12 +379,13 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
       {/* Native tab bar — fades out when overlay features request it */}
       <Animated.View
         style={{ opacity: tabBarOpacity }}
-        pointerEvents={tabBarVisible ? 'box-none' : 'none'}
+        pointerEvents={effectiveTabBarVisible ? 'box-none' : 'none'}
       >
         <HomeTabBar
           activeTab={activeTab}
           onTabChange={handleTabChange}
           onAddPress={handleAddPress}
+          onChatPress={handleChatPress}
         />
       </Animated.View>
 
@@ -416,5 +473,24 @@ const styles = StyleSheet.create({
   pagerViewport: {
     ...StyleSheet.absoluteFill,
     overflow: 'hidden',
+  },
+  profilePage: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    paddingTop: 112,
+    paddingHorizontal: 28,
+  },
+  profileTitle: {
+    color: '#09090B',
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
+    letterSpacing: -0.8,
+  },
+  profileSubtitle: {
+    marginTop: 10,
+    color: '#8E8E93',
+    fontSize: 16,
+    lineHeight: 22,
   },
 });
