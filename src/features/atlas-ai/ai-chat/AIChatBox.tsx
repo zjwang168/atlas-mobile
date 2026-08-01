@@ -341,18 +341,91 @@ function extractPlaceActionCards(text: string): { text: string; cards: PlaceActi
   };
 }
 
+/** Longest plausible real-world place label; past this it reads as prose. */
+const PLACE_NAME_MAX_LENGTH = 80;
+/** Word count past which a "name" is a sentence, not a label. */
+const PLACE_NAME_MAX_WORDS = 12;
+/** A lat/lng pair that leaked in from an unparsed line of the reply. */
+const EMBEDDED_COORDINATES_RE = /-?\d{1,3}\.\d+\s*[,，]\s*-?\d{1,3}\.\d+/;
+/** Trailing connector punctuation — a clause cut out of a longer sentence. */
+const SENTENCE_FRAGMENT_TAIL_RE = /[,;:，；：]$/;
+/** Terminal punctuation with text after it — the value spans two sentences. */
+const MULTI_SENTENCE_RE = /[.!?。！？]\s+\S/;
+/** Abbreviations that legitimately carry a period inside a name ("Powell St. Station"). */
+const NAME_ABBREVIATION_RE = /\b(?:st|ave|rd|blvd|dr|mt|ft|pt|sq|jr|sr|no|dept|univ|co|inc|ltd)\.\s/gi;
+/** Pronouns that, followed by a copula, open a description rather than a name. */
+const PROSE_PRONOUNS = new Set([
+  'it', 'this', 'that', 'there', 'they', 'these', 'those', 'here', 'you', 'we',
+]);
+const PROSE_COPULAS = new Set([
+  'is', 'are', 'was', 'were', 'has', 'have', 'had',
+  'can', 'could', 'will', 'would', 'also',
+  'offer', 'offers', 'sit', 'sits', 'lie', 'lies',
+]);
+
+/** True when the value contains a real sentence boundary, ignoring name abbreviations. */
+function hasSentenceBreak(value: string): boolean {
+  return MULTI_SENTENCE_RE.test(value.replace(NAME_ABBREVIATION_RE, 'X '));
+}
+
+/**
+ * True when the value opens like a description ("It's located on …") rather
+ * than a name. A capitalised word after the contraction keeps real names such
+ * as "Here's Looking at You"; the trade-off is that a lowercase-continuing
+ * name like "It's a Grind Coffee House" is rejected.
+ */
+function hasProseOpener(value: string): boolean {
+  const [first = '', second = ''] = value.split(/\s+/);
+  const contraction = /^([A-Za-z]+)['’]s$/.exec(first);
+  if (contraction && PROSE_PRONOUNS.has(contraction[1].toLowerCase())) {
+    return second !== '' && second[0] === second[0].toLowerCase();
+  }
+  return PROSE_PRONOUNS.has(first.toLowerCase()) && PROSE_COPULAS.has(second.toLowerCase());
+}
+
+/**
+ * True when `name` reads like a place label rather than a fragment of the
+ * assistant's prose.
+ *
+ * The backend card extractor can put a whole line of the reply into `name`:
+ * its regex path falls back to the block's first non-empty line, and its LLM
+ * path only rejects empty strings. Either way the mobile client is the last
+ * stop before the value is persisted as a place, so it is checked here.
+ *
+ * Deliberately conservative — it rejects only shapes a real place name does
+ * not have, and lets anything ambiguous through.
+ */
+export function looksLikePlaceName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > PLACE_NAME_MAX_LENGTH) return false;
+  if (trimmed.split(/\s+/).length > PLACE_NAME_MAX_WORDS) return false;
+  if (EMBEDDED_COORDINATES_RE.test(trimmed)) return false;
+  if (SENTENCE_FRAGMENT_TAIL_RE.test(trimmed)) return false;
+  if (hasSentenceBreak(trimmed)) return false;
+  if (hasProseOpener(trimmed)) return false;
+  return true;
+}
+
 function normalizeBackendPlaceCards(cards: NonNullable<import('@/services/api/apiService').AtlasChatResponse['place_cards']>): PlaceActionCard[] {
   return cards
     .map((card) => ({
       status: card.status,
-      places: (card.places || []).map((place) => ({
-        name: place.name,
-        latitude: place.latitude,
-        longitude: place.longitude,
-        subtitle: place.subtitle || '',
-        category: place.category || '',
-        description: place.description || place.subtitle || '',
-      })),
+      places: (card.places || [])
+        .filter((place) => {
+          if (looksLikePlaceName(place.name || '')) return true;
+          // Loud on purpose: this silently wrote prose into the places table.
+          console.warn('[AIChatBox] dropped place card with non-name:', place.name);
+          return false;
+        })
+        .map((place) => ({
+          name: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          subtitle: place.subtitle || '',
+          category: place.category || '',
+          description: place.description || place.subtitle || '',
+        })),
     }))
     .filter((card) => card.places.length > 0)
     .slice(0, 3);
