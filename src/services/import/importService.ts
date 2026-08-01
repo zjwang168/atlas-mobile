@@ -36,6 +36,16 @@ export type ParsedPlace = {
    */
   externalId?: string;
   externalSource?: string;
+  /**
+   * The place's own administrative context, persisted to `places.city` /
+   * `country`. Set by place search; the parse pipelines leave both unset.
+   *
+   * There is deliberately no `region` here. That column means "the region this
+   * batch of places was inferred to be in" and is written from savePlaces()'s
+   * `source` argument, not from any one place — see savePlaces().
+   */
+  city?: string;
+  country?: string;
 };
 
 export type ParseResult = {

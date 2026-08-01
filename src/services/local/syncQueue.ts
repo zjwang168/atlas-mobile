@@ -187,6 +187,8 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
     // every save that happened to be made offline.
     external_place_id: truncate(p.externalId, 255),
     external_source: truncate(p.externalSource, 100),
+    city: truncate(p.city, 100),
+    country: truncate(p.country, 100),
   }));
 
   const { data, error } = await withTimeout(

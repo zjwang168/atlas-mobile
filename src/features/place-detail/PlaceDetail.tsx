@@ -163,9 +163,13 @@ function PlaceCompactView({
         <Text numberOfLines={1} className="text-lg font-semibold text-foreground">
           {place.name}
         </Text>
-        <Text numberOfLines={1} className="mt-0.5 text-xs text-text-tertiary">
-          {place.address}
-        </Text>
+        {/* Whole element, not just its text: `mt-0.5` lives on it, so leaving
+            an empty one behind would still push the row taller. */}
+        {place.address ? (
+          <Text numberOfLines={1} className="mt-0.5 text-xs text-text-tertiary">
+            {place.address}
+          </Text>
+        ) : null}
       </View>
 
       <View className="flex-row items-center gap-1">

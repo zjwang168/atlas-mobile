@@ -67,7 +67,7 @@ CRUD for the user's saved places, backed by Supabase and an offline-first local 
 Parsed place photos are saved from the backend response; this service does not call third-party photo APIs from the device.
 
 ```ts
-export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>  // persists ParsedPlace.externalId/externalSource to places.external_place_id/external_source when set
+export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>  // per-place: externalId/externalSource/city/country when set. `region` is batch-level — it comes from `source`, not from any one place, so callers passing no source (place search) leave it null
 export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline

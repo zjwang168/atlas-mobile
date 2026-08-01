@@ -96,6 +96,10 @@ function toParsedPlace(location: GeocodedLocation, index: number): ParsedPlace {
     imageUri: location.photo_url ?? undefined,
     externalId: location.external_id ?? undefined,
     externalSource: location.source ?? undefined,
+    city: location.city ?? undefined,
+    country: location.country ?? undefined,
+    // location.region is intentionally dropped: `places.region` holds the
+    // batch-level inferred region, not a state name.
   };
 }
 
