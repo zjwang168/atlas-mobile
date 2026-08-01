@@ -15,6 +15,14 @@ FastAPI backend client.
  * Timeout: 30 seconds (AbortController)
  */
 export async function parseLink(url: string): Promise<ParseResult>
+
+/** Typeahead place search. `sessionToken` must be the same one later passed to
+ *  retrievePlace() — Mapbox bills the session, not the keystrokes.
+ *  Pass `signal` to cancel a request the user has already typed past. */
+export async function searchPlaces(params: { query: string; sessionToken: string; proximity?: [number, number]; limit?: number; language?: string; country?: string }, signal?: AbortSignal): Promise<PlaceSuggestResponse>
+
+/** Resolve one suggestion into saveable places; a `brand` resolves to several. */
+export async function retrievePlace(externalId: string, sessionToken: string, signal?: AbortSignal): Promise<PlaceRetrieveResponse>
 ```
 
 `ParseResult` is defined in `src/types/route.ts`. See `src/features/parse-route/FETCHPARSE.md` for full backend documentation.
@@ -36,13 +44,30 @@ export async function parseInput(input: string): Promise<ParseResult>
 
 `parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape, including backend-filled `photo_url` as the place `imageUri`.
 
+### `place/placeSearchService.ts`
+
+Turns typed text into saveable places via the backend's Mapbox Search Box endpoints. Search is two steps — suggestions carry no coordinates, and the one the user picks is resolved into a full place. Both steps share a session token created here, not on the server, because Mapbox bills a search session and only the client knows when a typing session starts and ends.
+
+Only `poi` suggestions are surfaced. A `brand` resolves to every branch Mapbox knows about, which the one-row-one-place save path cannot represent; nearby branches already appear as their own `poi` rows under proximity weighting. Because filtering happens after the request, more suggestions are asked for than are displayed.
+
+```ts
+export const SEARCH_DISPLAY_LIMIT: number
+export const MIN_QUERY_LENGTH: number
+
+export function createSearchSession(): string   // hold one per typing session, then discard
+export function isAbortError(error: unknown): boolean
+
+export async function suggestPlaces(query: string, sessionToken: string, options?: { proximity?: [number, number]; language?: string; country?: string }, signal?: AbortSignal): Promise<PlaceSuggestion[]>
+export async function resolvePlace(suggestion: PlaceSuggestion, sessionToken: string, signal?: AbortSignal): Promise<ParsedPlace | null>  // ready for savePlaces()
+```
+
 ### `place/placeService.ts`
 
 CRUD for the user's saved places, backed by Supabase and an offline-first local cache (see `local/`).
 Parsed place photos are saved from the backend response; this service does not call third-party photo APIs from the device.
 
 ```ts
-export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>
+export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>  // persists ParsedPlace.externalId/externalSource to places.external_place_id/external_source when set
 export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline

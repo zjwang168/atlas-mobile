@@ -184,6 +184,9 @@ export async function savePlaces(
     // Keep saves deterministic: persist it as-is instead of starting a client
     // side third-party lookup after the row is visible.
     photo_url: truncate(p.imageUri, 1000),
+    // Only place search supplies these; parse results leave them null.
+    external_place_id: truncate(p.externalId, 255),
+    external_source: truncate(p.externalSource, 100),
   }));
 
   // Temporary id for optimistic UI — never sent to Supabase (which assigns the

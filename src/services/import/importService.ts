@@ -29,6 +29,13 @@ export type ParsedPlace = {
   /** Optional thumbnail for the place row. */
   imageUri?: string;
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  /**
+   * Provider's own id for this place and which provider it is, persisted to
+   * `places.external_place_id` / `external_source`. Set by place search;
+   * the parse pipelines leave both unset.
+   */
+  externalId?: string;
+  externalSource?: string;
 };
 
 export type ParseResult = {

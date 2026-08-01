@@ -182,6 +182,11 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
     longitude: p.longitude,
     region: truncate(write.source?.region, 100),
     photo_url: write.localRows[index]?.photo_url ?? null,
+    // Keep in step with placeService.savePlaces()'s row mapping — this is a
+    // second copy of it, and a field missing here is silently dropped from
+    // every save that happened to be made offline.
+    external_place_id: truncate(p.externalId, 255),
+    external_source: truncate(p.externalSource, 100),
   }));
 
   const { data, error } = await withTimeout(
