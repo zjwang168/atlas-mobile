@@ -41,6 +41,7 @@ interface MapboxMapProps {
   routeMarkers?: MapMarker[];                        // replaces markers when a route is active
   padding?: MapPadding;                              // camera padding; discrete changes animate over 500ms
   selectedMarkerId?: string | null;
+  showUserLocation?: boolean;                        // default: false — draws the current-position puck
 }
 
 interface MapMarker {
@@ -53,6 +54,7 @@ interface MapMarker {
 
 interface MapboxMapHandle {
   setPaddingBottom: (paddingBottom: number, durationMs?: number) => void; // imperative camera padding update via ref, bypassing React re-render; default 300ms ease
+  flyTo: (coordinate: [number, number], zoomLevel?: number) => void;      // one-off recenter
 }
 ```
 
@@ -83,6 +85,12 @@ import { parseLink } from '@/services/api/apiService';
 ## Route Rendering
 
 When `routeGeoJSON` is provided, a blue polyline is drawn via `MapboxGL.ShapeSource` + `MapboxGL.LineLayer`. When `routeMarkers` is provided it replaces the default `markers` array — so only route stops are shown while a route is active.
+
+## User Location
+
+`showUserLocation` draws `MapboxGL.LocationPuck` — pass it only once location permission is granted. Rendering the puck without permission makes Mapbox raise its own permission request, bypassing `locationService` and the fallback it guarantees. `HomeScreen` gates it on `useHome().locationStatus === 'granted'`.
+
+`flyTo` is imperative rather than a prop because a "locate me" tap is an event, not state: routing it through `centerCoordinate` would make a second tap on an unchanged coordinate do nothing. It keeps the prop-diffing refs in step so a later `centerCoordinate` change still recenters.
 
 ## Camera
 

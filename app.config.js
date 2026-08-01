@@ -22,6 +22,10 @@ export default {
       supportsTablet: true,
       bundleIdentifier: 'com.anonymous.atlas-mobile',
     },
+    // Note: ios/ is checked in locally but gitignored, so a prebuild is what
+    // applies the plugin config below to Info.plist. The same keys are also
+    // written into the existing ios/atlasmobile/Info.plist so the current
+    // native project picks them up without one.
     android: {
       adaptiveIcon: {
         backgroundColor: '#E6F4FE',
@@ -41,6 +45,13 @@ export default {
         '@rnmapbox/maps',
         {
           RNMapboxMapsImpl: 'mapbox',
+        },
+      ],
+      [
+        'expo-location',
+        {
+          locationWhenInUsePermission:
+            'Atlas uses your location to centre the map on you and rank nearby search results.',
         },
       ],
     ],

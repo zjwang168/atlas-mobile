@@ -101,6 +101,8 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     activeSidekick,
     setActiveSidekick,
     userLocation,
+    locationStatus,
+    refreshUserLocation,
     savedPlaces,
   } = useHome();
   const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
@@ -247,6 +249,14 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     setOverlay({ kind: 'search' });
   }, [setOverlay]);
 
+  /** Locate button: take a fresh fix, then recenter on whatever came back.
+      A refused permission resolves to the default centre rather than failing,
+      so the button always moves the camera somewhere sensible. */
+  const handleLocatePress = useCallback(async () => {
+    const coordinate = await refreshUserLocation();
+    mapRef.current?.flyTo(coordinate);
+  }, [refreshUserLocation]);
+
   const handleMarkerPress = useCallback((marker: MapMarker) => {
     setSelectedPlaceId(marker.id);
     setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
@@ -265,10 +275,11 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         padding={mapPadding}
         selectedMarkerId={selectedPlaceId}
         onMarkerPress={handleMarkerPress}
+        showUserLocation={locationStatus === 'granted'}
       />
 
       <TopBlurFade />
-      <TopNav onSearchPress={handleSearchPress} />
+      <TopNav onSearchPress={handleSearchPress} onNavigatePress={handleLocatePress} />
 
       <View style={styles.pagerViewport} pointerEvents="box-none">
         <Animated.View

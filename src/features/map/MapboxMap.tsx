@@ -35,11 +35,18 @@ interface MapboxMapProps {
   /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
   padding?: MapPadding;
   selectedMarkerId?: string | null;
+  /** Draw the current-position puck. Only pass true once location permission
+      is granted — see the render site. */
+  showUserLocation?: boolean;
 }
 
 // Small ease applied to every live padding update so the map visibly trails
 // the panel edge by a beat instead of snapping to it 1:1 every frame.
 const PADDING_FOLLOW_DURATION_MS = 300;
+
+/** Close enough to read street names when recentring on the user. */
+const LOCATE_ZOOM_LEVEL = 15;
+const LOCATE_ANIMATION_MS = 800;
 
 export interface MapboxMapHandle {
   /**
@@ -50,6 +57,13 @@ export interface MapboxMapHandle {
    * naturally produce a lagging "follow" motion rather than an instant jump.
    */
   setPaddingBottom: (paddingBottom: number, durationMs?: number) => void;
+  /**
+   * Recenter on a coordinate as a one-off. Imperative for the same reason as
+   * `setPaddingBottom`: a "locate me" tap is an event, not a piece of state,
+   * and routing it through `centerCoordinate` would make a repeat tap on an
+   * unchanged coordinate do nothing.
+   */
+  flyTo: (coordinate: [number, number], zoomLevel?: number) => void;
 }
 
 const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap({
@@ -62,6 +76,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   routeMarkers,
   padding,
   selectedMarkerId,
+  showUserLocation = false,
 }, ref) {
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
@@ -119,6 +134,18 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         animationDuration: durationMs,
       });
     },
+    flyTo: (coordinate, zoom = LOCATE_ZOOM_LEVEL) => {
+      // Keep the prop-diffing refs in step, or the next `centerCoordinate`
+      // change would compare against a stale centre and skip its own recenter.
+      prevCenterRef.current = coordinate;
+      prevZoomRef.current = zoom;
+      cameraRef.current?.setCamera({
+        centerCoordinate: coordinate,
+        zoomLevel: zoom,
+        animationDuration: LOCATE_ANIMATION_MS,
+        padding: prevPaddingRef.current,
+      });
+    },
   }), []);
 
   if (error) {
@@ -155,6 +182,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
           ref={cameraRef}
           defaultSettings={{ centerCoordinate, zoomLevel }}
         />
+
+        {/* Gated on the caller having permission already. Rendering the puck
+            without it makes Mapbox raise its own permission request, which
+            would bypass locationService and its fallback. */}
+        {showUserLocation && <MapboxGL.LocationPuck puckBearing="heading" pulsing={{ isEnabled: true }} />}
 
         {routeGeoJSON && (
           <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>

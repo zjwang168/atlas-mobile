@@ -36,6 +36,18 @@ export async function parseInput(input: string): Promise<ParseResult>
 
 `parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape, including backend-filled `photo_url` as the place `imageUri`.
 
+### `location/locationService.ts`
+
+Device location via `expo-location`. Every call resolves to a usable coordinate, falling back to `DEFAULT_MAP_CENTER` when permission is refused, location services are off, or the fix fails — it never throws and never returns null, so callers don't each reimplement the fallback.
+
+```ts
+export type LocationPermissionStatus = 'undetermined' | 'granted' | 'denied'
+export type UserLocationResult = { coordinate: [number, number]; status: LocationPermissionStatus; isFallback: boolean }
+
+export async function getLocationPermissionStatus(): Promise<LocationPermissionStatus>  // does not prompt
+export async function requestUserLocation(): Promise<UserLocationResult>  // prompts on first call; safe to call repeatedly since iOS only asks once
+```
+
 ### `place/placeService.ts`
 
 CRUD for the user's saved places, backed by Supabase and an offline-first local cache (see `local/`).

@@ -5,12 +5,15 @@ import { createAtlas as createAtlasService, deleteAtlas as deleteAtlasService, f
 import { addPlacesToAtlas as addPlacesToAtlasService, fetchAtlasPlaces, removePlaceFromAtlas as removePlaceFromAtlasService, subscribeAtlasPlaces } from '../../services/atlas/atlasPlacesService';
 import type { ParsedPlace } from '../../services/import/importService';
 import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
+import type { LocationPermissionStatus } from '../../services/location/locationService';
+import { requestUserLocation } from '../../services/location/locationService';
 import { flushQueue } from '../../services/local/syncQueue';
 import type { SavedPlace } from '../../services/place/placeService';
 import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } from '../../services/place/placeService';
 import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
 import type { Atlas } from '../../types/atlas';
 import type { AtlasPlace, PlaceDetail } from '../../types/place';
+import { DEFAULT_MAP_CENTER } from '../../utils/constants';
 
 // --- Chat History ---
 
@@ -105,8 +108,14 @@ type HomeContextValue = {
   /** 当前激活的 sidekick */
   activeSidekick: 'none' | 'aiChat' | 'places';
   setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
-  /** 用户当前位置坐标 [lng, lat]（默认西雅图） */
+  /** 用户当前位置坐标 [lng, lat]。权限未授予或定位失败时为 DEFAULT_MAP_CENTER */
   userLocation: [number, number];
+  /** 定位权限状态 */
+  locationStatus: LocationPermissionStatus;
+  /** true 表示 userLocation 是回退值而非真实定位 */
+  isLocationFallback: boolean;
+  /** 重新取一次定位；首次调用会弹系统授权框。永不 reject */
+  refreshUserLocation: () => Promise<[number, number]>;
 };
 
 const HomeContext = createContext<HomeContextValue>({
@@ -145,7 +154,10 @@ const HomeContext = createContext<HomeContextValue>({
   removePlaceFromAtlas: async () => {},
   activeSidekick: 'none',
   setActiveSidekick: () => {},
-  userLocation: [-122.3321, 47.6062],
+  userLocation: DEFAULT_MAP_CENTER,
+  locationStatus: 'undetermined',
+  isLocationFallback: true,
+  refreshUserLocation: async () => DEFAULT_MAP_CENTER,
 });
 
 export function useHome() {
@@ -180,7 +192,25 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     places: ParsedPlace[];
   } | null>(null);
   const [activeSidekick, setActiveSidekick] = useState<'none' | 'aiChat' | 'places'>('none');
-  const [userLocation] = useState<[number, number]>([-122.3321, 47.6062]);
+  const [userLocation, setUserLocation] = useState<[number, number]>(DEFAULT_MAP_CENTER);
+  const [locationStatus, setLocationStatus] = useState<LocationPermissionStatus>('undetermined');
+  const [isLocationFallback, setIsLocationFallback] = useState(true);
+
+  const refreshUserLocation = useCallback(async (): Promise<[number, number]> => {
+    const result = await requestUserLocation();
+    setUserLocation(result.coordinate);
+    setLocationStatus(result.status);
+    setIsLocationFallback(result.isFallback);
+    return result.coordinate;
+  }, []);
+
+  // Ask once on mount. A refusal leaves userLocation at the default center and
+  // is never retried automatically — iOS won't re-prompt anyway, and the
+  // locate button is the deliberate retry.
+  useEffect(() => {
+    void refreshUserLocation();
+  }, [refreshUserLocation]);
+
   const currentUserIdRef = useRef<string | null>(null);
 
   const refreshSavedPlaces = useCallback(async () => {
@@ -436,6 +466,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       activeSidekick,
       setActiveSidekick,
       userLocation,
+      locationStatus,
+      isLocationFallback,
+      refreshUserLocation,
     }),
     [
       overlay,
@@ -464,6 +497,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       importNotification,
       activeSidekick,
       userLocation,
+      locationStatus,
+      isLocationFallback,
+      refreshUserLocation,
     ],
   );
 
