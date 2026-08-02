@@ -25,7 +25,10 @@ MAPBOX_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
 # Shown wherever results are displayed; required by the Mapbox terms.
 ATTRIBUTION = "© Mapbox © OpenStreetMap"
 
-REQUEST_TIMEOUT_S = 8.0
+# Kept short because this backs a typeahead: a keystroke that is going to fail
+# should fail while the user is still typing, not eight seconds later. The next
+# keystroke retries anyway.
+REQUEST_TIMEOUT_S = 3.5
 
 # Suggestions churn as the user types, so they are held only long enough to
 # absorb repeated keystrokes. A retrieved place is stable POI data and is kept
@@ -86,7 +89,11 @@ async def _get_json(url: str, params: dict) -> dict:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
             response = await client.get(url, params={**params, "access_token": MAPBOX_TOKEN})
     except httpx.HTTPError as exc:
-        raise SearchUnavailable(f"Mapbox search request failed: {exc}") from exc
+        # Name the exception class: httpx's network errors (ReadTimeout,
+        # ConnectError, ...) all stringify to '', so interpolating only the
+        # message produces "failed: " and loses which failure it was.
+        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        raise SearchUnavailable(f"Mapbox search request failed: {detail}") from exc
 
     if response.status_code == 429:
         retry_after = response.headers.get("retry-after")
