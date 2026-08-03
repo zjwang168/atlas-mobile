@@ -68,6 +68,6 @@ export async function clearUserCache(userId: string): Promise<void> {
   const prefix = `local:${userId}:`;
   const userKeys = keys.filter((key) => key.startsWith(prefix));
   if (userKeys.length > 0) {
-    await AsyncStorage.multiRemove(userKeys);
+    await AsyncStorage.removeMany(userKeys);
   }
 }
