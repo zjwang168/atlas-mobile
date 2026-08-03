@@ -21,13 +21,14 @@ import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, Da
 ## `route.ts` — parse/route API types
 
 ```ts
-import type { ParseResult, GeocodedLocation, RouteResult, RouteSegment, ChatMessage } from '@/types/route';
+import type { ParseResult, GeocodedLocation, PlaceSuggestion, RouteResult, RouteSegment, ChatMessage } from '@/types/route';
 ```
 
 | Type | Used by |
 |---|---|
 | `ParseResult` | `parseLink()` return, `HomeScreen` state; `locations[]` may include backend-filled `photo_url` |
-| `GeocodedLocation` | Map markers for route stops; carries optional `photo_url` from parse responses |
+| `GeocodedLocation` | Map markers for route stops, and `retrievePlace()` results; carries optional `photo_url` from parse responses, plus optional `external_id`/`source`/`city`/`region`/`country` that only place search populates |
+| `PlaceSuggestion` | One candidate from `searchPlaces()` — deliberately has no coordinates; resolve it via `retrievePlace()` to get a saveable place |
 | `RouteResult` | GeoJSON polyline construction |
 | `ChatMessage` | `HomeScreen` message thread (`role: 'user' \| 'assistant' \| 'system'`) |
 

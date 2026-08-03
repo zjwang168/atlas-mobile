@@ -5,6 +5,8 @@ Run from project root:
 
 Endpoints:
   POST /parse_link          — Accept a URL, extract locations via agent pipeline, plan a route.
+  GET  /places/search       — Typeahead place suggestions (no coordinates) via Mapbox Search Box.
+  GET  /places/retrieve/{id}— Resolve one suggestion into saveable places.
   POST /chat                — Continue conversation with the AI agent.
   GET  /sessions            — List all active sessions.
   POST /sessions/{id}/save  — Persist a session to Supabase.
@@ -43,7 +45,7 @@ logging.basicConfig(
 # 设置 atlas 系列 logger 都使用 INFO 级别
 logging.getLogger("atlas").setLevel(logging.INFO)
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -51,6 +53,7 @@ from backend.services import progress
 from backend.services.conversation_manager import conversation_manager
 from backend.services.gemini_computer_use import extract_web_text
 from backend.services.place_image_service.place_image_service import enrich_response_with_photos, get_or_build_response
+from backend.services import place_search_service
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
 
@@ -130,6 +133,13 @@ class LocationItem(BaseModel):
     confidence: Optional[float] = None
     source: Optional[str] = None
     photo_url: Optional[str] = None
+    # Provider's own id for this place, paired with `source`. Populated by
+    # /places/retrieve so a saved place can be matched back to the provider;
+    # the parse pipelines leave it unset.
+    external_id: Optional[str] = None
+    city: Optional[str] = None
+    region: Optional[str] = None
+    country: Optional[str] = None
 
 
 class RouteSegment(BaseModel):
@@ -203,6 +213,32 @@ class YouTubeParseRequest(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class PlaceSuggestion(BaseModel):
+    """One search candidate. Deliberately has no coordinates — /suggest does not
+    return any, and asking for them is what /places/retrieve is for."""
+    external_id: str
+    name: str
+    feature_type: str  # 'poi' is one place; 'brand' expands to several on retrieve
+    place_formatted: Optional[str] = None
+    full_address: Optional[str] = None
+    category: Optional[str] = None
+    distance_m: Optional[int] = None
+    source: str = "mapbox"
+
+
+class PlaceSuggestResponse(BaseModel):
+    query: str
+    session_token: str
+    suggestions: list[PlaceSuggestion]
+    attribution: str
+
+
+class PlaceRetrieveResponse(BaseModel):
+    # Reuses LocationItem so the client adapts these exactly like parse results.
+    locations: list[LocationItem]
+    attribution: str
 
 
 # ---- Endpoints ----
@@ -617,6 +653,79 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Atlas AI discovery failed: {e}")
+
+
+def _place_search_http_error(exc: Exception) -> HTTPException:
+    """Map a search-service failure onto the response contract."""
+    if isinstance(exc, place_search_service.RateLimited):
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        return HTTPException(status_code=429, detail="Place search is rate limited", headers=headers)
+    return HTTPException(status_code=502, detail=f"Place search upstream failed: {exc}")
+
+
+@app.get("/places/search", response_model=PlaceSuggestResponse,
+         responses={422: {"model": ErrorResponse}, 429: {"model": ErrorResponse},
+                    502: {"model": ErrorResponse}})
+async def places_search(
+    q: str = Query(..., min_length=2, description="Search text, as typed"),
+    session_token: str = Query(
+        ...,
+        min_length=1,
+        max_length=128,
+        description=(
+            "Client-generated search session id (UUID v4). Mapbox bills one session "
+            "rather than each keystroke, so the client owns its lifetime: keep one "
+            "token for a whole typing session and pass the same one to "
+            "/places/retrieve. The server never generates or rotates it."
+        ),
+    ),
+    proximity: Optional[str] = Query(None, description='"lng,lat" to bias results toward the user'),
+    limit: int = Query(10, ge=1, le=10),
+    language: str = Query("en"),
+    country: Optional[str] = Query(None, description="ISO 3166-1 alpha-2 filter"),
+) -> PlaceSuggestResponse:
+    """Suggest places for a partial query. Results carry no coordinates."""
+    try:
+        suggestions = await place_search_service.suggest(
+            q, session_token,
+            proximity=proximity, limit=limit, language=language, country=country,
+        )
+    except Exception as e:
+        raise _place_search_http_error(e)
+
+    return PlaceSuggestResponse(
+        query=q,
+        session_token=session_token,
+        suggestions=[PlaceSuggestion(**item) for item in suggestions],
+        attribution=place_search_service.ATTRIBUTION,
+    )
+
+
+@app.get("/places/retrieve/{mapbox_id}", response_model=PlaceRetrieveResponse,
+         responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse},
+                    429: {"model": ErrorResponse}, 502: {"model": ErrorResponse}})
+async def places_retrieve(
+    mapbox_id: str,
+    session_token: str = Query(..., min_length=1, max_length=128,
+                               description="The same token used for /places/search"),
+) -> PlaceRetrieveResponse:
+    """Resolve one suggestion into saveable places.
+
+    Returns a list because a `brand` suggestion resolves to every branch Mapbox
+    knows about, not to a single location.
+    """
+    try:
+        locations = await place_search_service.retrieve(mapbox_id, session_token)
+    except Exception as e:
+        raise _place_search_http_error(e)
+
+    if not locations:
+        raise HTTPException(status_code=404, detail="No place found for that id")
+
+    return PlaceRetrieveResponse(
+        locations=[LocationItem(**item) for item in locations],
+        attribution=place_search_service.ATTRIBUTION,
+    )
 
 
 @app.get("/sessions")
