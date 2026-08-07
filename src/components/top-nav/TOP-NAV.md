@@ -2,66 +2,55 @@
 
 ## Overview
 
-Absolute-positioned navigation overlay that sits at the top of the map screen. Renders a search button on the left and a two-button globe/navigate pill on the right. All buttons are frosted-glass (`expo-blur`) shapes over the map.
+Absolute-positioned overlay above the map holding the search button, the My Places view switch, the profile avatar, and a separately-placed globe/navigate pill.
 
 ## Files
 
 ```
 src/components/top-nav/
-  TopNav.tsx               ← container; positions LeftNav and RightNav
+  TopNav.tsx               ← container; positions the top row and the map-control pill
   left-nav/LeftNav.tsx     ← search button (single icon pill)
   right-nav/RightNav.tsx   ← globe + navigate stacked vertical pill
 ```
 
----
+## Behaviour
 
-## `TopNav`
+`showPlacesMode` gates the view switch and the avatar together — it's on only while the My Places tab is active, and when off the avatar is replaced by a spacer so the search button keeps its position. The switch additionally renders only when `onPlacesViewChange` is supplied, so a caller that reads `placesView` without handling changes gets no dead control.
 
-### Props
+The globe/navigate pill is not part of the top row: it sits in its own container positioned down the screen as a map control, so it is unaffected by the top row's layout.
+
+`TopNav` is memoised — pass it stable callbacks (`useCallback`) or the memo does nothing.
+
+## API
 
 ```ts
 type TopNavProps = {
-  onSearchPress?: () => void;
-  onGlobePress?: () => void;
-  onNavigatePress?: () => void;
+  onSearchPress?: () => void;                        // search button in the top-left
+  onGlobePress?: () => void;                         // globe icon — language / region filter
+  onNavigatePress?: () => void;                      // navigate icon — recentres the map on the user
+  onAvatarPress?: () => void;                        // profile avatar in the top-right
+  placesView?: PlacesView;                           // default: 'allPlaces' — selected segment of the view switch
+  onPlacesViewChange?: (view: PlacesView) => void;   // omit to hide the switch entirely
+  showPlacesMode?: boolean;                          // default: true — shows the view switch and avatar
 };
-```
 
-Positioned `absolute left-0 right-0 z-30` with `paddingTop: safeAreaInsets.top + 8`. Uses `pointerEvents="box-none"` so taps on the transparent area fall through to the map.
-
----
-
-## `LeftNav`
-
-Single circular blur button with a search (magnifier) icon.
-
-### Props
-
-```ts
 type LeftNavProps = {
-  onPress?: () => void;
+  onSearchPress?: () => void;
 };
-```
 
----
-
-## `RightNav`
-
-Vertical rounded-pill blur container with two icon buttons stacked vertically.
-
-### Props
-
-```ts
 type RightNavProps = {
   onGlobePress?: () => void;     // globe icon — language / region filter
   onNavigatePress?: () => void;  // navigate icon — route / directions
 };
 ```
 
----
+`PlacesView` is exported from `@/features/my-places/MyPlaces`.
 
 ## Styling Notes
 
-- Both components use `expo-blur` `BlurView` with `intensity={40}` and `tint="light"`.
-- The glass shadow (`glassShadow`) constant is defined locally in each file and applies `shadowRadius: 20`.
-- Compass position in `MapboxMap` is calculated relative to `RightNav` height to avoid overlap.
+- All three components render `expo-glass-effect`'s `GlassView` where liquid glass is available, falling back to an `expo-blur` `BlurView` otherwise.
+- The glass shadow (`glassShadow`) constant is defined locally in each file.
+
+## Related docs
+
+- [MY-PLACES.md](../../features/my-places/MY-PLACES.md) — owns the `PlacesView` type the switch drives
