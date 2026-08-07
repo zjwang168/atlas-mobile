@@ -14,7 +14,6 @@ import {
   parseLink as apiParseLink,
   parseText as apiParseText,
   parseYoutube as apiParseYoutube,
-  scanUrl as apiScanUrl,
   type ParseProgress,
 } from '../api/apiService';
 
@@ -222,8 +221,9 @@ export async function scanAnyLink(
   input: string,
   onProgress?: ParseProgressHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiScanUrl(input.trim(), onProgress)) as unknown as BackendParseResponse;
-  return adaptResponse(backend);
+  // Any Links now uses the same Universal Web Agent as all generic URLs:
+  // HTTP reader extraction, then Playwright for JavaScript-rendered pages.
+  return parseLink(input, onProgress);
 }
 
 export async function parseYoutubeLink(

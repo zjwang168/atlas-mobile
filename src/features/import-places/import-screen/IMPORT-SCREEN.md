@@ -63,7 +63,7 @@ contract changes are required:
 - `redditLinks` → `/parse_link`
 - `youtubeLinks` → `/parse_youtube`
 - `smartText` → `/parse_text`
-- `anyLinks` → `/scan_url`
+- `anyLinks` → `/parse_link` (Universal Web Agent: HTTP reader, then Playwright for JavaScript pages)
 - `findTextPlaces` → `/scan_images_base64`
 - `findImagePlaces` → `/find_image_places`
 

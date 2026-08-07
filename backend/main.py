@@ -296,7 +296,11 @@ async def scrape_url(req: ScrapeUrlRequest):
 @app.post("/scan_url", response_model=ParseResponse,
           responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def scan_url(req: ScanUrlRequest):
-    """Use Gemini computer-use screenshots, OCR them with GLM, then reuse image-scan parsing."""
+    """Legacy Any Links endpoint, now backed by the Universal Web Agent.
+
+    Kept for installed clients; new clients call /parse_link directly. Both
+    routes use the same HTTP reader -> Playwright -> place extraction pipeline.
+    """
     url = req.url.strip()
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
@@ -306,17 +310,17 @@ async def scan_url(req: ScanUrlRequest):
 
     try:
         progress.start(req.request_id, "Opening page.") if req.request_id else None
-        progress.stream_note(req.request_id, "Reading screenshots", {"detail": "Opening screenshots and preparing OCR."})
+        progress.stream_note(req.request_id, "Fetching source", {"detail": "Reading the webpage and its travel details."})
         state = await atlas_graph_app.ainvoke(
             {
-                "task_type": "scan_url",
+                "task_type": "parse_link",
                 "url": url,
                 "request_id": req.request_id,
                 "session": session,
             },
             config={
                 "configurable": {"thread_id": req.request_id or session.session_id},
-                "run_name": "AtlasApp:scan_url",
+                "run_name": "AtlasApp:universal_web",
             },
         )
         result = state.get("result", {})
@@ -325,8 +329,6 @@ async def scan_url(req: ScanUrlRequest):
             "resolved_count": len(result.get("locations", [])),
         })
         progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
-        # Keep Gemini/scan-derived responses on the same photo contract as
-        # parse_link even though this endpoint does not use the URL parse cache.
         await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
@@ -334,7 +336,7 @@ async def scan_url(req: ScanUrlRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         progress.fail(req.request_id, str(e))
-        raise HTTPException(status_code=500, detail=f"Any Links scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Any Links import failed: {e}")
 
 
 @app.post("/parse_youtube", response_model=ParseResponse,

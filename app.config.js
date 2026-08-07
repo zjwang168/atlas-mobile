@@ -9,6 +9,7 @@ try {
 
 const MAPBOX_ACCESS_TOKEN =
   process.env.MAPBOX_ACCESS_TOKEN || 'YOUR_MAPBOX_ACCESS_TOKEN';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 export default {
   expo: {
@@ -46,6 +47,7 @@ export default {
     ],
     extra: {
       mapboxAccessToken: MAPBOX_ACCESS_TOKEN,
+      apiBaseUrl: API_BASE_URL,
     },
   },
 };

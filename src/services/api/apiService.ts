@@ -305,6 +305,8 @@ export async function scanUrl(
   url: string,
   onProgress?: (progress: ParseProgress) => void,
 ): Promise<ParseResult> {
+  // Compatibility route for older clients. New Any Links imports use parseLink
+  // so every generic URL shares the Universal Web Agent pipeline.
   return postParseWithProgress<ParseResult>('/scan_url', { url }, onProgress);
 }
 

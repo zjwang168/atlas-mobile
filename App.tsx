@@ -167,7 +167,8 @@ function AppContent() {
       if (!cancelled) setParseProgressEvents(progress.events);
     };
 
-    // Any Links mode: use Gemini computer use screenshots, then GLM-OCR.
+    // Any Links mode: Universal Web Agent reads HTTP content, then renders
+    // JavaScript pages with Playwright when the server response is an app shell.
     if (importMeta?.mode === 'web_scrape') {
       const sourceUrl = importMeta?.rawInput || importText;
       scanAnyLink(sourceUrl, handleProgress)
