@@ -29,7 +29,17 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll }: AllPlacesProps) 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const { deleteSavedPlace, savedPlaces } = useHome();
+  const { deleteSavedPlace, recentlySavedPlaceIds, savedPlaces, setRecentlySavedPlaceIds } = useHome();
+  const renderedRecentlySavedIds = useMemo(
+    () => recentlySavedPlaceIds.filter((id) => savedPlaces.some((place) => place.id === id)),
+    [recentlySavedPlaceIds, savedPlaces],
+  );
+
+  useEffect(() => {
+    if (!renderedRecentlySavedIds.length) return;
+    const timeoutId = setTimeout(() => setRecentlySavedPlaceIds([]), 1800);
+    return () => clearTimeout(timeoutId);
+  }, [renderedRecentlySavedIds, setRecentlySavedPlaceIds]);
 
   const handleDelete = useCallback((id: string) => {
     deleteSavedPlace(id);
@@ -65,9 +75,14 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll }: AllPlacesProps) 
 
   const renderItem = useCallback(
     ({ item }: { item: PlaceDetail }) => (
-      <PlaceCard item={item} onPress={onPlacePress} onDelete={handleDelete} />
+      <PlaceCard
+        item={item}
+        recentlyAdded={recentlySavedPlaceIds.includes(item.id)}
+        onPress={onPlacePress}
+        onDelete={handleDelete}
+      />
     ),
-    [onPlacePress, handleDelete],
+    [onPlacePress, handleDelete, recentlySavedPlaceIds],
   );
 
   const keyExtractor = useCallback((item: PlaceDetail) => item.id, []);

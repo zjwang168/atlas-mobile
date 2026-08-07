@@ -19,6 +19,8 @@ import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
 import HomeTabBar, {
+  TAB_CHAT,
+  TAB_ADD,
   TAB_PLACES,
   TAB_PLAN,
   TAB_PROFILE,
@@ -102,6 +104,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     setActiveSidekick,
     userLocation,
     savedPlaces,
+    recentlySavedPlaceIds,
   } = useHome();
   const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
   // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
@@ -123,7 +126,9 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
 
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
+  const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
+  const [homePanelVisible, setHomePanelVisible] = useState(true);
   const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
   // Use parsedPlaces from HomeContext (set by App.tsx after parse)
@@ -164,9 +169,22 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   }, [selectedPlaceCoordinate, hasParsedPlaces]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
-  const historyChatVisible = activeSidekick === 'aiChat' && panelVisible;
-  const chatVisible = standaloneChatVisible || historyChatVisible;
+  const historyChatRequested = activeSidekick === 'aiChat' && panelVisible;
+  const chatRequested = standaloneChatVisible || historyChatRequested;
+  const chatVisible = chatPresentationVisible;
   const effectiveTabBarVisible = tabBarVisible && !chatVisible;
+
+  useEffect(() => {
+    if (!chatRequested) {
+      setChatPresentationVisible(false);
+      return;
+    }
+    // Let the selector travel from My Places to Chat before the chat surface
+    // covers the tab bar, so opening AI feels like one continuous transition.
+    setActiveTab(TAB_CHAT);
+    const timeoutId = setTimeout(() => setChatPresentationVisible(true), 280);
+    return () => clearTimeout(timeoutId);
+  }, [chatRequested]);
 
   useEffect(() => {
     Animated.timing(tabBarOpacity, {
@@ -185,7 +203,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // Any bottom panel that should push the map center up — the main pager panel,
   // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
   // drives the same padding-tracking path.
-  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  const bottomPanelActive = (panelVisible && homePanelVisible) || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
@@ -239,6 +257,26 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const handleTabChange = useCallback((tab: string) => {
     animateToTab(tab);
   }, [animateToTab]);
+
+  useEffect(() => {
+    if (!recentlySavedPlaceIds.length) return;
+    // The new pins originate from Add places. Let the liquid selector first
+    // land there, then travel to Bookmarks while the rows enter the list.
+    setActiveTab(TAB_ADD);
+    const timeoutId = setTimeout(() => animateToTab(TAB_PLACES), 340);
+    return () => clearTimeout(timeoutId);
+  }, [animateToTab, recentlySavedPlaceIds]);
+
+  useEffect(() => {
+    if (!recentlySavedPlaceIds.length) return;
+    setHomePanelVisible(false);
+    const hasNewRows = recentlySavedPlaceIds.some((id) =>
+      savedPlaces.some((place) => place.id === id),
+    );
+    if (!hasNewRows) return;
+    const timeoutId = setTimeout(() => setHomePanelVisible(true), 56);
+    return () => clearTimeout(timeoutId);
+  }, [recentlySavedPlaceIds, savedPlaces]);
   useEffect(() => {
     animateToTab(activeTab);
   }, []);
@@ -285,7 +323,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
             <HomePanel
               activeTab={TAB_PLACES}
               snapGroup={HOME_PANEL_SNAP_GROUP}
-              visible={panelVisible}
+              visible={panelVisible && homePanelVisible}
               onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
             />
           </View>
@@ -293,7 +331,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
             <HomePanel
               activeTab={TAB_PLAN}
               snapGroup={HOME_PANEL_SNAP_GROUP}
-              visible={panelVisible}
+              visible={panelVisible && homePanelVisible}
               onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
             />
           </View>
@@ -317,6 +355,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
           setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
           setActiveSidekick('none');
+          animateToTab(TAB_PLACES);
         }}
         onOpenHistory={onOpenChatHistory}
         onNewChat={handleNewChat}

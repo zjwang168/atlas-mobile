@@ -10,7 +10,6 @@
  * session and tighten RLS to `created_by = auth.uid()`.
  */
 
-import Constants from 'expo-constants';
 import type { PlaceDetail } from '@/types/place';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
@@ -18,6 +17,7 @@ import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, type SavedPlacesIndexEntry, withTimeout } from '../local/syncQueue';
 import { supabase } from '../supabase/supabaseClient';
+import { staticMapThumbnail } from './staticMapThumbnail';
 
 export type SavedPlace = {
   id: string;
@@ -332,28 +332,12 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   return fetchFresh();
 }
 
-const MAPBOX_TOKEN: string =
-  (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
-  (process.env.MAPBOX_ACCESS_TOKEN as string) ||
-  '';
-
-/** Static map thumbnail centered on the place (Mapbox Static Images API).
-    Note: Mapbox expects LONGITUDE first. */
-function staticMapThumb(lat: number, lng: number): string {
-  if (!MAPBOX_TOKEN) return '';
-  return (
-    `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-    `pin-s+3b82f6(${lng},${lat})/${lng},${lat},14,0/200x200@2x` +
-    `?access_token=${MAPBOX_TOKEN}`
-  );
-}
-
 /** Resolve a place's thumbnail: the real saved photo if there is one,
     otherwise a generated Mapbox static-map pin for its coordinates. Shared
     by `toPlaceDetail()` and any other caller that needs a place thumbnail
     without the full `PlaceDetail` shape (e.g. `savePlan.ts`'s plan covers). */
 export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string {
-  return place.photo_url || staticMapThumb(place.latitude, place.longitude);
+  return place.photo_url || staticMapThumbnail(place.latitude, place.longitude);
 }
 
 /** Adapt a DB row to the PlaceDetail shape the detail screens expect.

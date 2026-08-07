@@ -50,8 +50,9 @@ type ImportScreenProps = {
   `Read text` / `Identify location` toggle.
 - Pan-down-to-close remains enabled. The back button returns from a category
   to the four-category menu.
-- Keyboard behaviour is `"interactive"` so the expanded sheet follows the
-  keyboard.
+- The composer follows keyboard events itself. The sheet uses its stable
+  expanded snap point while an input is active, preventing iOS keyboard-frame
+  updates from resetting the detail view or remounting the input.
 
 ## Integration
 

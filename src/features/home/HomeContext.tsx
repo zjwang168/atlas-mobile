@@ -54,6 +54,9 @@ type HomeContextValue = {
   /** 从 Supabase 已加载的已保存地点 */
   savedPlaces: SavedPlace[];
   setSavedPlaces: (places: SavedPlace[]) => void;
+  /** Saved rows that should receive the one-time My Places insertion animation. */
+  recentlySavedPlaceIds: string[];
+  setRecentlySavedPlaceIds: (ids: string[]) => void;
   /** 从 Supabase 刷新已保存地点列表 */
   refreshSavedPlaces: () => Promise<void>;
   /** Chat History 列表（最近 50 条） */
@@ -118,6 +121,8 @@ const HomeContext = createContext<HomeContextValue>({
   setParsedPlaces: () => {},
   savedPlaces: [],
   setSavedPlaces: () => {},
+  recentlySavedPlaceIds: [],
+  setRecentlySavedPlaceIds: () => {},
   refreshSavedPlaces: async () => {},
   chatHistory: [],
   deletedChatHistory: [],
@@ -167,6 +172,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const [tabBarVisible, setTabBarVisible] = useState(true);
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  const [recentlySavedPlaceIds, setRecentlySavedPlaceIds] = useState<string[]>([]);
   const [atlases, setAtlases] = useState<Atlas[]>([]);
   const [atlasPlaces, setAtlasPlaces] = useState<AtlasPlace[]>([]);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
@@ -408,6 +414,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setParsedPlaces,
       savedPlaces,
       setSavedPlaces,
+      recentlySavedPlaceIds,
+      setRecentlySavedPlaceIds,
       refreshSavedPlaces,
       chatHistory,
       deletedChatHistory,
@@ -442,6 +450,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       tabBarVisible,
       parsedPlaces,
       savedPlaces,
+      recentlySavedPlaceIds,
       refreshSavedPlaces,
       chatHistory,
       deletedChatHistory,

@@ -13,6 +13,7 @@ Uses a tool-calling loop pattern:
 
 import asyncio
 import json
+import re
 import time
 from typing import Optional
 
@@ -24,6 +25,28 @@ from backend.services.conversation_manager import Session, conversation_manager
 from backend.services.performance_logger import PipelineMetrics, record_metrics
 from backend.services.tool_definitions import TOOLS, registry
 from backend.services.translation import translate_to_english
+
+
+def _matches_inferred_region(geocoded: dict, inferred_region: str | None) -> bool:
+    """Reject a globally valid geocoder result that conflicts with one-region content."""
+    if not inferred_region:
+        return True
+    address = re.sub(r"[^a-z0-9]+", " ", (geocoded.get("full_address") or "").lower())
+    if not address.strip():
+        return False
+    ignored_parts = {"us", "usa", "united states", "uk", "united kingdom", "france", "italy", "japan", "china"}
+    candidates = [
+        re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+        for part in inferred_region.split(",")
+    ]
+    candidates = [part for part in candidates if len(part) > 2 and part not in ignored_parts]
+    return any(re.search(rf"\b{re.escape(candidate)}\b", address) for candidate in candidates)
+
+
+def _stream_identified_places(request_id: str | None, locations: list[dict], limit: int = 12) -> None:
+    """Publish actual extracted names for the UI without adding analysis work."""
+    from backend.services import progress
+    progress.stream_identified_places(request_id, locations, limit=limit)
 
 
 class AgentOrchestrator:
@@ -45,6 +68,7 @@ class AgentOrchestrator:
         from backend.services.tool_definitions import init_registry
         init_registry()  # Ensure all tools are registered
         self._parse_graph = self._build_parse_graph()
+        self._background_tasks: set[asyncio.Task] = set()
 
     @property
     def parse_graph(self):
@@ -80,9 +104,12 @@ class AgentOrchestrator:
                     # Persist when the cached response gained or explicitly
                     # recorded photo_url fields before it is bundled.
                     set_cached_result(url, cached)
-            metrics.t_parse_done = time.time()
-            metrics.t_geocode_done = time.time()
-            metrics.t_response = time.time()
+            now = time.time()
+            metrics.t_fetch_done = now
+            metrics.t_parse_done = now
+            metrics.t_geocode_done = now
+            metrics.t_photo_done = now
+            metrics.t_response = now
             record_metrics(metrics)
 
             # Restore session fields from cached result
@@ -121,6 +148,7 @@ class AgentOrchestrator:
         # for /parse_link, so that wrapper should treat already-present
         # photo_url fields as complete.
         await enrich_response_with_photos(result)
+        metrics.t_photo_done = time.time()
 
         # Store successful result in cache
         set_cached_result(url, result)
@@ -167,6 +195,7 @@ class AgentOrchestrator:
                 "inferred_region": discovery.get("inferred_region"),
                 "mode": mode,
             })
+            _stream_identified_places(request_id, locations)
             progress.stream_note(request_id, "Routing", {"detail": "Address-heavy content detected; geocoding directly."})
             progress.mark(request_id, "geocode_done", "Coordinates resolved.", {
                 "query_count": len(locations),
@@ -250,9 +279,12 @@ class AgentOrchestrator:
 
             raise ValueError("No geographic locations could be extracted from this content.")
 
-        # 2.5 Entity Linking — disambiguate ambiguous location names
-        location_names = await self._entity_linking(location_names, extraction.get("inferred_region"), request_id=request_id)
+        # 2.5 Entity linking is only needed for aliases, abbreviations, and
+        # generic labels. Extraction already supplies context for normal POIs.
+        if self._needs_entity_linking(location_names, extraction.get("inferred_region")):
+            location_names = await self._entity_linking(location_names, extraction.get("inferred_region"), request_id=request_id)
         from backend.services import progress
+        _stream_identified_places(request_id, location_names)
         progress.mark(request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(location_names),
             "inferred_region": extraction.get("inferred_region"),
@@ -565,6 +597,9 @@ class AgentOrchestrator:
         title = await translate_to_english(title or url, request_id=state["request_id"])
         session.title = title
         content = await translate_to_english(content, request_id=state["request_id"])
+        metrics: Optional[PipelineMetrics] = state.get("metrics")
+        if metrics:
+            metrics.t_fetch_done = time.time()
         progress.mark(state["request_id"], "source_fetched", "Source prepared.", {
             "title": title,
             "characters": len(content),
@@ -574,11 +609,16 @@ class AgentOrchestrator:
         progress.stream_note(state["request_id"], "Analyzing", {"detail": "Source is in hand; extracting and resolving places now."})
         state["content"] = content
         state["source_type"] = scrape_result.get("source_type", "generic")
+        state["ranked_items"] = scrape_result.get("ranked_items")
+        state["ranked_region"] = scrape_result.get("inferred_region")
         state["title"] = title
         return state
 
     async def _graph_classify(self, state: dict) -> dict:
         if state["mode"] == "url":
+            if state.get("ranked_items"):
+                state["source_type"] = "ranked_list"
+                return state
             state["source_type"] = await classify_location_content(state["content"], source_type=state["source_type"])
         return state
 
@@ -589,7 +629,13 @@ class AgentOrchestrator:
 
     async def _graph_extract(self, state: dict) -> dict:
         from backend.services.extraction_pipeline import ExtractionPipeline
-        extraction = await ExtractionPipeline.extract(state["content"], state["source_type"], request_id=state["request_id"])
+        extraction = await ExtractionPipeline.extract(
+            state["content"],
+            state["source_type"],
+            request_id=state["request_id"],
+            ranked_items=state.get("ranked_items"),
+            inferred_region=state.get("ranked_region"),
+        )
         state["extraction"] = extraction
         return state
 
@@ -599,7 +645,14 @@ class AgentOrchestrator:
         if not locations:
             state["locations"] = []
             return state
-        state["locations"] = await self._entity_linking(locations, extraction.get("inferred_region"), request_id=state["request_id"])
+        if self._needs_entity_linking(locations, extraction.get("inferred_region")):
+            state["locations"] = await self._entity_linking(locations, extraction.get("inferred_region"), request_id=state["request_id"])
+        else:
+            state["locations"] = locations
+        _stream_identified_places(state["request_id"], state["locations"])
+        metrics: Optional[PipelineMetrics] = state.get("metrics")
+        if metrics:
+            metrics.t_parse_done = time.time()
         return state
 
     async def _graph_geocode(self, state: dict) -> dict:
@@ -621,20 +674,28 @@ class AgentOrchestrator:
                 "inferred_region": discovery.get("inferred_region"),
                 "mode": state.get("source_type"),
             })
+            _stream_identified_places(state["request_id"], discovery.get("locations", []))
             progress.mark(state["request_id"], "geocode_done", "Coordinates resolved.", {
                 "query_count": len(discovery.get("locations", [])),
                 "resolved_count": len(discovery.get("locations", [])),
             })
+            metrics: Optional[PipelineMetrics] = state.get("metrics")
+            if metrics:
+                now = time.time()
+                metrics.t_parse_done = now
+                metrics.t_geocode_done = now
             return state
 
         locations = state.get("locations", [])
         state["final_result"] = await self._process_geocode_only(locations, extraction, session, state["request_id"])
+        metrics: Optional[PipelineMetrics] = state.get("metrics")
+        if metrics:
+            metrics.t_geocode_done = time.time()
         return state
 
     async def _process_geocode_only(self, location_names: list[dict], extraction: dict, session: Session, request_id: str | None) -> dict:
         from backend.services import progress
         from backend.services.geocoder import batch_geocode
-        from backend.services.geocoder import geocode as _geocode_region
 
         session.removed_noise = extraction.get("removed_noise", [])
         session.removed_hierarchy = extraction.get("removed_hierarchy", [])
@@ -642,17 +703,44 @@ class AgentOrchestrator:
         session.is_multi_region = extraction.get("is_multi_region", False)
         if not location_names:
             raise ValueError("No geographic locations could be extracted from this content.")
-        if extraction.get("inferred_region"):
-            try:
-                await _geocode_region(extraction.get("inferred_region"))
-            except Exception:
-                pass
-        geocoded = await batch_geocode([loc["name"] for loc in location_names], city_name=extraction.get("inferred_region"))
-        progress.mark(request_id, "geocode_done", "Coordinates resolved.", {"query_count": len(location_names), "resolved_count": len([i for i in geocoded if i])})
+
+        # Comments often repeat the same venue. Preserve distinct same-named
+        # places in different contexts, but do not spend limited geocoding
+        # capacity resolving an identical entity more than once.
+        unique_locations: list[dict] = []
+        seen_queries: set[tuple[str, str]] = set()
+        for location in location_names:
+            name = (location.get("name") or "").strip()
+            context = (location.get("context") or extraction.get("inferred_region") or "").strip()
+            key = (name.lower(), context.lower())
+            if name and key not in seen_queries:
+                seen_queries.add(key)
+                unique_locations.append(location)
+
+        geocode_queries: list[dict] = []
+        for location in unique_locations:
+            name = (location.get("name") or "").strip()
+            context = (location.get("context") or extraction.get("inferred_region") or "").strip()
+            address = (location.get("address") or "").strip()
+            contextual_name = f"{name}, {context}" if context and context.lower() not in name.lower() else name
+            geocode_queries.append({
+                "query": address or contextual_name,
+                "fallback_query": contextual_name if address and contextual_name != address else None,
+            })
+
+        geocoded = await batch_geocode(geocode_queries, city_name=extraction.get("inferred_region"))
+        progress.mark(request_id, "geocode_done", "Coordinates resolved.", {"query_count": len(geocode_queries), "resolved_count": len([i for i in geocoded if i])})
         progress.stream_note(request_id, "Routing", {"detail": "Coordinates resolved; planning the route."})
         locations = []
-        for loc, geo in zip(location_names, geocoded):
+        enforce_region = bool(extraction.get("inferred_region")) and not extraction.get("is_multi_region", False)
+        for loc, geo in zip(unique_locations, geocoded):
             if geo:
+                if enforce_region and not _matches_inferred_region(geo, extraction.get("inferred_region")):
+                    session.removed_noise.append({
+                        "name": loc.get("name", ""),
+                        "reason": f"Geocoding result is outside the inferred region: {extraction.get('inferred_region')}",
+                    })
+                    continue
                 geo["name"] = loc["name"]
                 geo["context"] = loc.get("context", "")
                 geo["hierarchy_level"] = loc.get("hierarchy_level", 2)
@@ -667,6 +755,7 @@ class AgentOrchestrator:
             "removed_hierarchy": session.removed_hierarchy,
             "inferred_region": session.inferred_region,
         }
+
 
     async def _graph_route(self, state: dict) -> dict:
         from backend.services.route_planner import plan_route
@@ -683,15 +772,42 @@ class AgentOrchestrator:
         session: Session = state["session"]
         final_result = state.get("final_result", {})
         session.add_message("system", f"Extracted {len(final_result.get('locations', []))} locations from the provided URL.")
-        try:
-            await conversation_manager.save_conversation(session.session_id)
-            await self._update_memory(session, metrics=state.get("metrics"))
-        except Exception:
-            pass
+        self._schedule_background_persistence(session, state.get("metrics"))
         final_result["title"] = final_result.get("title", session.title)
         final_result["session_id"] = session.session_id
         final_result["source_type"] = final_result.get("source_type", state.get("source_type"))
         return final_result
+
+    @staticmethod
+    def _needs_entity_linking(location_names: list[dict], inferred_region: str | None) -> bool:
+        """Avoid a second LLM pass when extraction already made POIs unambiguous."""
+        generic_names = {
+            "the tower", "tower", "the bridge", "bridge", "the mall", "mall",
+            "the palace", "palace", "the park", "park", "the museum", "museum",
+            "monument", "monuments", "the beach", "beach", "the square", "square",
+        }
+        for location in location_names:
+            name = (location.get("name") or "").strip()
+            context = (location.get("context") or "").strip()
+            if not name or name.lower() in generic_names:
+                return True
+            if len(name) <= 3 and name.isupper():
+                return True
+            if not context and not inferred_region:
+                return True
+        return False
+
+    def _schedule_background_persistence(self, session: Session, metrics: Optional[PipelineMetrics]) -> None:
+        async def persist() -> None:
+            try:
+                await conversation_manager.save_conversation(session.session_id)
+                await self._update_memory(session, metrics=metrics)
+            except Exception as exc:
+                print(f"[AgentOrchestrator] Background session persistence failed: {exc}")
+
+        task = asyncio.create_task(persist())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _validate_coordinates(
         self,

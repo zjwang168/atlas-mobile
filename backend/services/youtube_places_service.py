@@ -59,16 +59,33 @@ async def parse_youtube_url(url: str, request_id: str | None = None) -> dict:
 
     extracted = await ExtractionPipeline.extract(english_text, source_type="youtube_links", request_id=request_id)
     location_names = extracted.get("locations", [])
+    progress.stream_identified_places(request_id, location_names)
     progress.stream_note(request_id, "youtube:geocode", {"detail": f"Geocoding {len(location_names)} places."})
 
+    inferred_region = extracted.get("inferred_region")
+    region_tagline = extracted.get("region_tagline")
+    if inferred_region:
+        progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     geocoded = await batch_geocode(
-        location_names,
-        city_name=extracted.get("inferred_region"),
+        _build_geocode_queries(location_names, inferred_region),
+        city_name=inferred_region,
     )
 
     locations = []
+    removed_noise = list(extracted.get("removed_noise", []))
     for loc, geo in zip(location_names, geocoded):
         if not geo:
+            continue
+        if not _matches_inferred_region(geo, inferred_region):
+            removed_noise.append({
+                "name": loc.get("name", ""),
+                "reason": f"Geocoding result is outside the video's inferred region: {inferred_region}",
+            })
+            logger.info(
+                "[YouTubePlaces] Rejected out-of-region result for %r: %s",
+                loc.get("name", ""),
+                geo.get("full_address", ""),
+            )
             continue
         locations.append(
             {
@@ -79,7 +96,7 @@ async def parse_youtube_url(url: str, request_id: str | None = None) -> dict:
                 "sentiment": loc.get("sentiment"),
                 "description": loc.get("description"),
                 "category": loc.get("category"),
-                "is_exact": True,
+                "is_exact": geo.get("is_exact", False),
                 "confidence": loc.get("confidence"),
                 "source": "youtube_links",
             }
@@ -89,11 +106,43 @@ async def parse_youtube_url(url: str, request_id: str | None = None) -> dict:
         title=source.title or "YouTube video",
         locations=locations,
         route={"ordered_locations": [], "total_distance_km": 0.0, "segments": []},
-        removed_noise=extracted.get("removed_noise", []),
+        removed_noise=removed_noise,
         removed_hierarchy=extracted.get("removed_hierarchy", []),
         inferred_region=extracted.get("inferred_region"),
         source_type="youtube_links",
     )
+
+
+def _build_geocode_queries(locations: list[dict], inferred_region: str | None) -> list[dict]:
+    """Attach source context to short YouTube names before global geocoding."""
+    queries: list[dict] = []
+    for location in locations:
+        name = (location.get("name") or "").strip()
+        context = (location.get("context") or inferred_region or "").strip()
+        if context and context.lower() not in name.lower():
+            query = f"{name}, {context}"
+        else:
+            query = name
+        # Deliberately omit a bare-name fallback. A generic venue name should
+        # be absent rather than resolved to a different city or country.
+        queries.append({"query": query, "name": name})
+    return queries
+
+
+def _matches_inferred_region(geocoded: dict, inferred_region: str | None) -> bool:
+    """Reject a globally valid match when it conflicts with video context."""
+    if not inferred_region:
+        return True
+    address = re.sub(r"[^a-z0-9]+", " ", (geocoded.get("full_address") or "").lower())
+    if not address.strip():
+        return False
+    ignored_parts = {"us", "usa", "united states", "uk", "united kingdom", "france", "italy", "japan", "china"}
+    candidates = [
+        re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+        for part in inferred_region.split(",")
+    ]
+    candidates = [part for part in candidates if len(part) > 2 and part not in ignored_parts]
+    return any(re.search(rf"\b{re.escape(candidate)}\b", address) for candidate in candidates)
 
 
 async def _build_source_text(url: str) -> YouTubeSource:
@@ -101,10 +150,14 @@ async def _build_source_text(url: str) -> YouTubeSource:
     if not video_id:
         return YouTubeSource(title="YouTube video", url=url, transcript_text="", chapter_text="", combined_text="")
 
-    html = await _fetch_youtube_html(url)
+    # The watch page and transcript are independent network requests. Running
+    # them concurrently removes one complete request from the critical path.
+    html, transcript_text = await asyncio.gather(
+        _fetch_youtube_html(url),
+        _fetch_transcript_text(video_id),
+    )
     title = _extract_title(html) or "YouTube video"
     chapter_text = _extract_chapters(html)
-    transcript_text = await _fetch_transcript_text(video_id)
 
     combined_parts = [
         f"Video title: {title}",

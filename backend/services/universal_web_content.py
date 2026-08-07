@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import re
 import socket
 from dataclasses import dataclass
@@ -49,9 +50,136 @@ class UniversalWebResult:
     error: Optional[str] = None
     provider: Optional[str] = None
     used_browser: bool = False
+    ranked_items: Optional[list[dict]] = None
+    inferred_region: Optional[str] = None
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
+
+
+def extract_ranked_list_from_html(html: str) -> Optional[dict]:
+    """Extract a page's primary ranked list from machine-readable markup.
+
+    JSON-LD ItemList is authored for search engines and is substantially less
+    noisy than the visible page shell. We require contiguous numeric positions
+    so recommendation carousels and unordered navigation lists are ignored.
+    """
+    soup = BeautifulSoup(html or "", "lxml")
+    candidates: list[dict] = []
+    for script in soup.select("script[type='application/ld+json']"):
+        raw = script.string or script.get_text()
+        if not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        values = data if isinstance(data, list) else [data]
+        for value in values:
+            if not isinstance(value, dict) or value.get("@type") != "ItemList":
+                continue
+            elements = value.get("itemListElement")
+            if not isinstance(elements, list):
+                continue
+            items: list[dict] = []
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                try:
+                    rank = int(element.get("position"))
+                except (TypeError, ValueError):
+                    continue
+                item = element.get("item")
+                if isinstance(item, dict):
+                    name = _clean_text(str(item.get("name", "")))
+                    item_url = _clean_text(str(item.get("url", "")))
+                    address = _clean_text(str(item.get("address", "")))
+                    description = _clean_text(str(item.get("description", "")))
+                else:
+                    name = _clean_text(str(item or element.get("name", "")))
+                    item_url = ""
+                    address = ""
+                    description = ""
+                if name and 1 <= rank <= 100:
+                    items.append({
+                        "rank": rank,
+                        "name": name,
+                        "url": item_url,
+                        "address": address,
+                        "description": description,
+                    })
+            items.sort(key=lambda item: item["rank"])
+            if len(items) >= 3 and [item["rank"] for item in items[:3]] == [1, 2, 3]:
+                coverage = value.get("spatialCoverage")
+                region = ""
+                if isinstance(coverage, dict):
+                    region = _clean_text(str(coverage.get("name", "")))
+                candidates.append({
+                    "items": items,
+                    "title": _clean_text(str(value.get("name", ""))),
+                    "region": region,
+                })
+    if not candidates:
+        candidates.extend(_extract_ranked_dom_candidates(soup))
+    if not candidates:
+        return None
+    # Prefer the largest contiguous list when a page exposes related lists.
+    selected = max(candidates, key=lambda candidate: len(candidate["items"]))
+    items = selected["items"]
+    expected = list(range(1, len(items) + 1))
+    if [item["rank"] for item in items] != expected:
+        items = [item for index, item in enumerate(items) if item["rank"] == index + 1]
+    if len(items) < 3:
+        return None
+    return {"title": selected["title"], "region": selected["region"], "items": items[:50]}
+
+
+def _extract_ranked_dom_candidates(soup: BeautifulSoup) -> list[dict]:
+    """Conservative fallback for ranked pages without JSON-LD."""
+    candidates: list[dict] = []
+    containers = soup.select(
+        "[class*='ranking'], [id*='ranking'], [class*='toplist'], [id*='toplist'], "
+        "[class*='rank-list'], [id*='rank-list']"
+    )
+    for container in containers:
+        items: list[dict] = []
+        cards = container.select(
+            "[data-rank], [data-ranking], [class*='ranking-item'], [class*='rank-item'], "
+            "[class*='toplist-item']"
+        )
+        for card in cards:
+            rank_value = card.get("data-rank") or card.get("data-ranking")
+            if not rank_value:
+                match = re.search(r"\b(?:no\.?\s*)?(\d{1,2})\b", card.get_text(" ", strip=True), re.IGNORECASE)
+                rank_value = match.group(1) if match else ""
+            try:
+                rank = int(rank_value)
+            except (TypeError, ValueError):
+                continue
+            heading = card.find(["h2", "h3", "h4"])
+            link = card.find("a", href=True)
+            name = _clean_text(heading.get_text(" ", strip=True) if heading else (link.get_text(" ", strip=True) if link else ""))
+            if name and 1 <= rank <= 100:
+                items.append({"rank": rank, "name": name, "url": link.get("href", "") if link else "", "address": "", "description": ""})
+        items.sort(key=lambda item: item["rank"])
+        if len(items) < 3 or [item["rank"] for item in items[:3]] != [1, 2, 3]:
+            continue
+        title = _clean_text((soup.find("h1") or soup.title).get_text(" ", strip=True) if (soup.find("h1") or soup.title) else "")
+        region_match = re.search(r"\bin\s+([^|–-]+)", title, re.IGNORECASE)
+        candidates.append({"title": title, "region": _clean_text(region_match.group(1)) if region_match else "", "items": items})
+    return candidates
+
+
+def _ranked_content(title: str, region: str, items: list[dict]) -> str:
+    lines = [title or "Ranked travel list"]
+    if region:
+        lines.append(f"Primary region: {region}")
+    for item in items:
+        line = f"{item['rank']}. {item['name']}"
+        if item.get("description"):
+            line += f" — {item['description']}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def normalize_public_url(value: str) -> str:
@@ -165,25 +293,32 @@ async def _fetch_html(url: str) -> tuple[str, str]:
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=False, headers=headers) as client:
         for _ in range(5):
             await _assert_public_host(current_url)
-            response = await client.get(current_url)
-            if response.is_redirect:
-                location = response.headers.get("location")
-                if not location:
-                    raise ValueError("The webpage returned an invalid redirect.")
-                current_url = str(response.url.join(location))
-                continue
-            # Many editorial sites reject a plain HTTP client but allow a real
-            # browser. Return the challenge response so the caller can select
-            # the Playwright fallback instead of ending the import here.
-            if response.status_code in {401, 403}:
-                return str(response.url), response.text
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "").lower()
-            if "html" not in content_type and "xhtml" not in content_type:
-                raise ValueError("The URL did not return an HTML webpage.")
-            if len(response.content) > MAX_HTML_BYTES:
-                raise ValueError("The webpage is too large to import.")
-            return str(response.url), response.text
+            async with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("The webpage returned an invalid redirect.")
+                    current_url = str(response.url.join(location))
+                    continue
+                # Many editorial sites reject a plain HTTP client but allow a real
+                # browser. Return the challenge response so the caller can select
+                # the Playwright fallback instead of ending the import here.
+                if response.status_code in {401, 403}:
+                    return str(response.url), (await response.aread()).decode("utf-8", errors="replace")
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").lower()
+                if "html" not in content_type and "xhtml" not in content_type:
+                    raise ValueError("The URL did not return an HTML webpage.")
+
+                chunks: list[bytes] = []
+                total_bytes = 0
+                async for chunk in response.aiter_bytes():
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_HTML_BYTES:
+                        raise ValueError("The webpage is too large to import.")
+                    chunks.append(chunk)
+                encoding = response.encoding or "utf-8"
+                return str(response.url), b"".join(chunks).decode(encoding, errors="replace")
     raise ValueError("The webpage redirected too many times.")
 
 
@@ -199,30 +334,126 @@ async def _render_html(url: str) -> tuple[str, str, str]:
                 locale="en-US",
             )
             try:
+                async def block_non_content_resources(route) -> None:
+                    if route.request.resource_type in {"image", "media", "font"}:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                await context.route("**/*", block_non_content_resources)
                 page = await context.new_page()
                 await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=5_000)
+                    await page.wait_for_function(
+                        """(minimum) => {
+                            const root = document.querySelector('article, main, [itemprop="articleBody"], .article-body, .article-content, .post-content, .entry-content') || document.body;
+                            return (root?.innerText || '').trim().length >= minimum;
+                        }""",
+                        arg=MIN_USEFUL_CHARS,
+                        timeout=4_500,
+                    )
                 except Exception:
                     pass
-                await page.wait_for_timeout(1_000)
-                return page.url, await page.title(), await page.content()
+
+                # Expand any reply branches Reddit has already exposed. This
+                # is best-effort and does not impose a comment-depth limit.
+                if "reddit.com" in page.url.lower():
+                    for _ in range(2):
+                        clicked = await page.locator("button").evaluate_all(
+                            """buttons => {
+                                const candidates = buttons.filter((button) =>
+                                    /more replies/i.test((button.innerText || '').trim())
+                                );
+                                candidates.forEach((button) => button.click());
+                                return candidates.length;
+                            }"""
+                        )
+                        if not clicked:
+                            break
+                        await page.wait_for_timeout(350)
+
+                rendered_html = await page.evaluate(
+                    """() => {
+                        const isReddit = /(^|\\.)reddit\\.com$/i.test(location.hostname);
+                        const root = isReddit
+                            ? (document.querySelector('main#main-content, main') || document.body)
+                            : (document.querySelector('article, main, [itemprop="articleBody"], .article-body, .article-content, .post-content, .entry-content') || document.body);
+                        const clone = root.cloneNode(true);
+                        // Reddit includes further public comments in a deferred
+                        // template. They are present in the response but absent
+                        // from innerText until materialized into the clone.
+                        clone.querySelectorAll('template#deferred-comments').forEach((template) => {
+                            template.replaceWith(template.content.cloneNode(true));
+                        });
+                        clone.querySelectorAll('script:not([type="application/ld+json"]), style, noscript, svg, iframe, form, button, nav, footer, header, aside, img, faceplate-ad, shreddit-ad-post, shreddit-comments-page-ad, [data-testid*="ad"]').forEach((node) => node.remove());
+                        return clone.outerHTML;
+                    }"""
+                )
+                return page.url, await page.title(), rendered_html
             finally:
                 await context.close()
         finally:
             await browser.close()
 
 
-async def scrape_universal_web_content(url: str) -> dict:
+async def scrape_universal_web_content(url: str, force_browser: bool = False) -> dict:
     """Fetch an arbitrary public webpage with HTTP-first and browser fallback."""
     try:
         normalized_url = normalize_public_url(url)
+        if force_browser:
+            await _assert_public_host(normalized_url)
+            rendered_url, browser_title, rendered_html = await _render_html(normalized_url)
+            ranked = extract_ranked_list_from_html(rendered_html)
+            if ranked:
+                title = ranked["title"] or browser_title or rendered_url
+                return UniversalWebResult(
+                    title,
+                    _ranked_content(title, ranked["region"], ranked["items"]),
+                    "ranked_list",
+                    rendered_url,
+                    True,
+                    provider="playwright_structured",
+                    used_browser=True,
+                    ranked_items=ranked["items"],
+                    inferred_region=ranked["region"] or None,
+                ).as_dict()
+            title, content = extract_article_from_html(rendered_html, fallback_title=browser_title or rendered_url)
+            if len(content.strip()) < MIN_USEFUL_CHARS:
+                raise ValueError("The webpage did not expose enough readable content. It may require sign-in or block automated access.")
+            return UniversalWebResult(title, content, "universal_web", rendered_url, True, provider="playwright_reader", used_browser=True).as_dict()
         final_url, html = await _fetch_html(normalized_url)
+        ranked = extract_ranked_list_from_html(html)
+        if ranked:
+            title = ranked["title"] or _metadata(BeautifulSoup(html, "lxml"), "og:title") or final_url
+            return UniversalWebResult(
+                title,
+                _ranked_content(title, ranked["region"], ranked["items"]),
+                "ranked_list",
+                final_url,
+                True,
+                provider="http_structured",
+                ranked_items=ranked["items"],
+                inferred_region=ranked["region"] or None,
+            ).as_dict()
         title, content = extract_article_from_html(html, fallback_title=final_url)
         if not needs_browser_render(html, content):
             return UniversalWebResult(title, content, "universal_web", final_url, True, provider="http_reader").as_dict()
 
         rendered_url, browser_title, rendered_html = await _render_html(final_url)
+        ranked = extract_ranked_list_from_html(rendered_html)
+        if ranked:
+            title = ranked["title"] or browser_title or rendered_url
+            return UniversalWebResult(
+                title,
+                _ranked_content(title, ranked["region"], ranked["items"]),
+                "ranked_list",
+                rendered_url,
+                True,
+                provider="playwright_structured",
+                used_browser=True,
+                ranked_items=ranked["items"],
+                inferred_region=ranked["region"] or None,
+            ).as_dict()
         title, content = extract_article_from_html(rendered_html, fallback_title=browser_title or final_url)
         if len(content.strip()) < MIN_USEFUL_CHARS:
             raise ValueError("The webpage did not expose enough readable content. It may require sign-in or block automated access.")

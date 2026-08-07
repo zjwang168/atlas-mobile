@@ -20,6 +20,7 @@ Output ONLY valid JSON with this exact structure:
 {{
   "title": "short title for this request",
   "inferred_region": "primary city/region or null",
+  "region_tagline": "2-4 English words that evoke the inferred region, or null",
   "places": [
     {{
       "name": "real-world place name",
@@ -47,6 +48,7 @@ Rules:
    "Tourist Attractions", "Dining & Drinking", "Entertainment",
    "Museums & Exhibitions", "Transit Hubs", "Religious Sites", "Others"
 8. Return 3-12 places depending on the request.
+9. Set region_tagline to exactly 2-4 refined English words, not a sentence.
 
 User request:
 {query}
@@ -76,6 +78,9 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
 
     title = parsed.get("title") or query[:80]
     inferred_region = parsed.get("inferred_region")
+    region_tagline = parsed.get("region_tagline")
+    if inferred_region:
+        progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     places = parsed.get("places", [])
 
     geocode_queries = []
@@ -132,5 +137,6 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
         "removed_noise": [],
         "removed_hierarchy": [],
         "inferred_region": inferred_region,
+        "region_tagline": region_tagline,
         "source_type": "atlas_ai",
     }

@@ -404,6 +404,8 @@ CITY_COUNTRY_MAP: dict[str, str] = {
     "paris": "fr",
     "lyon": "fr",
     "marseille": "fr",
+    # Philippines
+    "manila": "ph",
     # United Kingdom
     "london": "gb",
     "manchester": "gb",

@@ -1,9 +1,11 @@
 import { PortalHost } from '@rn-primitives/portal';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, LogBox, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, AppState, LogBox, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import './global.css';
 
 import { savePlaces } from '@/services/place/placeService';
@@ -15,15 +17,18 @@ import AtlasAIHome from './src/features/atlas-ai/chat-history/AtlasAIHome';
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
 import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
-import type { ParseProgressEvent } from './src/services/api/apiService';
+import { cancelParseRequest, type ParseProgressEvent } from './src/services/api/apiService';
 import {
   discoverFromAtlasQuery,
   formatParsedPlaceSubtitle,
+  findImagePlace,
   parseInput,
   parseText,
   parseYoutubeLink,
+  scanImagesForTextPlaces,
   scanAnyLink,
   type ParseProgressHandler,
+  type ParseRequestHandler,
   type ParseResult,
 } from './src/services/import/importService';
 import { saveChatHistory } from './src/services/supabase/supabaseClient';
@@ -32,6 +37,17 @@ LogBox.ignoreLogs([
   'RCTScrollViewComponentView implements focusItemsInRect',
   '[CoreHaptics] CHHapticPattern',
 ]);
+
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';
 type ImportMeta = {
@@ -42,6 +58,145 @@ type ImportMeta = {
   webSearch?: boolean;
   imageDataList?: string[];
 };
+
+type CompletedImport = {
+  result: ParseResult;
+  importMeta: ImportMeta | null;
+  importText: string;
+};
+
+type BackgroundImport = {
+  title: string;
+};
+
+const COMPLETED_IMPORT_STORAGE_KEY = 'atlas.completed-import';
+
+function importTheme(
+  meta: ImportMeta | null,
+  input: string,
+  events: ParseProgressEvent[] = [],
+  resultRegion?: string,
+): string {
+  let region = resultRegion?.split(',')[0].trim() || null;
+  if (!region) {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const value = events[index].data?.region ?? events[index].data?.inferred_region;
+      if (typeof value === 'string' && value.trim()) {
+        region = value.split(',')[0].trim();
+        break;
+      }
+    }
+  }
+  const source = /(?:reddit\.com|redd\.it)/i.test(input)
+    ? 'Reddit'
+    : meta?.mode === 'youtube_links'
+      ? 'YouTube'
+      : meta?.mode === 'image_scan'
+        ? 'image text'
+        : meta?.mode === 'find_image_places'
+          ? 'a photo'
+          : meta?.mode === 'smart_text'
+            ? 'your notes'
+            : meta?.mode === 'web_scrape'
+              ? 'a webpage'
+              : 'this link';
+  return region
+    ? `Extracting places from ${source} in ${region}`
+    : `Extracting places from ${source}`;
+}
+
+function importSuccessTitle(meta: ImportMeta | null, input: string, events: ParseProgressEvent[] = []): string {
+  const theme = importTheme(meta, input, events);
+  return theme.replace(/^Extracting /, '').replace(/^places/, 'Places');
+}
+
+async function requestImportNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('imports-ready', {
+      name: 'Imports ready',
+      importance: Notifications.AndroidImportance.HIGH,
+    });
+  }
+  const existing = await Notifications.getPermissionsAsync();
+  if (existing.status === 'granted') return true;
+  const requested = await Notifications.requestPermissionsAsync();
+  return requested.status === 'granted';
+}
+
+async function notifyImportReady(title: string): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const permission = await Notifications.getPermissionsAsync();
+  if (permission.status !== 'granted') return;
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Your places are ready',
+      body: title,
+      data: { type: 'import-ready' },
+      ...(Platform.OS === 'android' ? { channelId: 'imports-ready' } : {}),
+    },
+    trigger: null,
+  });
+}
+
+function ImportActivityIsland({ title, onOpen }: { title: string; onOpen: () => void }) {
+  const insets = useSafeAreaInsets();
+  const pulse = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 850, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0.35, duration: 850, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  return (
+    <TouchableOpacity
+      accessibilityLabel="Open import progress"
+      style={[importIslandStyles.activity, { top: insets.top + 7 }]}
+      onPress={onOpen}
+      activeOpacity={0.88}
+    >
+      <Animated.View style={[importIslandStyles.pulse, { opacity: pulse }]} />
+      <View style={importIslandStyles.activityCopy}>
+        <Text style={importIslandStyles.activityLabel}>ATLAS IS WORKING</Text>
+        <Text style={importIslandStyles.activityTitle} numberOfLines={1}>{title}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function ImportSuccessIsland({ title }: { title: string }) {
+  const insets = useSafeAreaInsets();
+  const reveal = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(reveal, { toValue: 1, friction: 8, tension: 95, useNativeDriver: true }).start();
+  }, [reveal]);
+
+  return (
+    <Animated.View style={[importIslandStyles.success, { top: insets.top + 7, opacity: reveal, transform: [{ scale: reveal.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] }) }] }]}>
+      <View style={importIslandStyles.successIcon}><Text style={importIslandStyles.successCheck}>✓</Text></View>
+      <View style={importIslandStyles.activityCopy}>
+        <Text style={importIslandStyles.activityLabel}>IMPORT COMPLETE</Text>
+        <Text style={importIslandStyles.activityTitle} numberOfLines={1}>{title}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+const importIslandStyles = StyleSheet.create({
+  activity: { position: 'absolute', zIndex: 220, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', width: 294, maxWidth: '76%', minHeight: 54, paddingHorizontal: 14, borderRadius: 27, backgroundColor: '#171A18', shadowColor: '#000', shadowOffset: { width: 0, height: 7 }, shadowOpacity: 0.18, shadowRadius: 16, elevation: 8 },
+  pulse: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#2CD889', marginRight: 10 },
+  activityCopy: { flex: 1, minWidth: 0 },
+  activityLabel: { color: 'rgba(255,255,255,0.62)', fontSize: 9, lineHeight: 12, fontWeight: '700', letterSpacing: 0 },
+  activityTitle: { marginTop: 1, color: '#FFFFFF', fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  success: { position: 'absolute', zIndex: 220, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', width: 254, maxWidth: '72%', minHeight: 54, paddingHorizontal: 14, borderRadius: 27, backgroundColor: '#173D2A', shadowColor: '#000', shadowOffset: { width: 0, height: 7 }, shadowOpacity: 0.18, shadowRadius: 16, elevation: 8 },
+  successIcon: { width: 24, height: 24, marginRight: 10, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2CD889' },
+  successCheck: { color: '#10301F', fontSize: 15, lineHeight: 18, fontWeight: '800' },
+});
 
 type BackendLocation = {
   name: string;
@@ -154,24 +309,183 @@ function AppContent() {
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [parseProgressEvents, setParseProgressEvents] = useState<ParseProgressEvent[]>([]);
   const [showChatHistory, setShowChatHistory] = useState(false);
+  const [completedImport, setCompletedImport] = useState<CompletedImport | null>(null);
+  const [backgroundImport, setBackgroundImport] = useState<BackgroundImport | null>(null);
+  const [completionCelebration, setCompletionCelebration] = useState<string | null>(null);
   const parseResultRef = useRef<ParseResult | null>(null);
-  const { chatHistory, setParsedPlaces, refreshSavedPlaces, setOverlay: setHomeOverlay, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setSelectedPlaceCoordinate, setSelectedPlaceId, setActiveSidekick } = useHome();
+  const appStateRef = useRef(AppState.currentState);
+  const completedImportRef = useRef<CompletedImport | null>(null);
+  const dismissActiveImportRef = useRef<(() => void) | null>(null);
+  const cancelActiveImportRef = useRef<(() => void) | null>(null);
+  const resumeActiveImportRef = useRef<(() => void) | null>(null);
+  const openCompletedImportRef = useRef<(() => void) | null>(null);
+  const openWhenImportReadyRef = useRef(false);
+  const resumingBackgroundImportRef = useRef(false);
+  const {
+    chatHistory,
+    savedPlaces,
+    setParsedPlaces,
+    setRecentlySavedPlaceIds,
+    refreshSavedPlaces,
+    setOverlay: setHomeOverlay,
+    addChatHistoryItem,
+    replaceChatHistoryItem,
+    setActiveHistoryItem,
+    setSelectedPlaceCoordinate,
+    setSelectedPlaceId,
+    setActiveSidekick,
+  } = useHome();
+
+  const openCompletedImport = () => {
+    const completed = completedImportRef.current;
+    if (!completed) return;
+    parseResultRef.current = completed.result;
+    setParsedPlaces(completed.result.places);
+    setImportMeta(completed.importMeta);
+    setImportText(completed.importText);
+    completedImportRef.current = null;
+    setCompletedImport(null);
+    void AsyncStorage.removeItem(COMPLETED_IMPORT_STORAGE_KEY);
+    setOverlay('save');
+  };
+  openCompletedImportRef.current = openCompletedImport;
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState;
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!completionCelebration) return;
+    const timeoutId = setTimeout(() => {
+      setCompletionCelebration(null);
+      Alert.alert(
+        'Places added to Chat History',
+        `${completionCelebration} is ready to revisit in Chat History.`,
+        [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Open Chat History', onPress: () => setShowChatHistory(true) },
+        ],
+      );
+    }, 10_000);
+    return () => clearTimeout(timeoutId);
+  }, [completionCelebration]);
+
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(COMPLETED_IMPORT_STORAGE_KEY)
+      .then((value) => {
+        if (!mounted || !value) return;
+        const parsed = JSON.parse(value) as CompletedImport;
+        completedImportRef.current = parsed;
+        setCompletedImport(parsed);
+        if (openWhenImportReadyRef.current) {
+          openWhenImportReadyRef.current = false;
+          openCompletedImportRef.current?.();
+        }
+      })
+      .catch(() => undefined);
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const openFromNotification = () => {
+      if (completedImportRef.current) {
+        openCompletedImportRef.current?.();
+      } else {
+        openWhenImportReadyRef.current = true;
+      }
+    };
+    if (Notifications.getLastNotificationResponse()?.notification.request.content.data?.type === 'import-ready') {
+      openFromNotification();
+    }
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      if (response.notification.request.content.data?.type === 'import-ready') {
+        openFromNotification();
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   // Run the parse while the Analyzing screen is showing; advance to the Save
   // screen when it resolves (unless the user cancelled out of analyzing).
   useEffect(() => {
     if (overlay !== 'analyzing') return;
+    if (resumingBackgroundImportRef.current) {
+      resumingBackgroundImportRef.current = false;
+      return;
+    }
     let cancelled = false;
+    let dismissed = false;
+    let requestId: string | null = null;
     setParseProgressEvents([]);
     const handleProgress: ParseProgressHandler = (progress) => {
-      if (!cancelled) setParseProgressEvents(progress.events);
+      if (cancelled) return;
+      setParseProgressEvents(progress.events);
+      if (dismissed) {
+        setBackgroundImport({ title: importTheme(importMeta, importText, progress.events) });
+      }
     };
+    const handleRequestId: ParseRequestHandler = (id) => {
+      requestId = id;
+      if (cancelled) void cancelParseRequest(id);
+    };
+    const completeImport = (result: ParseResult) => {
+      if (cancelled) return;
+      if (dismissed || appStateRef.current !== 'active') {
+        const completed: CompletedImport = { result, importMeta, importText };
+        setBackgroundImport(null);
+        if (dismissed && appStateRef.current === 'active') {
+          setCompletionCelebration(importSuccessTitle(importMeta, importText, parseProgressEvents));
+          return;
+        }
+        completedImportRef.current = completed;
+        setCompletedImport(completed);
+        void AsyncStorage.setItem(COMPLETED_IMPORT_STORAGE_KEY, JSON.stringify(completed));
+        if (appStateRef.current !== 'active') {
+          void notifyImportReady(result.sourceTitle);
+        }
+        return;
+      }
+      parseResultRef.current = result;
+      setParsedPlaces(result.places);
+      setTimeout(() => {
+        if (!cancelled && !dismissed) setOverlay('save');
+      }, 2000);
+    };
+    const dismiss = () => {
+      dismissed = true;
+      void requestImportNotificationPermission();
+      setBackgroundImport({ title: importTheme(importMeta, importText, parseProgressEvents) });
+      if (parseResultRef.current) {
+        setBackgroundImport(null);
+        setCompletionCelebration(importSuccessTitle(importMeta, importText, parseProgressEvents));
+      }
+      setOverlay('none');
+    };
+    const cancel = () => {
+      cancelled = true;
+      parseResultRef.current = null;
+      setBackgroundImport(null);
+      if (requestId) void cancelParseRequest(requestId);
+      setOverlay('none');
+    };
+    const resume = () => {
+      dismissed = false;
+      setBackgroundImport(null);
+    };
+    dismissActiveImportRef.current = dismiss;
+    cancelActiveImportRef.current = cancel;
+    resumeActiveImportRef.current = resume;
 
     // Any Links mode: Universal Web Agent reads HTTP content, then renders
     // JavaScript pages with Playwright when the server response is an app shell.
     if (importMeta?.mode === 'web_scrape') {
       const sourceUrl = importMeta?.rawInput || importText;
-      scanAnyLink(sourceUrl, handleProgress)
+      scanAnyLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
           if (cancelled || !result) return;
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
@@ -179,8 +493,6 @@ function AppContent() {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          parseResultRef.current = adaptedResult;
-          setParsedPlaces(adaptedResult.places);
           const tempHistoryId = addChatHistoryItem({
             title: effectiveTitle,
             sourceUrl,
@@ -188,9 +500,7 @@ function AppContent() {
             places: adaptedResult.places,
             sourceType: 'any_links',
           });
-          setTimeout(() => {
-            if (!cancelled) setOverlay('save');
-          }, 2000);
+          completeImport(adaptedResult);
         })
         .catch((err) => {
           if (!cancelled) {
@@ -204,7 +514,7 @@ function AppContent() {
 
     if (importMeta?.mode === 'youtube_links') {
       const sourceUrl = importMeta?.rawInput || importText;
-      parseYoutubeLink(sourceUrl, handleProgress)
+      parseYoutubeLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
           if (cancelled || !result) return;
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
@@ -212,8 +522,6 @@ function AppContent() {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          parseResultRef.current = adaptedResult;
-          setParsedPlaces(adaptedResult.places);
           const tempHistoryId = addChatHistoryItem({
             title: effectiveTitle,
             sourceUrl,
@@ -242,9 +550,7 @@ function AppContent() {
             })
             .catch((err) => console.warn('[App] saveChatHistory error:', err));
 
-          setTimeout(() => {
-            if (!cancelled) setOverlay('save');
-          }, 2000);
+          completeImport(adaptedResult);
         })
         .catch((err) => {
           if (!cancelled) {
@@ -256,42 +562,22 @@ function AppContent() {
       return;
     }
 
-      // Image scan mode: call scan_images_base64 API
+    // Image text recognition: OCR and downstream location analysis stream
+    // through the same progress channel as link imports.
     if (importMeta?.mode === 'image_scan') {
-        const apiBase = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
-      fetch(`${apiBase}/scan_images_base64`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ images: importMeta?.imageDataList || JSON.parse(importText) }),
-      })
-        .then(async (response) => {
-          if (cancelled) return;
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.detail || `HTTP ${response.status}`);
-          }
-          return response.json();
-        })
+      const imageDataList = importMeta?.imageDataList || JSON.parse(importText);
+      scanImagesForTextPlaces(imageDataList, handleProgress, handleRequestId)
         .then((result) => {
           if (cancelled || !result) return;
-          const adaptedResult = buildParseResult(
-            result,
-            'scan',
-            'Scanned places from image',
-          );
-          parseResultRef.current = adaptedResult;
-          setParsedPlaces(adaptedResult.places);
-          const effectiveTitle = result.title || 'Scanned places from image';
+          const effectiveTitle = result.sourceTitle || 'Scanned places from image';
           addChatHistoryItem({
             title: effectiveTitle,
             sourceUrl: 'image_scan',
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
+            locationCount: result.places.length,
+            places: result.places,
             sourceType: 'image_scan',
           });
-          setTimeout(() => {
-            if (!cancelled) setOverlay('save');
-          }, 2000);
+          completeImport(result);
         })
         .catch((err) => {
           if (!cancelled) {
@@ -303,7 +589,8 @@ function AppContent() {
       return;
     }
 
-    // Find Image Places mode: call find_image_places API
+    // Landmark recognition uses the shared parse client so its real vision
+    // stages appear on the analyzing screen as they happen.
     if (importMeta?.mode === 'find_image_places') {
       const imageData = importMeta?.imageDataList?.[0];
       if (!imageData) {
@@ -311,25 +598,11 @@ function AppContent() {
         setOverlay('import');
         return;
       }
-      const apiBase = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
-      fetch(`${apiBase}/find_image_places`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: imageData }),
-      })
-        .then(async (response) => {
-          if (cancelled) return;
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.detail || `HTTP ${response.status}`);
-          }
-          return response.json();
-        })
+      findImagePlace(imageData, handleProgress, handleRequestId)
         .then((result) => {
           if (cancelled || !result) return;
-          const locations = result.locations || [];
-          const firstLoc = locations[0] || {};
-          const isUnknown = !firstLoc.latitude && !firstLoc.longitude;
+          const firstPlace = result.places[0];
+          const isUnknown = !firstPlace?.latitude && !firstPlace?.longitude;
           if (isUnknown) {
             Alert.alert(
               'Could Not Identify Location',
@@ -338,24 +611,15 @@ function AppContent() {
             setOverlay('import');
             return;
           }
-          const adaptedResult = buildParseResult(
-            result,
-            'find_image',
-            'Identified location from image',
-          );
-          parseResultRef.current = adaptedResult;
-          setParsedPlaces(adaptedResult.places);
-          const effectiveTitle = result.title || 'Identified location from image';
+          const effectiveTitle = result.sourceTitle || 'Identified location from image';
           addChatHistoryItem({
             title: effectiveTitle,
             sourceUrl: 'find_image_places',
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
+            locationCount: result.places.length,
+            places: result.places,
             sourceType: 'find_image_places',
           });
-          setTimeout(() => {
-            if (!cancelled) setOverlay('save');
-          }, 2000);
+          completeImport(result);
         })
         .catch((err) => {
           if (!cancelled) {
@@ -367,10 +631,10 @@ function AppContent() {
       return;
     }
 
-    const runner =
+    const runner: (text: string, onProgress?: ParseProgressHandler, onRequestId?: ParseRequestHandler) => Promise<ParseResult> =
       importMeta?.mode === 'smart_text'
-        ? (text: string, onProgress?: ParseProgressHandler) =>
-            parseText(text, { webSearch: importMeta?.webSearch }, onProgress)
+        ? (text, onProgress, onRequestId) =>
+            parseText(text, { webSearch: importMeta?.webSearch }, onProgress, onRequestId)
         : importMeta?.mode === 'atlas_discover'
         ? discoverFromAtlasQuery
         : parseInput;
@@ -385,7 +649,7 @@ function AppContent() {
           : 'link'
         : 'text';
 
-    runner(importText, handleProgress)
+    runner(importText, handleProgress, handleRequestId)
       .then((result) => {
         if (!cancelled) {
           const effectiveTitle = importMeta?.title || result.sourceTitle || importText;
@@ -395,8 +659,6 @@ function AppContent() {
             sourceTitle: effectiveTitle,
           };
           // 保存解析结果到 ref 和 HomeContext
-          parseResultRef.current = adaptedResult;
-          setParsedPlaces(adaptedResult.places);
 
           // 添加到 Chat History（前端缓存）
           const tempHistoryId = addChatHistoryItem({
@@ -428,9 +690,7 @@ function AppContent() {
             })
             .catch((err) => console.warn('[App] saveChatHistory error:', err));
 
-          setTimeout(() => {
-            if (!cancelled) setOverlay('save');
-          }, 2000);
+          completeImport(adaptedResult);
         }
       })
       .catch((err) => {
@@ -450,7 +710,12 @@ function AppContent() {
         }
       });
     return () => {
-      cancelled = true;
+      if (!cancelled) dismissed = true;
+      if (!dismissed) {
+        dismissActiveImportRef.current = null;
+        cancelActiveImportRef.current = null;
+        resumeActiveImportRef.current = null;
+      }
     };
   }, [overlay, importText, importMeta, setParsedPlaces, addChatHistoryItem, replaceChatHistoryItem, setActiveSidekick]);
 
@@ -458,9 +723,17 @@ function AppContent() {
 
   return (
     <>
+      <MapErrorBoundary>
+        <HomeScreen
+          onOpenImport={() => setOverlay('import')}
+          onOpenChatHistory={() => setShowChatHistory(true)}
+        />
+      </MapErrorBoundary>
+
       {overlay === 'save' && parseResult ? (
         <SaveScreen
           result={parseResult}
+          sessionTheme={importTheme(importMeta, importText, parseProgressEvents, parseResult.region)}
           onClose={() => {
             setActiveHistoryItem(null);
             setParsedPlaces([]);
@@ -473,14 +746,46 @@ function AppContent() {
           onSave={async (ids) => {
             try {
               const selected = parseResult.places.filter((p) => ids.includes(p.id));
+              const existingIds = new Set(savedPlaces.map((place) => place.id));
               const saved = await savePlaces(selected, {
                 region: parseResult.region,
                 url: importMeta?.sourceUrl || importText,
               });
-              // 不保留解析结果，让地图回到默认位置（西雅图）
+              // The home list owns the saved-place presentation. Keep only the
+              // rows inserted by this action marked for its one-time entrance.
+              const newlySavedIds = saved
+                .filter((place) => !existingIds.has(place.id))
+                .map((place) => place.id);
+              setRecentlySavedPlaceIds(newlySavedIds);
               setParsedPlaces([]);
-              // 刷新 MyPlaces 列表
               await refreshSavedPlaces();
+              console.log(`Saved ${saved.length} places to Supabase`);
+            } catch (e) {
+              console.error('Save failed:', e);
+            }
+            setActiveHistoryItem(null);
+            setActiveSidekick('none');
+            setSelectedPlaceCoordinate(null);
+            setSelectedPlaceId(null);
+            setImportMeta(null);
+            parseResultRef.current = null;
+            setOverlay('none');
+          }}
+
+          onSaveAndAskAI={async (ids) => {
+            try {
+              const selected = parseResult.places.filter((p) => ids.includes(p.id));
+              const existingIds = new Set(savedPlaces.map((place) => place.id));
+              const saved = await savePlaces(selected, {
+                region: parseResult.region,
+                url: importMeta?.sourceUrl || importText,
+              });
+              const newlySavedIds = saved
+                .filter((place) => !existingIds.has(place.id))
+                .map((place) => place.id);
+              setRecentlySavedPlaceIds(newlySavedIds);
+              await refreshSavedPlaces();
+
               const sourceUrl = importMeta?.sourceUrl || importText;
               const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
               const nextHistoryItem = chatHistory.find(
@@ -488,40 +793,24 @@ function AppContent() {
                   item.sourceUrl === sourceUrl &&
                   item.title === effectiveTitle &&
                   item.locationCount === parseResult.places.length,
-              ) ?? chatHistory[0] ?? null;
-              if (nextHistoryItem) {
-                setActiveHistoryItem(nextHistoryItem);
-                setActiveSidekick('aiChat');
-              }
-              setSelectedPlaceCoordinate(parseResult.centerCoordinate);
-              console.log(`Saved ${saved.length} places to Supabase`);
+              ) ?? null;
+              setParsedPlaces(selected);
+              setActiveHistoryItem(nextHistoryItem);
+              console.log(`Saved ${saved.length} places before opening AI chat`);
             } catch (e) {
-              console.error('Save failed:', e);
+              console.error('Save before AI chat failed:', e);
             }
             setSelectedPlaceId(null);
+            setSelectedPlaceCoordinate(null);
             setImportMeta(null);
+            parseResultRef.current = null;
             setOverlay('none');
-          }}
-
-          onAddToPlan={(ids) => {
-            const selected = parseResult.places.filter((p) => ids.includes(p.id));
-            // 保存解析结果到 Context
-            setParsedPlaces(selected);
-            setActiveHistoryItem(null);
-            // 关闭保存界面，打开 CreatePlan 界面
-            setOverlay('none');
-            // 使用 HomeContext overlay 触发 CreatePlan
-            setHomeOverlay({ kind: 'createPlan' });
+            // First let the new rows complete their Bookmarks entrance, then
+            // travel the liquid selector to AI before opening the chat sheet.
+            setTimeout(() => setActiveSidekick('aiChat'), 820);
           }}
         />
-      ) : (
-        <>
-          <MapErrorBoundary>
-            <HomeScreen
-              onOpenImport={() => setOverlay('import')}
-              onOpenChatHistory={() => setShowChatHistory(true)}
-            />
-          </MapErrorBoundary>
+      ) : null}
 
           {/* "Add places" sheet — pulls up over the home. */}
           {overlay === 'import' && (
@@ -573,17 +862,26 @@ function AppContent() {
           {overlay === 'analyzing' && (
             <AnalyzingScreen
               url={importText}
+              mode={importMeta?.mode}
               progressEvents={parseProgressEvents}
-              notice={
-                importMeta?.mode === 'web_scrape'
-                  ? 'Any Links uses a pure vision pipeline, so please allow extra time to improve parsing accuracy.'
-                  : undefined
-              }
-              onCancel={() => {
-                setImportMeta(null);
-                setOverlay('none');
+              onDismiss={() => dismissActiveImportRef.current?.()}
+              onCancel={() => cancelActiveImportRef.current?.()}
+            />
+          )}
+
+          {backgroundImport && overlay !== 'analyzing' && (
+            <ImportActivityIsland
+              title={backgroundImport.title}
+              onOpen={() => {
+                resumingBackgroundImportRef.current = true;
+                resumeActiveImportRef.current?.();
+                setOverlay('analyzing');
               }}
             />
+          )}
+
+          {completionCelebration && (
+            <ImportSuccessIsland title={completionCelebration} />
           )}
 
           {/* Chat history list — opened from ImportScreen's header button, rendered
@@ -608,8 +906,6 @@ function AppContent() {
               }}
             />
           )}
-        </>
-      )}
     </>
   );
 }

@@ -133,7 +133,10 @@ async def _parse_youtube(state: AtlasState) -> AtlasState:
 async def _find_image_places(state: AtlasState) -> AtlasState:
     from backend.services.find_image_places_service import find_image_place
 
-    state["result"] = await find_image_place(state.get("image", "") or "")
+    state["result"] = await find_image_place(
+        state.get("image", "") or "",
+        request_id=state.get("request_id"),
+    )
     return state
 
 

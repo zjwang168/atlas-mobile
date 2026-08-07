@@ -1,17 +1,17 @@
 import { Badge } from '@/components/ui/badge';
-import { MapPinCover } from '@/components/map-pin-cover/MapPinCover';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { memo, useRef } from 'react';
+import { memo, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
-import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { FadeInUp, SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
 type PlaceCardProps = {
   item: PlaceDetail;
+  recentlyAdded?: boolean;
   onPress?: (place: PlaceDetail) => void;
   onDelete: (id: string) => void;
 };
@@ -42,8 +42,9 @@ function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; o
 /** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
     frames) don't force every visible row to re-render — only rows whose
     own props actually changed do. */
-export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: PlaceCardProps) {
+export const PlaceCard = memo(function PlaceCard({ item, recentlyAdded = false, onPress, onDelete }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
+  const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const { overlay, setOverlay } = useHome();
 
   const handleDelete = () => {
@@ -59,7 +60,10 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
   };
 
   return (
-    <View style={{ paddingHorizontal: 16 }}>
+    <Reanimated.View
+      entering={recentlyAdded ? FadeInUp.springify().damping(16).stiffness(260).mass(0.56) : undefined}
+      style={{ paddingHorizontal: 16 }}
+    >
       <ReanimatedSwipeable
         ref={swipeableRef}
         friction={2}
@@ -87,26 +91,24 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
                 {item.summary}
               </Text>
             </View>
-            <View
-              style={{
-                width: 86,
-                height: 86,
-                borderRadius: 16,
-                overflow: 'hidden',
-                backgroundColor: '#e5e5ea',
-                flexShrink: 0,
-              }}
-            >
-              {item.thumbnailUrl ? (
+            {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
+              <View
+                style={{
+                  width: 86,
+                  height: 86,
+                  borderRadius: 16,
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                }}
+              >
                 <Image
                   source={{ uri: item.thumbnailUrl }}
                   style={{ width: '100%', height: '100%' }}
                   resizeMode="cover"
+                  onError={() => setFailedImageUri(item.thumbnailUrl)}
                 />
-              ) : (
-                <MapPinCover pinSize={24} />
-              )}
-            </View>
+              </View>
+            ) : null}
           </View>
         </TouchableOpacity>
       </ReanimatedSwipeable>
@@ -128,7 +130,7 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
           ))}
         </ScrollView>
       ) : null}
-    </View>
+    </Reanimated.View>
   );
 });
 

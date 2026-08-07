@@ -6,6 +6,7 @@ import BottomSheet, {
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Reanimated, { FadeInUp } from 'react-native-reanimated';
 import {
   Alert,
   Animated,
@@ -22,6 +23,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { getLinkPreview, type LinkPreview } from '../../../services/api/apiService';
 import { typography } from '../../../theme/typography';
 
 export type ImportMode =
@@ -104,6 +106,8 @@ function resolveSocialMode(value: string, fallback: SocialMode): SocialMode {
   return fallback;
 }
 
+type ResolvedLinkPreview = LinkPreview & { url: string };
+
 type SlidingSegmentedControlProps = {
   labels: readonly [string, string];
   selectedIndex: 0 | 1;
@@ -174,6 +178,29 @@ function SlidingSegmentedControl({
   );
 }
 
+function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
+  const isYouTube = preview.kind === 'youtube';
+  const isReddit = preview.kind === 'reddit';
+  return (
+    <View style={styles.linkPreviewCard}>
+      {preview.image_url ? (
+        <Image source={{ uri: preview.image_url }} style={styles.linkPreviewImage} resizeMode="cover" />
+      ) : (
+        <View style={[styles.linkPreviewFallback, isYouTube && styles.linkPreviewYoutubeFallback, isReddit && styles.linkPreviewRedditFallback]}>
+          <Ionicons name={isReddit ? 'logo-reddit' : isYouTube ? 'logo-youtube' : 'globe-outline'} size={25} color={isYouTube ? '#FF0000' : isReddit ? '#FF4500' : COLOR.primary} />
+        </View>
+      )}
+      <View style={styles.linkPreviewCopy}>
+        <View style={styles.linkPreviewLabelRow}>
+          <Ionicons name={isReddit ? 'logo-reddit' : isYouTube ? 'logo-youtube' : 'link-outline'} size={13} color={isYouTube ? '#FF0000' : isReddit ? '#FF4500' : COLOR.textSecondary} />
+          <Text style={styles.linkPreviewLabel}>{isYouTube ? 'YouTube video' : isReddit ? 'Reddit post' : preview.hostname}</Text>
+        </View>
+        <Text style={styles.linkPreviewTitle} numberOfLines={2}>{preview.title}</Text>
+      </View>
+    </View>
+  );
+}
+
 function MenuCardIcon({ type }: { type: MenuCard['icon'] }) {
   if (type === 'social') {
     return (
@@ -221,6 +248,8 @@ export default function ImportScreen({
   const inputRef = useRef<TextInput>(null);
   const openingDetailRef = useRef(false);
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keyboardVisibleRef = useRef(false);
+  const inputFocusedRef = useRef(false);
   const { height: windowHeight } = useWindowDimensions();
 
   const [section, setSection] = useState<ImportSection>('menu');
@@ -233,6 +262,7 @@ export default function ImportScreen({
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [linkPreview, setLinkPreview] = useState<ResolvedLinkPreview | null>(null);
 
   const snapPoints = useMemo(
     () =>
@@ -243,13 +273,15 @@ export default function ImportScreen({
   );
 
   useEffect(() => {
-    const showSubscription = Keyboard.addListener('keyboardWillShow', (event) => {
-      Keyboard.scheduleLayoutAnimation(event);
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      keyboardVisibleRef.current = true;
       setKeyboardVisible(true);
       setKeyboardHeight(event.endCoordinates.height);
     });
-    const hideSubscription = Keyboard.addListener('keyboardWillHide', (event) => {
-      Keyboard.scheduleLayoutAnimation(event);
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      keyboardVisibleRef.current = false;
       setKeyboardVisible(false);
       setKeyboardHeight(0);
     });
@@ -291,12 +323,39 @@ export default function ImportScreen({
     };
   }, [section]);
 
+  useEffect(() => {
+    const supportsPreview = section === 'social' || section === 'links';
+    const url = text.trim();
+    if (!supportsPreview || !looksLikeUrl(url)) {
+      setLinkPreview(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      getLinkPreview(url, controller.signal)
+        .then((preview) => {
+          if (!controller.signal.aborted) setLinkPreview({ ...preview, url });
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setLinkPreview(null);
+        });
+    }, 350);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [section, text]);
+
   const openSection = useCallback(
     (nextSection: Exclude<ImportSection, 'menu'>) => {
       Keyboard.dismiss();
+      inputFocusedRef.current = false;
       openingDetailRef.current = true;
       setSection(nextSection);
       setText('');
+      setLinkPreview(null);
       setImages([]);
 
       if (nextSection === 'social') setSelectedMode(socialMode);
@@ -312,10 +371,12 @@ export default function ImportScreen({
   const returnToMenu = useCallback(() => {
     Keyboard.dismiss();
     if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    inputFocusedRef.current = false;
     openingDetailRef.current = false;
     setSection('menu');
     setSelectedMode(null);
     setText('');
+    setLinkPreview(null);
     setImages([]);
     requestAnimationFrame(() => sheetRef.current?.snapToIndex(0));
   }, []);
@@ -437,12 +498,16 @@ export default function ImportScreen({
       if (
         index === 0 &&
         section !== 'menu' &&
-        !openingDetailRef.current
+        !openingDetailRef.current &&
+        !keyboardVisibleRef.current &&
+        !inputFocusedRef.current
       ) {
         setSection('menu');
         setSelectedMode(null);
         setText('');
+        setLinkPreview(null);
         setImages([]);
+        inputFocusedRef.current = false;
       }
     },
     [onClose, scheduleInputFocus, section],
@@ -598,6 +663,12 @@ export default function ImportScreen({
               </Pressable>
             ) : null}
 
+            {linkPreview && linkPreview.url === text.trim() ? (
+              <Reanimated.View entering={FadeInUp.duration(220)}>
+                <LinkPreviewCard preview={linkPreview} />
+              </Reanimated.View>
+            ) : null}
+
             <View style={[styles.inputRow, isText && styles.inputRowMultiline]}>
               <Ionicons
                 name="add"
@@ -623,6 +694,12 @@ export default function ImportScreen({
                 }
                 returnKeyType={isText ? 'default' : 'go'}
                 onSubmitEditing={isText ? undefined : handleSubmit}
+                onFocus={() => {
+                  inputFocusedRef.current = true;
+                }}
+                onBlur={() => {
+                  inputFocusedRef.current = false;
+                }}
                 style={[
                   styles.input,
                   isText ? styles.inputMultiline : styles.inputSingleLine,
@@ -793,6 +870,10 @@ export default function ImportScreen({
         onChange={handleSheetChange}
         enablePanDownToClose
         enableOverDrag={false}
+        keyboardBehavior="extend"
+        keyboardBlurBehavior="none"
+        enableBlurKeyboardOnGesture={false}
+        android_keyboardInputMode="adjustPan"
         backdropComponent={renderBackdrop}
         handleIndicatorStyle={styles.handleIndicator}
         backgroundStyle={styles.sheetBackground}
@@ -1071,6 +1152,38 @@ const styles = StyleSheet.create({
   webSearchToggleTextActive: {
     color: '#FFFFFF',
   },
+  linkPreviewCard: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLOR.border,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    boxShadow: '0 6px 20px rgba(0,0,0,0.08)',
+  },
+  linkPreviewImage: {
+    width: 92,
+    height: 60,
+    borderRadius: 5,
+    backgroundColor: COLOR.surfaceSecondary,
+  },
+  linkPreviewFallback: {
+    width: 60,
+    height: 60,
+    borderRadius: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E8F9EF',
+  },
+  linkPreviewYoutubeFallback: { backgroundColor: '#FFF0F0' },
+  linkPreviewRedditFallback: { backgroundColor: '#FFF0EA' },
+  linkPreviewCopy: { flex: 1, minWidth: 0, gap: 4, paddingRight: 4 },
+  linkPreviewLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  linkPreviewLabel: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 16, fontWeight: '600', color: COLOR.textSecondary },
+  linkPreviewTitle: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: COLOR.textPrimary },
   inputRow: {
     minHeight: 58,
     borderRadius: 29,

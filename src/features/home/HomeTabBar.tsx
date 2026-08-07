@@ -6,8 +6,8 @@ import {
 import { BlurView } from 'expo-blur';
 import type { Icon } from 'phosphor-react-native';
 import { BookmarkSimpleIcon } from 'phosphor-react-native/src/icons/BookmarkSimple';
-import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { SparkleIcon } from 'phosphor-react-native/src/icons/Sparkle';
 import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
 import { UserIcon } from 'phosphor-react-native/src/icons/User';
 import { memo, useCallback, useEffect, useRef } from 'react';
@@ -53,31 +53,31 @@ type TabItem = {
 
 const TAB_ITEMS: TabItem[] = [
   {
+    key: TAB_CHAT,
+    label: 'AI',
+    icon: SparkleIcon,
+    action: 'chat',
+  },
+  {
     key: TAB_PLACES,
-    label: 'My Places',
+    label: 'Bookmarks',
     icon: BookmarkSimpleIcon,
   },
   {
-    key: TAB_PLAN,
-    label: 'My Plan',
-    icon: SuitcaseSimpleIcon,
-  },
-  {
     key: TAB_ADD,
-    label: 'Add',
+    label: 'Add places',
     icon: PlusIcon,
     action: 'add',
+  },
+  {
+    key: TAB_PLAN,
+    label: 'Plan',
+    icon: SuitcaseSimpleIcon,
   },
   {
     key: TAB_PROFILE,
     label: 'Profile',
     icon: UserIcon,
-  },
-  {
-    key: TAB_CHAT,
-    label: 'Chat',
-    icon: ChatTeardropIcon,
-    action: 'chat',
   },
 ];
 

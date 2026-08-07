@@ -20,6 +20,7 @@ _PARSE_CACHE: OrderedDict[str, dict] = OrderedDict()
 _MISC_CACHE: OrderedDict[str, dict] = OrderedDict()
 _MAX_PARSE_CACHE_SIZE = 100
 _MAX_MISC_CACHE_SIZE = 500
+_PARSE_CACHE_VERSION = 2
 _CACHE_DIR = Path(
     os.environ.get(
         "ATLAS_CACHE_DIR",
@@ -80,7 +81,9 @@ def _load_from_disk() -> None:
         print(f"[cache] Failed to load disk cache: {exc}")
         return
 
-    parse_entries = payload.get("parse", [])
+    # Parsed URLs are coupled to the reader/extraction policy. Do not replay
+    # results produced before the structured-list reader was introduced.
+    parse_entries = payload.get("parse", []) if payload.get("version") == _PARSE_CACHE_VERSION else []
     misc_entries = payload.get("misc", [])
 
     for item in parse_entries:
@@ -100,7 +103,7 @@ def _load_from_disk() -> None:
 
 def _persist_to_disk() -> None:
     payload = {
-        "version": 1,
+        "version": _PARSE_CACHE_VERSION,
         "saved_at": time.time(),
         "parse": list(_PARSE_CACHE.items()),
         "misc": list(_MISC_CACHE.items()),

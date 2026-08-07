@@ -38,6 +38,7 @@ export default {
     },
     plugins: [
       'expo-font',
+      'expo-notifications',
       [
         '@rnmapbox/maps',
         {
