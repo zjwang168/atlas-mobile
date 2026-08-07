@@ -68,7 +68,11 @@ function CategoryPillsRow() {
   );
 }
 
-export default function Atlas() {
+type AtlasProps = {
+  verticalScrollEnabled?: boolean;
+};
+
+export default function Atlas({ verticalScrollEnabled = true }: AtlasProps) {
   const { atlases } = useHome();
 
   if (atlases.length === 0) {
@@ -87,7 +91,10 @@ export default function Atlas() {
   return (
     <View style={{ flex: 1 }}>
       <CategoryPillsRow />
-      <ScrollView contentContainerStyle={{ paddingVertical: 0 }}>
+      <ScrollView
+        scrollEnabled={verticalScrollEnabled}
+        contentContainerStyle={{ paddingVertical: 0 }}
+      >
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 16, marginTop: 8, marginBottom: 80, }}>
           {atlases.map((atlas) => (
             <AtlasCard key={atlas.id} atlasId={atlas.id} emoji={atlas.emoji} title={atlas.title} />
