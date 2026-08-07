@@ -113,6 +113,9 @@ export const CHAT_SOURCE_TYPES = [
   'find_image_places',
   'reddit_links',
   'youtube_links',
+  'tiktok_links',
+  'instagram_reels',
+  'facebook_reels',
   'any_links',
 ] as const;
 
@@ -138,6 +141,15 @@ function inferChatSourceType(item: { sourceUrl?: string; title?: string; sourceT
   if (title.includes('youtube')) {
     return 'youtube_links';
   }
+  if (title.includes('tiktok')) {
+    return 'tiktok_links';
+  }
+  if (title.includes('instagram')) {
+    return 'instagram_reels';
+  }
+  if (title.includes('facebook')) {
+    return 'facebook_reels';
+  }
   if (title.includes('reddit')) {
     return 'reddit_links';
   }
@@ -149,6 +161,15 @@ function inferChatSourceType(item: { sourceUrl?: string; title?: string; sourceT
   }
   if (haystack.includes('youtube.com') || haystack.includes('youtu.be') || haystack.includes('youtube')) {
     return 'youtube_links';
+  }
+  if (haystack.includes('tiktok.com') || haystack.includes('tiktok')) {
+    return 'tiktok_links';
+  }
+  if (haystack.includes('instagram.com/reel') || haystack.includes('instagram.com/reels')) {
+    return 'instagram_reels';
+  }
+  if (haystack.includes('facebook.com') || haystack.includes('fb.watch')) {
+    return 'facebook_reels';
   }
   if (haystack.includes('reddit.com') || haystack.includes('reddit')) {
     return 'reddit_links';

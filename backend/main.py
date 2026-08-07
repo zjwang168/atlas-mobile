@@ -212,6 +212,21 @@ class YouTubeParseRequest(BaseModel):
     request_id: Optional[str] = None
 
 
+class TikTokParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class InstagramReelParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class FacebookReelParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
 class LinkPreviewRequest(BaseModel):
     url: str
 
@@ -397,6 +412,129 @@ async def parse_youtube(req: YouTubeParseRequest):
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"YouTube parse failed: {e}")
+
+
+@app.post("/parse_tiktok", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_tiktok(req: TikTokParseRequest):
+    """Identify places from a public TikTok video's caption and metadata."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No TikTok URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening TikTok video.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_tiktok",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_tiktok",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "tiktok_links"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"TikTok parse failed: {e}")
+
+
+@app.post("/parse_instagram_reel", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_instagram_reel(req: InstagramReelParseRequest):
+    """Identify places from a public Instagram Reel and optional transcript."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No Instagram Reel URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening Instagram Reel.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_instagram_reel",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_instagram_reel",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "instagram_reels"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Instagram Reel parse failed: {e}")
+
+
+@app.post("/parse_facebook_reel", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_facebook_reel(req: FacebookReelParseRequest):
+    """Identify places from a public Facebook Reel or share video."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No Facebook Reel URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening Facebook Reel.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_facebook_reel",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_facebook_reel",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "facebook_reels"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Facebook Reel parse failed: {e}")
 
 
 @app.post("/parse_link", response_model=ParseResponse,

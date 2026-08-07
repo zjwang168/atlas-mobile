@@ -36,6 +36,25 @@ def _is_reddit(url: str) -> bool:
     return host == "reddit.com" or host.endswith(".reddit.com") or host == "redd.it"
 
 
+def _is_tiktok(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "tiktok.com" or host.endswith(".tiktok.com")
+
+
+def _is_instagram_reel(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in {"instagram.com", "instagr.am"} and not host.endswith(".instagram.com"):
+        return False
+    parts = [part.lower() for part in parsed.path.split("/") if part]
+    return len(parts) >= 2 and parts[0] in {"reel", "reels"}
+
+
+def _is_facebook(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "facebook.com" or host.endswith(".facebook.com") or host == "fb.watch"
+
+
 def _meta(soup: BeautifulSoup, key: str) -> str:
     tag = soup.find("meta", attrs={"property": key}) or soup.find("meta", attrs={"name": key})
     return html.unescape(str(tag.get("content", "")).strip()) if tag else ""
@@ -79,6 +98,38 @@ async def build_link_preview(url: str) -> dict:
         except Exception:
             pass
         return {"kind": "reddit", "title": title or "Reddit post", "image_url": None, "hostname": "reddit.com"}
+
+    if _is_tiktok(normalized):
+        title = ""
+        image_url = None
+        try:
+            endpoint = "https://www.tiktok.com/oembed?" + urlencode({"url": normalized})
+            async with httpx.AsyncClient(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}, follow_redirects=True) as client:
+                response = await client.get(endpoint)
+                if response.is_success:
+                    payload = response.json()
+                    title = str(payload.get("title", "")).strip()
+                    image_url = str(payload.get("thumbnail_url", "")).strip() or None
+        except Exception:
+            pass
+        return {"kind": "tiktok", "title": title or "TikTok video", "image_url": image_url, "hostname": "tiktok.com"}
+
+    if _is_instagram_reel(normalized):
+        title = ""
+        image_url = None
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}, follow_redirects=True) as client:
+                response = await client.get(normalized)
+                if response.is_success:
+                    soup = BeautifulSoup(response.text, "lxml")
+                    title = _meta(soup, "og:title") or _meta(soup, "twitter:title")
+                    image_url = _meta(soup, "og:image") or _meta(soup, "twitter:image") or None
+        except Exception:
+            pass
+        return {"kind": "instagram", "title": title or "Instagram Reel", "image_url": image_url, "hostname": "instagram.com"}
+
+    if _is_facebook(normalized):
+        return {"kind": "facebook", "title": "Facebook Reel", "image_url": None, "hostname": "facebook.com"}
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}, follow_redirects=True) as client:

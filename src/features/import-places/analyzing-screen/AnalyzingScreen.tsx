@@ -27,6 +27,9 @@ type AnalyzingMode =
   | 'image_scan'
   | 'web_scrape'
   | 'youtube_links'
+  | 'tiktok_links'
+  | 'instagram_reels'
+  | 'facebook_reels'
   | 'find_image_places';
 
 type AnalyzingScreenProps = {
@@ -107,6 +110,12 @@ function describeEvent(event: ParseProgressEvent, mode?: AnalyzingMode): Analysi
         ? 'Preparing image text recognition'
         : mode === 'youtube_links'
           ? 'Opening the video'
+          : mode === 'tiktok_links'
+            ? 'Opening the video'
+          : mode === 'instagram_reels'
+            ? 'Opening the Reel'
+          : mode === 'facebook_reels'
+            ? 'Opening the Reel'
           : mode === 'smart_text'
             ? 'Reading your pasted text'
             : 'Opening the source';
@@ -198,6 +207,60 @@ function describeEvent(event: ParseProgressEvent, mode?: AnalyzingMode): Analysi
   if (event.label === 'youtube:geocode') {
     return { ...base, category: 'youtube-map', title: 'Checking video locations on the map', detail: 'Resolving the references against the video context.' };
   }
+  if (event.label === 'tiktok:fetch') {
+    return { ...base, category: 'tiktok-fetch', title: 'Collecting video context', detail: 'Loading the public caption and metadata.' };
+  }
+  if (event.label === 'tiktok:caption') {
+    return { ...base, category: 'tiktok-caption', title: 'Reviewing the video caption', detail: 'Using captions and hashtags to find place references.' };
+  }
+  if (event.label === 'tiktok:transcribe') {
+    return { ...base, category: 'tiktok-transcribe', title: 'Adding spoken context', detail: 'The caption was not specific enough, so Atlas is requesting subtitles or a speech-to-text transcript.' };
+  }
+  if (event.label === 'tiktok:transcript') {
+    return { ...base, category: 'tiktok-transcript', title: 'Reviewing spoken place references', detail: 'Using the video transcript to find places that were not written in the caption.' };
+  }
+  if (event.label === 'tiktok:deepseek') {
+    return { ...base, category: 'tiktok-analysis', title: 'Connecting location clues', detail: 'Interpreting the video context to identify visitable places.' };
+  }
+  if (event.label === 'tiktok:geocode') {
+    return { ...base, category: 'tiktok-map', title: 'Checking video locations on the map', detail: 'Resolving the references against the video context.' };
+  }
+  if (event.label === 'instagram:fetch') {
+    return { ...base, category: 'instagram-fetch', title: 'Collecting Reel context', detail: 'Loading the public caption and metadata.' };
+  }
+  if (event.label === 'instagram:caption') {
+    return { ...base, category: 'instagram-caption', title: 'Reviewing the Reel caption', detail: 'Using captions, hashtags, and tagged locations to find place references.' };
+  }
+  if (event.label === 'instagram:transcribe') {
+    return { ...base, category: 'instagram-transcribe', title: 'Adding spoken context', detail: 'The caption was not specific enough, so Atlas is requesting a Reel audio transcript.' };
+  }
+  if (event.label === 'instagram:transcript') {
+    return { ...base, category: 'instagram-transcript', title: 'Reviewing spoken place references', detail: 'Using the Reel transcript to find places that were not written in the caption.' };
+  }
+  if (event.label === 'instagram:deepseek') {
+    return { ...base, category: 'instagram-analysis', title: 'Connecting location clues', detail: 'Interpreting the Reel context to identify visitable places.' };
+  }
+  if (event.label === 'instagram:geocode') {
+    return { ...base, category: 'instagram-map', title: 'Checking Reel locations on the map', detail: 'Resolving the references against the Reel context.' };
+  }
+  if (event.label === 'facebook:fetch') {
+    return { ...base, category: 'facebook-fetch', title: 'Collecting Reel context', detail: 'Loading the public Reel text and metadata.' };
+  }
+  if (event.label === 'facebook:caption') {
+    return { ...base, category: 'facebook-caption', title: 'Reviewing the Reel text', detail: 'Using public Reel text to find place references.' };
+  }
+  if (event.label === 'facebook:transcript') {
+    return { ...base, category: 'facebook-transcript', title: 'Reviewing public captions', detail: 'Using Facebook captions to find spoken place references.' };
+  }
+  if (event.label === 'facebook:captions_unavailable') {
+    return { ...base, category: 'facebook-captions-unavailable', title: 'No public captions available', detail: 'Continuing with the Reel text that Facebook made public.' };
+  }
+  if (event.label === 'facebook:deepseek') {
+    return { ...base, category: 'facebook-analysis', title: 'Connecting location clues', detail: 'Interpreting the Reel context to identify visitable places.' };
+  }
+  if (event.label === 'facebook:geocode') {
+    return { ...base, category: 'facebook-map', title: 'Checking Reel locations on the map', detail: 'Resolving the references against the Reel context.' };
+  }
   if (event.label === 'analysis:region') {
     const region = typeof event.data?.region === 'string' ? event.data.region : 'the inferred region';
     return { ...base, category: 'region', title: `Focusing on ${cityName(region) || region}`, detail: 'Using regional context to keep map matches precise.' };
@@ -226,7 +289,7 @@ function describeEvent(event: ParseProgressEvent, mode?: AnalyzingMode): Analysi
   if (event.label === 'smart_text:web_search') {
     return { ...base, category: 'research', title: 'Checking current references', detail: 'Looking up the live context requested for this import.' };
   }
-  if (event.label === 'smart_text:geocode' || event.label === 'youtube:geocode') {
+  if (event.label === 'smart_text:geocode' || event.label === 'youtube:geocode' || event.label === 'tiktok:geocode') {
     return { ...base, category: 'geocode', title: 'Matching places to the map', detail: 'Checking the most relevant result for each location.' };
   }
   if (event.label === 'Routing' || event.label === 'smart_text:route') {
@@ -292,6 +355,9 @@ function AnalysisRow({ entry, current }: { entry: AnalysisEntry; current: boolea
 
 function SourceIcon({ mode }: { mode?: AnalyzingMode }) {
   if (mode === 'youtube_links') return <Ionicons name="logo-youtube" size={17} color="#FFFFFF" />;
+  if (mode === 'tiktok_links') return <Ionicons name="logo-tiktok" size={17} color="#FFFFFF" />;
+  if (mode === 'instagram_reels') return <Ionicons name="logo-instagram" size={17} color="#FFFFFF" />;
+  if (mode === 'facebook_reels') return <Ionicons name="logo-facebook" size={17} color="#FFFFFF" />;
   if (mode === 'image_scan' || mode === 'find_image_places') return <Ionicons name="image-outline" size={17} color="#FFFFFF" />;
   if (mode === 'smart_text') return <Ionicons name="document-text-outline" size={17} color="#FFFFFF" />;
   return <Ionicons name="link-outline" size={17} color="#FFFFFF" />;
@@ -534,6 +600,12 @@ export default function AnalyzingScreen({
     ? 'Reddit'
     : mode === 'youtube_links'
       ? 'YouTube'
+      : mode === 'tiktok_links'
+        ? 'TikTok'
+      : mode === 'instagram_reels'
+        ? 'Instagram'
+      : mode === 'facebook_reels'
+        ? 'Facebook'
       : mode === 'image_scan'
         ? 'image text'
         : mode === 'find_image_places'

@@ -87,7 +87,7 @@ export type ParseProgress = {
 export type ParseRequestIdHandler = (requestId: string) => void;
 
 export type LinkPreview = {
-  kind: 'youtube' | 'reddit' | 'web' | 'unknown';
+  kind: 'youtube' | 'reddit' | 'tiktok' | 'instagram' | 'facebook' | 'web' | 'unknown';
   title: string;
   image_url: string | null;
   hostname: string;
@@ -349,6 +349,30 @@ export async function parseYoutube(
   onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
   return postParseWithProgress<ParseResult>('/parse_youtube', { url }, onProgress, onRequestId);
+}
+
+export async function parseTikTok(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_tiktok', { url }, onProgress, onRequestId);
+}
+
+export async function parseInstagramReel(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_instagram_reel', { url }, onProgress, onRequestId);
+}
+
+export async function parseFacebookReel(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_facebook_reel', { url }, onProgress, onRequestId);
 }
 
 /**

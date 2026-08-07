@@ -13,6 +13,9 @@ import {
   findImagePlace as apiFindImagePlace,
   parseLink as apiParseLink,
   parseText as apiParseText,
+  parseTikTok as apiParseTikTok,
+  parseInstagramReel as apiParseInstagramReel,
+  parseFacebookReel as apiParseFacebookReel,
   parseYoutube as apiParseYoutube,
   scanImagesBase64 as apiScanImagesBase64,
   type ParseRequestIdHandler,
@@ -241,6 +244,33 @@ export async function parseYoutubeLink(
   onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
   const backend = (await apiParseYoutube(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseTikTokLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseTikTok(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseInstagramReelLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseInstagramReel(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseFacebookReelLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseFacebookReel(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 

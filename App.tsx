@@ -24,6 +24,9 @@ import {
   findImagePlace,
   parseInput,
   parseText,
+  parseTikTokLink,
+  parseInstagramReelLink,
+  parseFacebookReelLink,
   parseYoutubeLink,
   scanImagesForTextPlaces,
   scanAnyLink,
@@ -51,7 +54,7 @@ if (Platform.OS !== 'web') {
 
 type Overlay = 'none' | 'import' | 'analyzing' | 'save';
 type ImportMeta = {
-  mode?: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' | 'youtube_links' | 'find_image_places';
+  mode?: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' | 'youtube_links' | 'tiktok_links' | 'instagram_reels' | 'facebook_reels' | 'find_image_places';
   rawInput: string;
   title?: string;
   sourceUrl?: string;
@@ -91,6 +94,12 @@ function importTheme(
     ? 'Reddit'
     : meta?.mode === 'youtube_links'
       ? 'YouTube'
+      : meta?.mode === 'tiktok_links'
+        ? 'TikTok'
+      : meta?.mode === 'instagram_reels'
+        ? 'Instagram'
+      : meta?.mode === 'facebook_reels'
+        ? 'Facebook'
       : meta?.mode === 'image_scan'
         ? 'image text'
         : meta?.mode === 'find_image_places'
@@ -562,6 +571,141 @@ function AppContent() {
       return;
     }
 
+    if (importMeta?.mode === 'tiktok_links') {
+      const sourceUrl = importMeta?.rawInput || importText;
+      parseTikTokLink(sourceUrl, handleProgress, handleRequestId)
+        .then((result) => {
+          if (cancelled || !result) return;
+          const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
+          const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
+          const tempHistoryId = addChatHistoryItem({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+            sourceType: 'tiktok_links',
+          });
+          saveChatHistory({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+            sourceType: 'tiktok_links',
+          })
+            .then(({ id, createdAt }) => {
+              replaceChatHistoryItem(tempHistoryId, {
+                id,
+                title: effectiveTitle,
+                sourceUrl,
+                locationCount: adaptedResult.places.length,
+                places: adaptedResult.places,
+                createdAt,
+                sourceType: 'tiktok_links',
+              });
+            })
+            .catch((err) => console.warn('[App] saveChatHistory error:', err));
+          completeImport(adaptedResult);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn('TikTok parse failed:', err);
+            Alert.alert('TikTok Import Failed', err.message || 'Unable to read that TikTok video.');
+            setOverlay('import');
+          }
+        });
+      return;
+    }
+
+    if (importMeta?.mode === 'instagram_reels') {
+      const sourceUrl = importMeta?.rawInput || importText;
+      parseInstagramReelLink(sourceUrl, handleProgress, handleRequestId)
+        .then((result) => {
+          if (cancelled || !result) return;
+          const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
+          const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
+          const tempHistoryId = addChatHistoryItem({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+            sourceType: 'instagram_reels',
+          });
+          saveChatHistory({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+            sourceType: 'instagram_reels',
+          })
+            .then(({ id, createdAt }) => {
+              replaceChatHistoryItem(tempHistoryId, {
+                id,
+                title: effectiveTitle,
+                sourceUrl,
+                locationCount: adaptedResult.places.length,
+                places: adaptedResult.places,
+                createdAt,
+                sourceType: 'instagram_reels',
+              });
+            })
+            .catch((err) => console.warn('[App] saveChatHistory error:', err));
+          completeImport(adaptedResult);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn('Instagram Reel parse failed:', err);
+            Alert.alert('Instagram Import Failed', err.message || 'Unable to read that Instagram Reel.');
+            setOverlay('import');
+          }
+        });
+      return;
+    }
+
+    if (importMeta?.mode === 'facebook_reels') {
+      const sourceUrl = importMeta?.rawInput || importText;
+      parseFacebookReelLink(sourceUrl, handleProgress, handleRequestId)
+        .then((result) => {
+          if (cancelled || !result) return;
+          const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
+          const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
+          const tempHistoryId = addChatHistoryItem({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+            sourceType: 'facebook_reels',
+          });
+          saveChatHistory({
+            title: effectiveTitle,
+            sourceUrl,
+            locationCount: adaptedResult.places.length,
+            places: adaptedResult.places,
+            sourceType: 'facebook_reels',
+          })
+            .then(({ id, createdAt }) => {
+              replaceChatHistoryItem(tempHistoryId, {
+                id,
+                title: effectiveTitle,
+                sourceUrl,
+                locationCount: adaptedResult.places.length,
+                places: adaptedResult.places,
+                createdAt,
+                sourceType: 'facebook_reels',
+              });
+            })
+            .catch((err) => console.warn('[App] saveChatHistory error:', err));
+          completeImport(adaptedResult);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn('Facebook Reel parse failed:', err);
+            Alert.alert('Facebook Import Failed', err.message || 'Unable to read that Facebook Reel.');
+            setOverlay('import');
+          }
+        });
+      return;
+    }
+
     // Image text recognition: OCR and downstream location analysis stream
     // through the same progress channel as link imports.
     if (importMeta?.mode === 'image_scan') {
@@ -820,11 +964,14 @@ function AppContent() {
               onSubmit={(text, mode, webSearch) => {
                 parseResultRef.current = null;
                 setActiveHistoryItem(null);
-                const pipelineMode: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' | 'youtube_links' | 'find_image_places' =
+                const pipelineMode: 'parse' | 'smart_text' | 'atlas_discover' | 'image_scan' | 'web_scrape' | 'youtube_links' | 'tiktok_links' | 'instagram_reels' | 'facebook_reels' | 'find_image_places' =
                   mode === 'smartText' ? 'smart_text' :
                   mode === 'findTextPlaces' ? 'image_scan' :
                   mode === 'findImagePlaces' ? 'find_image_places' :
                   mode === 'youtubeLinks' ? 'youtube_links' :
+                  mode === 'tiktokLinks' ? 'tiktok_links' :
+                  mode === 'instagramReels' ? 'instagram_reels' :
+                  mode === 'facebookReels' ? 'facebook_reels' :
                   mode === 'anyLinks' ? 'web_scrape' :
                   'parse';
                 setImportMeta({ mode: pipelineMode, rawInput: text, title: text, webSearch });

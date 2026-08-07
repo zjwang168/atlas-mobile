@@ -817,6 +817,10 @@ For subsequent runs:
 npx expo start --dev-client
 ```
 
+Keep this terminal open while developing. Expo's development server stays
+running and streams bundler errors and logs as the app reloads. Press `Ctrl+C`
+in that terminal when you want to stop it.
+
 If you encounter errors when running `npx expo run:ios`, try:
 ```bash
 npx expo prebuild --clean

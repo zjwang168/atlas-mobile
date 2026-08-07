@@ -6,7 +6,7 @@ import BottomSheet, {
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Reanimated, { FadeInUp } from 'react-native-reanimated';
+import Reanimated, { FadeInDown, FadeInUp, FadeOutDown, FadeOutUp } from 'react-native-reanimated';
 import {
   Alert,
   Animated,
@@ -30,12 +30,15 @@ export type ImportMode =
   | 'smartText'
   | 'findTextPlaces'
   | 'redditLinks'
+  | 'tiktokLinks'
+  | 'instagramReels'
+  | 'facebookReels'
   | 'anyLinks'
   | 'youtubeLinks'
   | 'findImagePlaces';
 
 type ImportSection = 'menu' | 'social' | 'images' | 'text' | 'links';
-type SocialMode = Extract<ImportMode, 'redditLinks' | 'youtubeLinks'>;
+type SocialMode = Extract<ImportMode, 'redditLinks' | 'youtubeLinks' | 'tiktokLinks' | 'instagramReels' | 'facebookReels' | 'anyLinks'>;
 type ImageMode = Extract<ImportMode, 'findTextPlaces' | 'findImagePlaces'>;
 
 type ImportScreenProps = {
@@ -71,7 +74,7 @@ const MENU_CARDS: MenuCard[] = [
   {
     key: 'social',
     title: 'Social media',
-    subtitle: 'Import from YouTube or Reddit',
+    subtitle: 'Reddit and social videos',
     icon: 'social',
   },
   {
@@ -98,21 +101,23 @@ function looksLikeUrl(value: string): boolean {
   return /^(https?:\/\/|www\.)\S+$/i.test(value.trim());
 }
 
-function resolveSocialMode(value: string, fallback: SocialMode): SocialMode {
+function resolveSocialMode(value: string, fallback: SocialMode = 'anyLinks'): SocialMode {
   const normalized = value.trim().toLowerCase();
   if (/(youtube\.com|youtu\.be)/i.test(normalized)) return 'youtubeLinks';
-  if (/(reddit\.com|redd\.it|old\.reddit\.com)/i.test(normalized))
-    return 'redditLinks';
+  if (/(^|\.)tiktok\.com/i.test(normalized)) return 'tiktokLinks';
+  if (/(^|\.)instagram\.com\/(reel|reels)\//i.test(normalized) || /(^|\.)instagr\.am\/(reel|reels)\//i.test(normalized)) return 'instagramReels';
+  if (/(^|\.)facebook\.com\//i.test(normalized) || /(^|\.)fb\.watch\//i.test(normalized)) return 'facebookReels';
+  if (/(reddit\.com|redd\.it|old\.reddit\.com)/i.test(normalized)) return 'redditLinks';
   return fallback;
 }
 
 type ResolvedLinkPreview = LinkPreview & { url: string };
 
 type SlidingSegmentedControlProps = {
-  labels: readonly [string, string];
-  selectedIndex: 0 | 1;
+  labels: readonly string[];
+  selectedIndex: number;
   width: number;
-  onSelect: (index: 0 | 1) => void;
+  onSelect: (index: number) => void;
 };
 
 function SlidingSegmentedControl({
@@ -160,7 +165,7 @@ function SlidingSegmentedControl({
             key={label}
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
-            onPress={() => onSelect(index as 0 | 1)}
+            onPress={() => onSelect(index)}
             style={styles.segmentButton}
           >
             <Text
@@ -181,22 +186,56 @@ function SlidingSegmentedControl({
 function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
   const isYouTube = preview.kind === 'youtube';
   const isReddit = preview.kind === 'reddit';
+  const isTikTok = preview.kind === 'tiktok';
+  const isInstagram = preview.kind === 'instagram';
+  const isFacebook = preview.kind === 'facebook';
   return (
     <View style={styles.linkPreviewCard}>
       {preview.image_url ? (
         <Image source={{ uri: preview.image_url }} style={styles.linkPreviewImage} resizeMode="cover" />
       ) : (
-        <View style={[styles.linkPreviewFallback, isYouTube && styles.linkPreviewYoutubeFallback, isReddit && styles.linkPreviewRedditFallback]}>
-          <Ionicons name={isReddit ? 'logo-reddit' : isYouTube ? 'logo-youtube' : 'globe-outline'} size={25} color={isYouTube ? '#FF0000' : isReddit ? '#FF4500' : COLOR.primary} />
+        <View style={[styles.linkPreviewFallback, isYouTube && styles.linkPreviewYoutubeFallback, isReddit && styles.linkPreviewRedditFallback, isInstagram && styles.linkPreviewInstagramFallback, isFacebook && styles.linkPreviewFacebookFallback]}>
+          <Ionicons name={isReddit ? 'logo-reddit' : isYouTube ? 'logo-youtube' : isTikTok ? 'logo-tiktok' : isInstagram ? 'logo-instagram' : isFacebook ? 'logo-facebook' : 'globe-outline'} size={25} color={isYouTube ? '#FF0000' : isReddit ? '#FF4500' : isTikTok ? '#161616' : isInstagram ? '#D62976' : isFacebook ? '#1877F2' : COLOR.primary} />
         </View>
       )}
       <View style={styles.linkPreviewCopy}>
         <View style={styles.linkPreviewLabelRow}>
-          <Ionicons name={isReddit ? 'logo-reddit' : isYouTube ? 'logo-youtube' : 'link-outline'} size={13} color={isYouTube ? '#FF0000' : isReddit ? '#FF4500' : COLOR.textSecondary} />
-          <Text style={styles.linkPreviewLabel}>{isYouTube ? 'YouTube video' : isReddit ? 'Reddit post' : preview.hostname}</Text>
+          <Ionicons name={isReddit ? 'logo-reddit' : isYouTube ? 'logo-youtube' : isTikTok ? 'logo-tiktok' : isInstagram ? 'logo-instagram' : isFacebook ? 'logo-facebook' : 'link-outline'} size={13} color={isYouTube ? '#FF0000' : isReddit ? '#FF4500' : isTikTok ? '#161616' : isInstagram ? '#D62976' : isFacebook ? '#1877F2' : COLOR.textSecondary} />
+          <Text style={styles.linkPreviewLabel}>{isYouTube ? 'YouTube video' : isReddit ? 'Reddit post' : isTikTok ? 'TikTok video' : isInstagram ? 'Instagram Reel' : isFacebook ? 'Facebook Reel' : preview.hostname}</Text>
         </View>
         <Text style={styles.linkPreviewTitle} numberOfLines={2}>{preview.title}</Text>
       </View>
+    </View>
+  );
+}
+
+function LinkPreviewLoading() {
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 540, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 540, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [pulse]);
+
+  return (
+    <View accessibilityLabel="Loading link preview" style={styles.linkPreviewLoading}>
+      {[0, 1, 2].map((index) => {
+        const start = index === 0 ? 0.01 : index * 0.22;
+        const peak = Math.min(start + 0.18, 0.96);
+        const end = Math.min(start + 0.38, 0.99);
+        const opacity = pulse.interpolate({
+          inputRange: [0, start, peak, end, 1],
+          outputRange: [0.35, 0.35, 1, 0.35, 0.35],
+          extrapolate: 'clamp',
+        });
+        return <Animated.View key={index} style={[styles.previewLoadingDot, { opacity }]} />;
+      })}
     </View>
   );
 }
@@ -206,10 +245,19 @@ function MenuCardIcon({ type }: { type: MenuCard['icon'] }) {
     return (
       <View style={styles.socialIconGroup}>
         <View style={[styles.brandIconBubble, styles.redditIconBubble]}>
-          <Ionicons name="logo-reddit" size={22} color="#FF4500" />
+          <Ionicons name="logo-reddit" size={17} color="#FF4500" />
         </View>
         <View style={[styles.brandIconBubble, styles.youtubeIconBubble]}>
-          <Ionicons name="logo-youtube" size={22} color="#FF0000" />
+          <Ionicons name="logo-youtube" size={17} color="#FF0000" />
+        </View>
+        <View style={[styles.brandIconBubble, styles.tiktokIconBubble]}>
+          <Ionicons name="logo-tiktok" size={17} color="#161616" />
+        </View>
+        <View style={[styles.brandIconBubble, styles.instagramIconBubble]}>
+          <Ionicons name="logo-instagram" size={17} color="#D62976" />
+        </View>
+        <View style={[styles.brandIconBubble, styles.facebookIconBubble]}>
+          <Ionicons name="logo-facebook" size={17} color="#1877F2" />
         </View>
       </View>
     );
@@ -254,7 +302,7 @@ export default function ImportScreen({
 
   const [section, setSection] = useState<ImportSection>('menu');
   const [selectedMode, setSelectedMode] = useState<ImportMode | null>(null);
-  const [socialMode, setSocialMode] = useState<SocialMode>('redditLinks');
+  const [socialMode, setSocialMode] = useState<SocialMode>('anyLinks');
   const [imageMode, setImageMode] = useState<ImageMode>('findTextPlaces');
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
@@ -263,6 +311,7 @@ export default function ImportScreen({
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [linkPreview, setLinkPreview] = useState<ResolvedLinkPreview | null>(null);
+  const [previewPending, setPreviewPending] = useState(false);
 
   const snapPoints = useMemo(
     () =>
@@ -307,7 +356,7 @@ export default function ImportScreen({
   );
 
   useEffect(() => {
-    if (section !== 'social') return;
+    if (section !== 'social' && section !== 'links') return;
 
     let active = true;
     Clipboard.hasStringAsync()
@@ -324,13 +373,22 @@ export default function ImportScreen({
   }, [section]);
 
   useEffect(() => {
+    if ((section !== 'social' && section !== 'links') || text.trim()) return;
+    Clipboard.hasStringAsync()
+      .then(setClipboardAvailable)
+      .catch(() => setClipboardAvailable(false));
+  }, [section, text]);
+
+  useEffect(() => {
     const supportsPreview = section === 'social' || section === 'links';
     const url = text.trim();
     if (!supportsPreview || !looksLikeUrl(url)) {
       setLinkPreview(null);
+      setPreviewPending(false);
       return undefined;
     }
 
+    setPreviewPending(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       getLinkPreview(url, controller.signal)
@@ -339,6 +397,9 @@ export default function ImportScreen({
         })
         .catch(() => {
           if (!controller.signal.aborted) setLinkPreview(null);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setPreviewPending(false);
         });
     }, 350);
 
@@ -358,14 +419,17 @@ export default function ImportScreen({
       setLinkPreview(null);
       setImages([]);
 
-      if (nextSection === 'social') setSelectedMode(socialMode);
       if (nextSection === 'images') setSelectedMode(imageMode);
       if (nextSection === 'text') setSelectedMode('smartText');
       if (nextSection === 'links') setSelectedMode('anyLinks');
+      if (nextSection === 'social') {
+        setSocialMode('anyLinks');
+        setSelectedMode('anyLinks');
+      }
 
       requestAnimationFrame(() => sheetRef.current?.snapToIndex(1));
     },
-    [imageMode, socialMode],
+    [imageMode],
   );
 
   const returnToMenu = useCallback(() => {
@@ -375,17 +439,12 @@ export default function ImportScreen({
     openingDetailRef.current = false;
     setSection('menu');
     setSelectedMode(null);
+    setSocialMode('anyLinks');
     setText('');
     setLinkPreview(null);
     setImages([]);
     requestAnimationFrame(() => sheetRef.current?.snapToIndex(0));
   }, []);
-
-  const selectSocialMode = useCallback((mode: SocialMode) => {
-    setSocialMode(mode);
-    setSelectedMode(mode);
-    scheduleInputFocus(0);
-  }, [scheduleInputFocus]);
 
   const selectImageMode = useCallback((mode: ImageMode) => {
     setImageMode(mode);
@@ -436,7 +495,7 @@ export default function ImportScreen({
     if (!trimmedText) return;
 
     if (section === 'social') {
-      const resolvedMode = resolveSocialMode(trimmedText, socialMode);
+      const resolvedMode = resolveSocialMode(trimmedText);
       setSocialMode(resolvedMode);
       setSelectedMode(resolvedMode);
       onSubmit(trimmedText, resolvedMode);
@@ -455,7 +514,6 @@ export default function ImportScreen({
     onSubmitImageScan,
     section,
     selectedMode,
-    socialMode,
     text,
     webSearchEnabled,
   ]);
@@ -464,14 +522,17 @@ export default function ImportScreen({
     (value: string) => {
       const candidate = value.trim();
       if (!looksLikeUrl(candidate)) return;
-      const detected = resolveSocialMode(candidate, socialMode);
-      setSocialMode(detected);
-      setSelectedMode(detected);
+      if (section === 'social') {
+        const detected = resolveSocialMode(candidate);
+        setSocialMode(detected);
+        setSelectedMode(detected);
+      } else {
+        setSelectedMode('anyLinks');
+      }
       setText(candidate);
-      setClipboardAvailable(false);
       inputRef.current?.focus();
     },
-    [socialMode],
+    [section],
   );
 
   const pasteClipboardLink = useCallback(async () => {
@@ -541,16 +602,16 @@ export default function ImportScreen({
   );
 
   const renderSocialHeader = () => (
-    <View style={[styles.detailHeader, styles.socialDetailHeader]}>
-      <SlidingSegmentedControl
-        labels={['Reddit', 'YouTube']}
-        selectedIndex={socialMode === 'redditLinks' ? 0 : 1}
-        width={220}
-        onSelect={(index) =>
-          selectSocialMode(index === 0 ? 'redditLinks' : 'youtubeLinks')
-        }
-      />
-      <View style={styles.socialBackButton}>{renderBackButton()}</View>
+    <View>
+      <View style={styles.detailHeader}>
+        {renderBackButton()}
+        <Text style={styles.detailTitle}>Social media</Text>
+        <View style={styles.headerBalanceSpacer} />
+      </View>
+      <View style={styles.socialAutoHint}>
+        <Ionicons name="sparkles-outline" size={16} color={COLOR.primary} />
+        <Text style={styles.socialAutoHintText}>Atlas supports Reddit posts, TikTok, YouTube, Reels, and Facebook videos. </Text>
+      </View>
     </View>
   );
 
@@ -566,15 +627,18 @@ export default function ImportScreen({
     if (section === 'menu' || section === 'images') return null;
 
     const isSocial = section === 'social';
+    const isLinkSection = isSocial || section === 'links';
     const isText = section === 'text';
     const canSubmit = text.trim().length > 0;
     const placeholder = isSocial
-      ? socialMode === 'redditLinks'
-        ? 'Paste a Reddit link...'
-        : 'Paste a YouTube link...'
+      ? 'Paste a public social video link...'
       : section === 'links'
         ? 'Paste any web page URL...'
         : 'Paste notes, an itinerary, or a list...';
+    const trimmedText = text.trim();
+    const hasLinkInput = isLinkSection && trimmedText.length > 0;
+    const hasMatchingPreview = Boolean(linkPreview && linkPreview.url === trimmedText);
+    const showClipboardPrompt = isLinkSection && clipboardAvailable && !hasLinkInput;
 
     return (
       <View
@@ -594,8 +658,9 @@ export default function ImportScreen({
             },
           ]}
         >
-            {isSocial && clipboardAvailable ? (
-              <View style={styles.clipboardCard}>
+            {showClipboardPrompt ? (
+              <Reanimated.View entering={FadeInDown.duration(180)} exiting={FadeOutUp.duration(150)}>
+                <View style={styles.clipboardCard}>
                 <View style={styles.clipboardCopy}>
                   <View style={styles.clipboardLabelRow}>
                     <Ionicons
@@ -634,7 +699,14 @@ export default function ImportScreen({
                     <Text style={styles.pasteButtonText}>Paste</Text>
                   </Pressable>
                 )}
-              </View>
+                </View>
+              </Reanimated.View>
+            ) : null}
+
+            {hasLinkInput && previewPending && !hasMatchingPreview ? (
+              <Reanimated.View entering={FadeInUp.duration(160)} exiting={FadeOutDown.duration(130)}>
+                <LinkPreviewLoading />
+              </Reanimated.View>
             ) : null}
 
             {isText ? (
@@ -663,8 +735,8 @@ export default function ImportScreen({
               </Pressable>
             ) : null}
 
-            {linkPreview && linkPreview.url === text.trim() ? (
-              <Reanimated.View entering={FadeInUp.duration(220)}>
+            {hasMatchingPreview && linkPreview ? (
+              <Reanimated.View entering={FadeInUp.duration(220)} exiting={FadeOutDown.duration(140)}>
                 <LinkPreviewCard preview={linkPreview} />
               </Reanimated.View>
             ) : null}
@@ -970,15 +1042,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#E8F9EF',
   },
   socialIconGroup: {
-    width: 68,
-    height: 48,
+    width: 102,
+    height: 66,
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
+    alignContent: 'flex-start',
+    gap: 4,
   },
   brandIconBubble: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
@@ -986,12 +1060,25 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
   },
   redditIconBubble: {
-    zIndex: 2,
     backgroundColor: '#FFF0EA',
   },
   youtubeIconBubble: {
-    marginLeft: -18,
     backgroundColor: '#FFF0F0',
+  },
+  tiktokIconBubble: {
+    backgroundColor: '#F1F1F1',
+  },
+  instagramIconBubble: {
+    backgroundColor: '#FFF0F7',
+  },
+  facebookIconBubble: {
+    backgroundColor: '#EDF5FF',
+  },
+  linkPreviewInstagramFallback: {
+    backgroundColor: '#FFF0F7',
+  },
+  linkPreviewFacebookFallback: {
+    backgroundColor: '#EDF5FF',
   },
   detailContent: {
     flex: 1,
@@ -1004,13 +1091,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  socialDetailHeader: {
-    justifyContent: 'center',
+  socialAutoHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 20,
+    paddingBottom: 8,
   },
-  socialBackButton: {
-    position: 'absolute',
-    left: 20,
-    zIndex: 10,
+  socialAutoHintText: {
+    flex: 1,
+    color: COLOR.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
   },
   backButton: {
     width: 48,
@@ -1125,6 +1217,23 @@ const styles = StyleSheet.create({
   nativePasteButton: {
     width: 72,
     height: 40,
+  },
+  linkPreviewLoading: {
+    minHeight: 76,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLOR.border,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  previewLoadingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: COLOR.primary,
   },
   pasteButtonText: {
     fontSize: 15,
