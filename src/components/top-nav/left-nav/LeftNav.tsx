@@ -1,6 +1,14 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { BlurView } from 'expo-blur';
-import { TouchableOpacity, View } from 'react-native';
+import {
+  GlassView,
+  isGlassEffectAPIAvailable,
+  isLiquidGlassAvailable,
+} from 'expo-glass-effect';
+import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
+
+const LIQUID_GLASS_AVAILABLE =
+  isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
 
 type LeftNavProps = {
   onSearchPress?: () => void;
@@ -29,15 +37,29 @@ const blurStyle = {
 export default function LeftNav({ onSearchPress }: LeftNavProps) {
   return (
     <View className="flex-col items-center gap-2">
-      {/* 搜索按钮 */}
       <TouchableOpacity
         onPress={onSearchPress}
         activeOpacity={0.8}
         style={buttonStyle}
       >
-        <BlurView intensity={40} tint="light" style={blurStyle}>
-          <Ionicons name="search" size={24} color="#000" />
-        </BlurView>
+        {LIQUID_GLASS_AVAILABLE ? (
+          <GlassView
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+            glassEffectStyle="regular"
+          tintColor="rgba(255,255,255,0.1)"
+          />
+        ) : (
+          <BlurView
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+            intensity={40}
+            tint="light"
+          />
+        )}
+        <View style={blurStyle}>
+          <MagnifyingGlassIcon size={24} weight="regular" color="#171717" />
+        </View>
       </TouchableOpacity>
     </View>
   );

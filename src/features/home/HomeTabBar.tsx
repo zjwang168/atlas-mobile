@@ -9,7 +9,6 @@ import { BookmarkSimpleIcon } from 'phosphor-react-native/src/icons/BookmarkSimp
 import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
 import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
-import { UserIcon } from 'phosphor-react-native/src/icons/User';
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
@@ -42,6 +41,7 @@ type HomeTabBarProps = {
   onTabChange: (tab: string) => void;
   onAddPress: () => void;
   onChatPress: () => void;
+  bottomOffset?: number;
 };
 
 type TabItem = {
@@ -63,21 +63,16 @@ const TAB_ITEMS: TabItem[] = [
     icon: SuitcaseSimpleIcon,
   },
   {
-    key: TAB_ADD,
-    label: 'Add',
-    icon: PlusIcon,
-    action: 'add',
-  },
-  {
-    key: TAB_PROFILE,
-    label: 'Profile',
-    icon: UserIcon,
-  },
-  {
     key: TAB_CHAT,
     label: 'Chat',
     icon: ChatTeardropIcon,
     action: 'chat',
+  },
+  {
+    key: TAB_ADD,
+    label: 'Add',
+    icon: PlusIcon,
+    action: 'add',
   },
 ];
 
@@ -86,6 +81,7 @@ function HomeTabBar({
   onTabChange,
   onAddPress,
   onChatPress,
+  bottomOffset = 16,
 }: HomeTabBarProps) {
   const reducedMotion = useReducedMotion();
   const activeIndex = Math.max(
@@ -150,15 +146,17 @@ function HomeTabBar({
   }, [onAddPress, onChatPress, onTabChange]);
 
   return (
-    <View style={styles.host} pointerEvents="box-none">
-      <Animated.View style={[styles.barShadow, barScaleStyle]}>
+    <View style={[styles.host, { bottom: bottomOffset }]} pointerEvents="box-none">
+      <Animated.View
+        style={[styles.barShadow, barScaleStyle]}
+      >
         <View style={styles.bar}>
           {LIQUID_GLASS_AVAILABLE ? (
             <GlassView
               pointerEvents="none"
               style={StyleSheet.absoluteFill}
               glassEffectStyle="regular"
-              tintColor="rgba(250,250,250,0.40)"
+              tintColor="rgba(255,255,255,0.2)"
             />
           ) : (
             <BlurView
@@ -168,7 +166,6 @@ function HomeTabBar({
               intensity={80}
             />
           )}
-          <View pointerEvents="none" style={styles.frost} />
           <Animated.View
             pointerEvents="none"
             style={[styles.selector, selectorStyle]}
@@ -211,17 +208,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 24,
+    height: 52,
     alignItems: 'center',
+    zIndex: 30,
   },
   barShadow: {
-    width: 308,
+    width: 248,
     height: 52,
     borderRadius: 32,
-    boxShadow: '0 8px 40px rgba(0,0,0,0.12)',
+    boxShadow: '0 8px 40px rgba(0,0,0,0.20)',
   },
   bar: {
-    width: 308,
+    width: 248,
     height: 52,
     padding: 4,
     borderRadius: 32,
@@ -229,15 +227,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(250,250,250,0.18)',
-  },
-  frost: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(250,250,250,0.22)',
+    backgroundColor: 'transparent',
   },
   tab: {
     width: TAB_WIDTH,
@@ -255,7 +245,11 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 30,
     borderCurve: 'continuous',
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
   },
   tabPressed: {
     opacity: 0.64,

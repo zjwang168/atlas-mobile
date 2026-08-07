@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, View } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useContentPanelSnapGroup } from './ContentPanelSnapProvider';
 
@@ -57,6 +58,21 @@ type ContentPanelProps = {
   maxHeight?: number;
   /** Reports the live panel height during animations and drags. */
   onHeightChange?: (height: number) => void;
+  /** Use the translucent white material from the Places home composition. */
+  frosted?: boolean;
+  /** Keeps the drag hotspot while optionally hiding the visible handle. */
+  showHandle?: boolean;
+  /** Restrict this panel instance to a specific set of snap positions. */
+  allowedSnaps?: SnapState[];
+  /** Override individual snap heights for this panel instance. */
+  snapPointHeights?: Partial<Record<SnapState, number>>;
+  /**
+   * At this height the panel reaches the left, right, and bottom screen edges.
+   * Lower snap points retain the floating-card margins.
+   */
+  edgeToEdgeHeight?: number;
+  /** Keep the upper corners rounded when the edge-to-edge height is reached. */
+  preserveTopRadius?: boolean;
   /**
    * Floor for snap states inherited via `snapGroup`. For a panel with no
    * `compactContent`, group memory can otherwise settle it at `compact` — a
@@ -84,6 +100,17 @@ const defaultSnapHeights = SNAP_HEIGHTS;
 
 const SNAP_ORDER: SnapState[] = ['compact', 'short', 'default', 'tall', 'full'];
 
+function normalizeToAllowedSnap(state: SnapState, allowedSnaps: SnapState[]): SnapState {
+  if (allowedSnaps.includes(state)) return state;
+
+  const stateIndex = SNAP_ORDER.indexOf(state);
+  return allowedSnaps.reduce((nearest, candidate) => {
+    const nearestDistance = Math.abs(SNAP_ORDER.indexOf(nearest) - stateIndex);
+    const candidateDistance = Math.abs(SNAP_ORDER.indexOf(candidate) - stateIndex);
+    return candidateDistance < nearestDistance ? candidate : nearest;
+  });
+}
+
 function clampToFloor(state: SnapState, floor?: SnapState): SnapState {
   if (!floor) return state;
   return SNAP_ORDER.indexOf(state) < SNAP_ORDER.indexOf(floor) ? floor : state;
@@ -106,15 +133,37 @@ export default function ContentPanel({
   defaultSnapHeight,
   maxHeight,
   onHeightChange,
+  frosted = false,
+  showHandle = true,
+  allowedSnaps,
+  snapPointHeights,
+  edgeToEdgeHeight,
+  preserveTopRadius = false,
   minSnap,
 }: ContentPanelProps) {
   const insets = useSafeAreaInsets();
+  const allowedSnapStates = SNAP_ORDER.filter(
+    state => !allowedSnaps || allowedSnaps.includes(state),
+  );
+  const resolvedAllowedSnapStates = allowedSnapStates.length > 0 ? allowedSnapStates : SNAP_ORDER;
+  const allowedSnapStatesRef = useRef(resolvedAllowedSnapStates);
+  allowedSnapStatesRef.current = resolvedAllowedSnapStates;
   const activeSnapGroup = controlledSnapState === undefined ? snapGroup : undefined;
   const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(activeSnapGroup, initialSnap);
-  const effectiveControlledSnapState = controlledSnapState
+  const inheritedSnapState = controlledSnapState
     ?? (activeSnapGroup ? clampToFloor(groupSnapState, minSnap) : undefined);
-  const initialResolvedSnap = effectiveControlledSnapState ?? initialSnap;
-  const snapHeights = useRef<Record<SnapState, number>>({ ...defaultSnapHeights });
+  const effectiveControlledSnapState = inheritedSnapState === undefined
+    ? undefined
+    : normalizeToAllowedSnap(inheritedSnapState, resolvedAllowedSnapStates);
+  const initialResolvedSnap = normalizeToAllowedSnap(
+    effectiveControlledSnapState ?? initialSnap,
+    resolvedAllowedSnapStates,
+  );
+  const snapHeights = useRef<Record<SnapState, number>>({
+    ...defaultSnapHeights,
+    ...snapPointHeights,
+    ...(defaultSnapHeight === undefined ? {} : { default: defaultSnapHeight }),
+  });
   // Tracked in state (mirroring snapHeights.current.compact) so the crossfade
   // interpolation below can be recreated once the real compact height is measured.
   const [compactHeightTrack, setCompactHeightTrack] = useState(snapHeights.current.compact);
@@ -137,34 +186,46 @@ export default function ContentPanel({
 
   // Visual properties derived from panelHeight so they track live drag without
   // needing separate parallel animations.
-  const borderRadiusTop = useRef(
+  const edgeTransitionEnd = edgeToEdgeHeight ?? SCREEN_HEIGHT;
+  const edgeTransitionStart = edgeToEdgeHeight === undefined
+    ? FULL_TRANSITION_START
+    : Math.max(0, edgeToEdgeHeight - 72);
+  const borderRadiusTop = useMemo(
+    () =>
     panelHeight.interpolate({
-      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
-      outputRange: [36, 0],
+      inputRange: [edgeTransitionStart, edgeTransitionEnd],
+      outputRange: [36, preserveTopRadius ? 36 : 0],
       extrapolate: 'clamp',
     }),
-  ).current;
-  const borderRadiusBottom = useRef(
+    [edgeTransitionEnd, edgeTransitionStart, preserveTopRadius],
+  );
+  const borderRadiusBottom = useMemo(
+    () =>
     panelHeight.interpolate({
-      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
+      inputRange: [edgeTransitionStart, edgeTransitionEnd],
       outputRange: [48, 0],
       extrapolate: 'clamp',
     }),
-  ).current;
-  const horizontalMargin = useRef(
+    [edgeTransitionEnd, edgeTransitionStart],
+  );
+  const horizontalMargin = useMemo(
+    () =>
     panelHeight.interpolate({
-      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
+      inputRange: [edgeTransitionStart, edgeTransitionEnd],
       outputRange: [8, 0],
       extrapolate: 'clamp',
     }),
-  ).current;
-  const bottomMargin = useRef(
+    [edgeTransitionEnd, edgeTransitionStart],
+  );
+  const bottomMargin = useMemo(
+    () =>
     panelHeight.interpolate({
-      inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
+      inputRange: [edgeTransitionStart, edgeTransitionEnd],
       outputRange: [8, 0],
       extrapolate: 'clamp',
     }),
-  ).current;
+    [edgeTransitionEnd, edgeTransitionStart],
+  );
 
   // Derived from panelHeight so the safe-area padding fades in smoothly as
   // the panel approaches full screen, instead of jumping on snap state change.
@@ -172,11 +233,11 @@ export default function ContentPanel({
   const animatedPaddingTop = useMemo(
     () =>
       panelHeight.interpolate({
-        inputRange: [FULL_TRANSITION_START, SCREEN_HEIGHT],
-        outputRange: [0, insets.top],
+        inputRange: [edgeTransitionStart, edgeTransitionEnd],
+        outputRange: [0, preserveTopRadius ? 0 : insets.top],
         extrapolate: 'clamp',
       }),
-    [insets.top],
+    [edgeTransitionEnd, edgeTransitionStart, insets.top, preserveTopRadius],
   );
 
   // Override snap-based height when a fixed `height` prop is supplied
@@ -189,23 +250,42 @@ export default function ContentPanel({
     }).start();
   }, [height]);
 
-  // Update the 'default' snap point and animate to it when defaultSnapHeight changes
+  // Keep per-instance snap heights in sync with responsive window measurements.
+  // If the current snap's pixel height changes (for example after rotation), keep
+  // the panel at the same semantic snap instead of leaving it between positions.
   useEffect(() => {
-    if (defaultSnapHeight === undefined) {
-      // Restore the original default snap height when prop is removed
-      snapHeights.current.default = defaultSnapHeights.default;
-      return;
-    }
-    snapHeights.current.default = defaultSnapHeight;
-    // Snap to the new default height immediately
-    snapStateRef.current = 'default';
-    setSnapState('default');
+    snapHeights.current = {
+      ...defaultSnapHeights,
+      ...snapPointHeights,
+      ...(defaultSnapHeight === undefined ? {} : { default: defaultSnapHeight }),
+    };
+
+    const normalizedState = normalizeToAllowedSnap(
+      snapStateRef.current,
+      allowedSnapStatesRef.current,
+    );
+    snapStateRef.current = normalizedState;
+    setSnapState(normalizedState);
+    if (isDragging.current) return;
+
+    const nextHeight = maxHeight === undefined
+      ? snapHeights.current[normalizedState]
+      : Math.min(snapHeights.current[normalizedState], maxHeight);
+    if (Math.abs(currentPanelHeight.current - nextHeight) < 0.5) return;
     Animated.timing(panelHeight, {
-      toValue: maxHeight === undefined ? defaultSnapHeight : Math.min(defaultSnapHeight, maxHeight),
+      toValue: nextHeight,
       duration: 260,
       useNativeDriver: false,
     }).start();
-  }, [defaultSnapHeight]);
+  }, [
+    defaultSnapHeight,
+    maxHeight,
+    snapPointHeights?.compact,
+    snapPointHeights?.short,
+    snapPointHeights?.default,
+    snapPointHeights?.tall,
+    snapPointHeights?.full,
+  ]);
 
   // Only used when `visible` prop is provided
   const translateY = useRef(new Animated.Value(visible === false ? 40 : 0)).current;
@@ -228,16 +308,17 @@ export default function ContentPanel({
   // render prop (e.g. MyPlan) can safely memoize against it instead of
   // treating it as a new function every ContentPanel render.
   const snapTo = useCallback((next: SnapState, animated = true) => {
-    snapStateRef.current = next;
+    const resolvedNext = normalizeToAllowedSnap(next, allowedSnapStatesRef.current);
+    snapStateRef.current = resolvedNext;
     const nextHeight = maxHeight === undefined
-      ? snapHeights.current[next]
-      : Math.min(snapHeights.current[next], maxHeight);
+      ? snapHeights.current[resolvedNext]
+      : Math.min(snapHeights.current[resolvedNext], maxHeight);
     if (!animated) {
       transitionId.current += 1;
       isProgrammaticTransition.current = false;
-      setSnapState(next);
-      setGroupSnapState(next);
-      onSnapStateChange?.(next);
+      setSnapState(resolvedNext);
+      setGroupSnapState(resolvedNext);
+      onSnapStateChange?.(resolvedNext);
       panelHeight.setValue(nextHeight);
       return;
     }
@@ -258,7 +339,7 @@ export default function ContentPanel({
     // value and visibly cut once this spring finishes.
     requestAnimationFrame(() => {
       if (transitionId.current !== currentTransitionId) return;
-      setGroupSnapState(next);
+      setGroupSnapState(resolvedNext);
     });
     Animated.spring(panelHeight, {
       toValue: nextHeight,
@@ -270,8 +351,8 @@ export default function ContentPanel({
       if (transitionId.current !== currentTransitionId) return;
       isProgrammaticTransition.current = false;
       if (!finished) return;
-      setSnapState(next);
-      onSnapStateChange?.(next);
+      setSnapState(resolvedNext);
+      onSnapStateChange?.(resolvedNext);
     });
   }, [maxHeight, onSnapStateChange, setGroupSnapState]);
 
@@ -357,25 +438,32 @@ export default function ContentPanel({
   }, [maxHeight]);
 
   const resolveSnap = (dy: number) => {
+    const availableSnaps = allowedSnapStatesRef.current;
+    const minSnapHeight = snapHeights.current[availableSnaps[0]];
+    const maxSnapHeight = snapHeights.current[availableSnaps[availableSnaps.length - 1]];
     const finalHeight = Math.max(
-      snapHeights.current.compact,
-      Math.min(maxHeight ?? snapHeights.current.full, gestureStartHeight.current - dy),
+      minSnapHeight,
+      Math.min(Math.min(maxHeight ?? maxSnapHeight, maxSnapHeight), gestureStartHeight.current - dy),
     );
     // Always snap to the nearest defined snap point — no free-height zone.
-    let nearest: SnapState = SNAP_ORDER[0];
+    let nearest: SnapState = availableSnaps[0];
     let minDist = Infinity;
-    for (const state of SNAP_ORDER) {
+    for (const state of availableSnaps) {
       const dist = Math.abs(finalHeight - snapHeights.current[state]);
       if (dist < minDist) { minDist = dist; nearest = state; }
     }
+
     snapTo(nearest);
   };
 
   const dragToHeight = (dy: number) => {
+    const availableSnaps = allowedSnapStatesRef.current;
+    const minSnapHeight = snapHeights.current[availableSnaps[0]];
+    const maxSnapHeight = snapHeights.current[availableSnaps[availableSnaps.length - 1]];
     panelHeight.setValue(
       Math.max(
-        snapHeights.current.compact,
-        Math.min(maxHeight ?? snapHeights.current.full, gestureStartHeight.current - dy),
+        minSnapHeight,
+        Math.min(Math.min(maxHeight ?? maxSnapHeight, maxSnapHeight), gestureStartHeight.current - dy),
       ),
     );
   };
@@ -385,7 +473,7 @@ export default function ContentPanel({
   const dragToHeightRef = useRef(dragToHeight);
   dragToHeightRef.current = dragToHeight;
 
-  // Captures downward drag only when scroll is at the top
+  // Captures downward drag only when scroll is at the top.
   const panelPanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -465,7 +553,29 @@ export default function ContentPanel({
         }}
         {...panelPanResponder.panHandlers}
       >
-        <View className="absolute inset-0" style={{ backgroundColor: '#FFFFFF' }} />
+        {frosted ? (
+          <>
+            <BlurView
+              pointerEvents="none"
+              tint="systemUltraThinMaterialLight"
+              intensity={16}
+              style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            />
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                backgroundColor: 'rgba(255,255,255,0.90)',
+              }}
+            />
+          </>
+        ) : (
+          <View className="absolute inset-0" style={{ backgroundColor: '#FFFFFF' }} />
+        )}
 
         {/* Drag handle — the 24px area is always the drag hotspot, but the
             visible bar only shows at full screen. */}
@@ -475,7 +585,7 @@ export default function ContentPanel({
         >
           <View
             className="h-1 w-12 rounded-sm bg-handle"
-            style={{ opacity: 1 }}
+            style={{ opacity: showHandle ? 1 : 0 }}
           />
         </View>
 
