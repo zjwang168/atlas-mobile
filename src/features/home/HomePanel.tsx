@@ -2,7 +2,7 @@ import { memo, useCallback, useState } from 'react';
 import { View } from 'react-native';
 import { mockUser } from '../../../mock-data/mockUser';
 import ContentPanel from '../../components/content-panel/ContentPanel';
-import { Place } from '../../types/place';
+import { Place, PlaceDetail } from '../../types/place';
 import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import AccountModal from '../auth/AccountModal';
@@ -19,6 +19,10 @@ type HomePanelProps = {
   defaultSnapHeight?: number;
   maxHeight?: number;
   onHeightChange?: (height: number) => void;
+  onDeleteSwipeStart?: (place: PlaceDetail) => void;
+  onDeleteSwipeProgress?: (place: PlaceDetail, progress: number) => void;
+  onDeleteSwipeSettle?: (place: PlaceDetail, opened: boolean) => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
 function HomePanel({
@@ -29,6 +33,10 @@ function HomePanel({
   defaultSnapHeight,
   maxHeight,
   onHeightChange,
+  onDeleteSwipeStart,
+  onDeleteSwipeProgress,
+  onDeleteSwipeSettle,
+  onDeleteInitiated,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
   const [accountOpen, setAccountOpen] = useState(false);
@@ -77,6 +85,10 @@ function HomePanel({
                 avatarUri={mockUser.avatarUri}
                 avatarFallback={mockUser.avatarFallback}
                 onAvatarPress={() => setAccountOpen(true)}
+                onDeleteSwipeStart={onDeleteSwipeStart}
+                onDeleteSwipeProgress={onDeleteSwipeProgress}
+                onDeleteSwipeSettle={onDeleteSwipeSettle}
+                onDeleteInitiated={onDeleteInitiated}
               />
             </View>
           )}

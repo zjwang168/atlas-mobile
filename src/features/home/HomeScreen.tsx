@@ -5,6 +5,7 @@ import TopNav from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
+import type { PlaceDetail as PlaceDetailRecord } from '../../types/place';
 import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
 import { SNAP_HEIGHTS } from '../../components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '../../components/content-panel/ContentPanelSnapProvider';
@@ -129,6 +130,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
   const [homePanelVisible, setHomePanelVisible] = useState(true);
+  const [deletingMarker, setDeletingMarker] = useState<MapMarker | null>(null);
   const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
   // Use parsedPlaces from HomeContext (set by App.tsx after parse)
@@ -157,9 +159,11 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
 
   // 合并标记：有 parsedPlaces 时优先显示解析结果，否则显示已保存地点
   const mapMarkers = useMemo(() => {
-    if (hasParsedPlaces) return parsedMarkers;
-    return savedMarkers;
-  }, [savedMarkers, parsedMarkers, hasParsedPlaces]);
+    const markers = hasParsedPlaces ? parsedMarkers : savedMarkers;
+    return deletingMarker && !markers.some((marker) => marker.id === deletingMarker.id)
+      ? [...markers, deletingMarker]
+      : markers;
+  }, [savedMarkers, parsedMarkers, hasParsedPlaces, deletingMarker]);
 
   // 动态 zoom 级别
   const mapZoom = useMemo(() => {
@@ -209,6 +213,20 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
   const bottomPanelHeightRef = useRef(SNAP_HEIGHTS[settledPanelSnapState]);
   const mapRef = useRef<MapboxMapHandle>(null);
+  const selectedCoordinateRef = useRef(selectedPlaceCoordinate);
+  const selectedIdRef = useRef(selectedPlaceId);
+  const deleteSwipeRef = useRef<{
+    placeId: string;
+    previousCoordinate: [number, number] | null;
+    previousId: string | null;
+    lastProgress: number;
+    currentCoordinate: [number, number];
+    far: boolean;
+    lastCameraUpdateAt: number;
+  } | null>(null);
+  const deletingMarkerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { selectedCoordinateRef.current = selectedPlaceCoordinate; }, [selectedPlaceCoordinate]);
+  useEffect(() => { selectedIdRef.current = selectedPlaceId; }, [selectedPlaceId]);
   // Recomputed whenever the active bottom panel toggles OR its resolved snap state
   // changes, so a discrete camera recenter (e.g. selecting a different marker while
   // the panel is at a non-default snap height) uses padding matching the panel's
@@ -290,6 +308,86 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
   }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
 
+  const handleDeleteSwipeStart = useCallback((place: PlaceDetailRecord) => {
+    const start = selectedCoordinateRef.current ?? userLocation;
+    const distance = Math.hypot(place.longitude - start[0], place.latitude - start[1]);
+    deleteSwipeRef.current = {
+      placeId: place.id,
+      previousCoordinate: selectedCoordinateRef.current,
+      previousId: selectedIdRef.current,
+      lastProgress: 0,
+      currentCoordinate: start,
+      far: distance > 0.35,
+      lastCameraUpdateAt: 0,
+    };
+    if (distance > 0.35) mapRef.current?.focusCoordinate(start, 10, 260);
+  }, [userLocation]);
+
+  const handleDeleteSwipeProgress = useCallback((place: PlaceDetailRecord, progress: number) => {
+    const swipe = deleteSwipeRef.current;
+    if (!swipe || swipe.placeId !== place.id) return;
+    const amount = Math.min(Math.max(progress, 0), 1);
+    const start = swipe.previousCoordinate ?? userLocation;
+    const target: [number, number] = [place.longitude, place.latitude];
+    if (amount < swipe.lastProgress) {
+      if (Date.now() - swipe.lastCameraUpdateAt > 130) {
+        mapRef.current?.focusCoordinate(swipe.currentCoordinate, swipe.far ? 9.5 : 11, 300);
+        swipe.lastCameraUpdateAt = Date.now();
+      }
+      swipe.lastProgress = amount;
+      if (amount < 0.02) setSelectedPlaceId(swipe.previousId);
+      return;
+    }
+    const eased = amount * amount * (3 - 2 * amount);
+    const coordinate: [number, number] = [
+      start[0] + (target[0] - start[0]) * eased,
+      start[1] + (target[1] - start[1]) * eased,
+    ];
+    swipe.currentCoordinate = coordinate;
+    swipe.lastProgress = amount;
+    if (Date.now() - swipe.lastCameraUpdateAt > 130 || amount > 0.96) {
+      mapRef.current?.focusCoordinate(coordinate, swipe.far ? 10 : 12, 300);
+      swipe.lastCameraUpdateAt = Date.now();
+    }
+    if (amount > 0.02) setSelectedPlaceId(place.id);
+    if (amount < 0.02) setSelectedPlaceId(swipe.previousId);
+  }, [setSelectedPlaceId, userLocation]);
+
+  const handleDeleteSwipeSettle = useCallback((place: PlaceDetailRecord, opened: boolean) => {
+    const swipe = deleteSwipeRef.current;
+    if (!swipe || swipe.placeId !== place.id) return;
+    if (opened) {
+      const coordinate: [number, number] = [place.longitude, place.latitude];
+      setSelectedPlaceId(place.id);
+      setSelectedPlaceCoordinate(coordinate);
+      mapRef.current?.focusCoordinate(coordinate, 15, 360);
+      return;
+    }
+    const coordinate = swipe.currentCoordinate;
+    setSelectedPlaceId(swipe.previousId);
+    setSelectedPlaceCoordinate(coordinate);
+    mapRef.current?.focusCoordinate(coordinate, swipe.far ? 9.5 : 11, 260);
+    deleteSwipeRef.current = null;
+  }, [setSelectedPlaceCoordinate, setSelectedPlaceId, userLocation]);
+
+  const handleDeleteInitiated = useCallback((place: PlaceDetailRecord) => {
+    if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
+    setSelectedPlaceId(place.id);
+    setSelectedPlaceCoordinate([place.longitude, place.latitude]);
+    setDeletingMarker({ id: place.id, longitude: place.longitude, latitude: place.latitude, title: place.name, description: place.subtitle });
+    deletingMarkerTimerRef.current = setTimeout(() => setDeletingMarker(null), 470);
+  }, [setSelectedPlaceCoordinate, setSelectedPlaceId]);
+
+  useEffect(() => () => {
+    if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (hasParsedPlaces || !selectedPlaceId || savedPlaces.some((place) => place.id === selectedPlaceId)) return;
+    setSelectedPlaceId(null);
+    deleteSwipeRef.current = null;
+  }, [hasParsedPlaces, savedPlaces, selectedPlaceId, setSelectedPlaceCoordinate, setSelectedPlaceId]);
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
@@ -302,6 +400,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         zoomLevel={mapZoom}
         padding={mapPadding}
         selectedMarkerId={selectedPlaceId}
+        deletingMarkerId={deletingMarker?.id}
         onMarkerPress={handleMarkerPress}
       />
 
@@ -325,6 +424,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
               snapGroup={HOME_PANEL_SNAP_GROUP}
               visible={panelVisible && homePanelVisible}
               onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
+              onDeleteSwipeStart={handleDeleteSwipeStart}
+              onDeleteSwipeProgress={handleDeleteSwipeProgress}
+              onDeleteSwipeSettle={handleDeleteSwipeSettle}
+              onDeleteInitiated={handleDeleteInitiated}
             />
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>

@@ -28,6 +28,8 @@ export type SavedPlace = {
   latitude: number;
   longitude: number;
   region: string | null;
+  city?: string | null;
+  country?: string | null;
   photo_url?: string | null;
   note?: string | null;
   created_at: string;
@@ -66,6 +68,20 @@ function withStableKey(place: SavedPlace): SavedPlace {
     ...place,
     stableKey: makeStableKey(place),
   };
+}
+
+async function recordPinHistory(eventType: 'saved' | 'deleted', places: SavedPlace[]): Promise<void> {
+  if (!places.length) return;
+  const rows = places.map((place) => ({
+    place_id: place.id,
+    stable_key: place.stableKey ?? makeStableKey(place),
+    name: place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    event_type: eventType,
+  }));
+  const { error } = await supabase.from('place_pin_history').insert(rows);
+  if (error) throw new Error(`Saving pin history failed: ${error.message}`);
 }
 
 async function setSavedPlacesCache(userId: string, places: SavedPlace[]): Promise<void> {
@@ -146,7 +162,7 @@ export async function savePlaces(
     const { data: existing, error: existingError } = await withTimeout(
       supabase
         .from('places')
-        .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+        .select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at'),
       'Checking existing places timed out',
     );
     if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
@@ -204,6 +220,8 @@ export async function savePlaces(
     latitude: row.latitude,
     longitude: row.longitude,
     region: row.region,
+    city: row.city,
+    country: row.country,
     photo_url: row.photo_url,
     created_at: new Date().toISOString(),
   }));
@@ -215,7 +233,7 @@ export async function savePlaces(
 
   try {
     const bulk = await withTimeout(
-      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at'),
       'Saving places timed out',
     );
     data = (bulk.data ?? null) as SavedPlace[] | null;
@@ -243,7 +261,7 @@ export async function savePlaces(
     const insertedRows: SavedPlace[] = [];
     for (const row of rows) {
       const single = await withTimeout(
-        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at'),
         'Saving place timed out',
       ).catch((singleError) => {
         if (!isRetryableError(singleError)) throw singleError;
@@ -286,6 +304,7 @@ export async function savePlaces(
       return localIndex >= 0 ? (savedRows[localIndex] ?? row) : row;
     })
   ));
+  recordPinHistory('saved', savedRows).catch((error) => console.warn('[placeService] pin history insert failed:', error));
 
   // Record provenance (best-effort; a failure here shouldn't lose the places).
   if (source?.url && data) {
@@ -316,7 +335,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before fetch failed:', error));
     const { data, error } = await supabase
       .from('places')
-      .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at')
+      .select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at')
       .order('created_at', { ascending: false });
     if (error) throw new Error(`Failed to fetch places: ${error.message}`);
     const fresh = ((data ?? []) as SavedPlace[]).map(withStableKey);
@@ -368,7 +387,14 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
 export async function deletePlace(id: string): Promise<void> {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot delete places before auth is ready');
-  await updateSavedPlacesCache(userId, (current) => current.filter((place) => place.id !== id));
+  let deletedPlace: SavedPlace | undefined;
+  await updateSavedPlacesCache(userId, (current) => {
+    deletedPlace = current.find((place) => place.id === id);
+    return current.filter((place) => place.id !== id);
+  });
+  if (deletedPlace) {
+    recordPinHistory('deleted', [deletedPlace]).catch((error) => console.warn('[placeService] pin history delete record failed:', error));
+  }
 
   if (id.startsWith('local-')) {
     await enqueueWrite(userId, { kind: 'deletePlace', placeId: id });
