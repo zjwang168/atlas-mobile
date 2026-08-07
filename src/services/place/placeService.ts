@@ -179,11 +179,18 @@ export async function savePlaces(
     category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
+    // Batch-level: the region this whole import was inferred to be in, not
+    // each place's own. Place search passes no source, so its rows get null.
     region: truncate(source?.region, 100),
     // `imageUri` is the backend-provided place thumbnail from parse responses.
     // Keep saves deterministic: persist it as-is instead of starting a client
     // side third-party lookup after the row is visible.
     photo_url: truncate(p.imageUri, 1000),
+    // Per-place. Only place search supplies these; parse results leave them null.
+    external_place_id: truncate(p.externalId, 255),
+    external_source: truncate(p.externalSource, 100),
+    city: truncate(p.city, 100),
+    country: truncate(p.country, 100),
   }));
 
   // Temporary id for optimistic UI — never sent to Supabase (which assigns the

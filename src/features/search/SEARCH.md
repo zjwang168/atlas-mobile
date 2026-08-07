@@ -2,39 +2,37 @@
 
 ## Overview
 
-`SearchPanel` is the full-screen overlay opened from the search icon in `TopNav`. It is currently a UI stub — it renders a search input and a hint/empty state but does not query any data source yet; typing does not filter or fetch results.
-
-## File Structure
-
-```
-src/features/search/
-  SearchPanel.tsx   ← search input + placeholder empty state
-  SEARCH.md         ← this document
-```
-
-## Props
-
-```ts
-type SearchPanelProps = {
-  onClose: () => void;
-};
-```
+`SearchPanel` is the full-screen overlay opened from the search icon in `TopNav`; it finds places by name and saves the ones the user picks straight into My Places.
 
 ## Behaviour
 
-- Local `query` state only; no backend/service call is wired up.
-- Shows a hint text when `query` is empty, and a static "no results" text otherwise — this is a placeholder, not real search.
+Typing is debounced, and each settled query cancels whatever the previous one started so a slower earlier response cannot land on top of a newer one. Queries shorter than `MIN_QUERY_LENGTH` never leave the device.
 
-## Integration
+One search session token is created when the panel mounts and reused for every suggestion request and the final resolve, then discarded when the panel closes — Mapbox bills the session rather than the keystrokes, so reopening the panel is what starts a new one.
 
-```tsx
-{overlay.kind === 'search' && (
-  <SearchPanel onClose={() => setOverlay({ kind: 'none' })} />
-)}
+Suggestions carry no coordinates. Picking a row resolves it into a full place, saves it through `savePlaces()`, and refreshes My Places; the row then shows as saved so several places can be added without leaving the panel. A failed save is logged and the row returns to its unsaved state rather than blocking the panel.
+
+Only `poi` results appear — see [SERVICES.md](../../services/SERVICES.md) for why brands are filtered out and why more results are requested than displayed.
+
+Results are attributed to Mapbox/OpenStreetMap beneath the list, which the provider's terms require wherever they are displayed.
+
+### Status
+
+- **idle** — query too short; shows a prompt.
+- **searching** — a request is in flight; spinner in the input.
+- **ready** — results rendered, or a "no places found" message.
+- **error** — the request failed; the list is cleared and a retry message shown.
+
+## API
+
+```ts
+type SearchPanelProps = {
+  onClose: () => void;   // dismiss; HomeScreen resets the overlay to 'none'
+};
 ```
-
-Opened from `HomeScreen` via `overlay.kind === 'search'`, triggered by the search icon in `TopNav`.
 
 ## Related docs
 
 - [HOME.md](../home/HOME.md) — owns the `search` overlay kind that renders this panel
+- [SERVICES.md](../../services/SERVICES.md) — `placeSearchService` (session, filtering) and `placeService.savePlaces()`
+- [PLACE-SEARCH-SERVICE.md](../../../backend/services/place_search_service/PLACE-SEARCH-SERVICE.md) — the backend side

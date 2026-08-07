@@ -8,6 +8,27 @@ export interface GeocodedLocation {
   description?: string | null;
   category?: string | null;
   photo_url?: string | null;
+  /** Provider's own id for this place, paired with `source`. Populated by
+      place search; the parse pipelines leave these unset. */
+  external_id?: string | null;
+  source?: string | null;
+  city?: string | null;
+  region?: string | null;
+  country?: string | null;
+}
+
+/** One candidate from `GET /places/search`. Carries no coordinates — resolve it
+    through `retrievePlace()` to get a saveable place. */
+export interface PlaceSuggestion {
+  external_id: string;
+  name: string;
+  /** 'poi' is one physical place; 'brand' fans out to every branch on retrieve. */
+  feature_type: string;
+  place_formatted?: string | null;
+  full_address?: string | null;
+  category?: string | null;
+  distance_m?: number | null;
+  source: string;
 }
 
 /** A segment between two consecutive locations in the route */

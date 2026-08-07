@@ -104,7 +104,10 @@ graph TD
         G3[Nominatim<br/>1 req/s]
         G4[Photon<br/>No key needed]
         G5[Google Maps]
-        G1 -->|fallback| G2 -->|fallback| G3 -->|fallback| G4 -->|fallback| G5
+        G1 -->|fallback| G2
+        G2 -->|fallback| G3
+        G3 -->|fallback| G4
+        G4 -->|fallback| G5
     end
 
     GEO --> G1
