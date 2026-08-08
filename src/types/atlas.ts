@@ -8,4 +8,8 @@ export type Atlas = {
   visibility: string;
   created_at: string;
   updated_at: string;
+  /** New map-first atlas format. Older collections are deliberately hidden. */
+  format_version?: number;
+  route_geojson?: GeoJSON.Feature<GeoJSON.LineString> | null;
+  route_visible?: boolean;
 };

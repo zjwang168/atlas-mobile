@@ -24,6 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getLinkPreview, type LinkPreview } from '../../../services/api/apiService';
 import { useAppDialog } from '../../../components/feedback/AppDialog';
+import VoiceInputButton from '../../../components/voice-input/VoiceInputButton';
 import { typography } from '../../../theme/typography';
 
 export type ImportMode =
@@ -313,6 +314,7 @@ export default function ImportScreen({
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [linkPreview, setLinkPreview] = useState<ResolvedLinkPreview | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
+  const [voiceRecording, setVoiceRecording] = useState(false);
 
   const snapPoints = useMemo(
     () =>
@@ -640,7 +642,7 @@ export default function ImportScreen({
       ? 'Paste a public social video link...'
       : section === 'links'
         ? 'Paste any web page URL...'
-        : 'Paste notes, an itinerary, or a list...';
+        : voiceRecording ? 'Hold to speak' : 'Paste notes, an itinerary, or a list...';
     const trimmedText = text.trim();
     const hasLinkInput = isLinkSection && trimmedText.length > 0;
     const hasMatchingPreview = Boolean(linkPreview && linkPreview.url === trimmedText);
@@ -784,6 +786,12 @@ export default function ImportScreen({
                 ]}
                 textAlignVertical={isText ? 'top' : 'center'}
               />
+              {isText ? (
+                <VoiceInputButton
+                  onRecordingChange={setVoiceRecording}
+                  onTranscript={(value) => setText((current) => current ? `${current} ${value}` : value)}
+                />
+              ) : null}
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Import places"

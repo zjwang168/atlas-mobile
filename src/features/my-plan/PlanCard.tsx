@@ -15,11 +15,12 @@ type PlanCardProps = {
   deletionMode?: boolean;
   onPress?: () => void;
   onDeletePress?: () => void;
+  onLongPress?: () => void;
 };
 
-function PlanCard({ title, placeCount, imageUrl, create = false, deletionMode = false, onPress, onDeletePress }: PlanCardProps) {
+function PlanCard({ title, placeCount, imageUrl, create = false, deletionMode = false, onPress, onDeletePress, onLongPress }: PlanCardProps) {
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.75} style={{ flex: 1, gap: 10 }}>
+    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} activeOpacity={0.75} style={{ flex: 1, gap: 10 }}>
       {/* Thumbnail wrapper — relative so the delete badge can be positioned over it */}
       <View style={{ aspectRatio: 1 }}>
         <View

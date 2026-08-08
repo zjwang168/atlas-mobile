@@ -123,6 +123,88 @@ export async function addPlacesToAtlas(atlasId: string, placeIds: string[]): Pro
   }
 }
 
+export type AtlasOwnedPlaceInput = {
+  id: string;
+  name: string;
+  subtitle: string;
+  latitude: number;
+  longitude: number;
+  photo_url?: string | null;
+  external_place_id?: string | null;
+  city?: string | null;
+  region?: string | null;
+  country?: string | null;
+};
+
+/** Adds a searched place to one Atlas without saving it to My Places. */
+export async function addAtlasOwnedPlaces(atlasId: string, places: AtlasOwnedPlaceInput[]): Promise<AtlasPlace[]> {
+  if (!places.length) return [];
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot add places to an atlas before auth is ready');
+
+  const existing = (await getCached<AtlasPlace[]>(userId, LOCAL_CACHE_KEYS.atlasPlaces)) ?? [];
+  const existingForAtlas = existing.filter((row) => row.atlas_id === atlasId);
+  const existingKeys = new Set(existingForAtlas.map((row) => row.external_place_id ?? row.place_id).filter(Boolean));
+  const toAdd = places.filter((place) => !existingKeys.has(place.external_place_id ?? place.id));
+  if (!toAdd.length) return [];
+
+  const now = new Date().toISOString();
+  let sortOrder = existingForAtlas.length;
+  const localRows: AtlasPlace[] = toAdd.map((place) => ({
+    id: createLocalId(), atlas_id: atlasId, place_id: null, added_by: null, note: null,
+    sort_order: sortOrder++, created_at: now, place_name: place.name, place_subtitle: place.subtitle,
+    latitude: place.latitude, longitude: place.longitude, photo_url: place.photo_url ?? null,
+    external_place_id: place.external_place_id ?? place.id, city: place.city ?? null,
+    region: place.region ?? null, country: place.country ?? null,
+  }));
+  await updateAtlasPlacesCache(userId, (current) => [...current, ...localRows]);
+
+  try {
+    const rows = localRows.map(({ id, added_by, note, created_at, timeline_day, timeline_time, ...row }) => row);
+    const { data, error } = await withTimeout(
+      supabase.from('atlas_places').insert(rows).select(ATLAS_PLACES_SELECT_COLUMNS),
+      'Adding places to atlas timed out',
+    );
+    if (error) throw new Error(`Failed to add searched places to atlas: ${error.message}`);
+    const savedRows = (data ?? []) as AtlasPlace[];
+    await updateAtlasPlacesCache(userId, (current) => current.map((row) => {
+      const localIndex = localRows.findIndex((local) => local.id === row.id);
+      return localIndex >= 0 ? (savedRows[localIndex] ?? row) : row;
+    }));
+    return savedRows;
+  } catch (error) {
+    if (!isRetryableError(error)) {
+      await updateAtlasPlacesCache(userId, (current) => current.filter((row) => !localRows.some((local) => local.id === row.id)));
+      throw error;
+    }
+    await enqueueWrite(userId, { kind: 'addAtlasPlaces', atlasId, localRows });
+    return localRows;
+  }
+}
+
+export type AtlasPlacePatch = Pick<AtlasPlace, 'note' | 'sort_order' | 'timeline_day' | 'timeline_time'>;
+
+/** Update one Atlas item. This backs notes, time dividers, and drag ordering. */
+export async function updateAtlasPlace(joinRowId: string, patch: Partial<AtlasPlacePatch>): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot update an atlas before auth is ready');
+
+  await updateAtlasPlacesCache(userId, (current) => current.map((row) => (
+    row.id === joinRowId ? { ...row, ...patch } : row
+  )));
+  if (joinRowId.startsWith('local-')) return;
+  const { error } = await withTimeout(
+    supabase.from('atlas_places').update(patch).eq('id', joinRowId),
+    'Updating atlas item timed out',
+  );
+  if (error) throw new Error(`Failed to update atlas item: ${error.message}`);
+}
+
+/** Apply a whole ordering in a sequence so each drag operation survives reload. */
+export async function reorderAtlasPlaces(rows: Array<{ id: string; sort_order: number }>): Promise<void> {
+  await Promise.all(rows.map(({ id, sort_order }) => updateAtlasPlace(id, { sort_order })));
+}
+
 /**
  * Remove a place from an atlas — deletes the `atlas_places` join row only,
  * the underlying place is untouched. Local cache first, queued for retry via

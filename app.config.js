@@ -39,6 +39,7 @@ export default {
     plugins: [
       'expo-font',
       'expo-notifications',
+      ['expo-audio', { microphonePermission: 'Allow OurAtlas to transcribe your voice notes.' }],
       [
         '@rnmapbox/maps',
         {

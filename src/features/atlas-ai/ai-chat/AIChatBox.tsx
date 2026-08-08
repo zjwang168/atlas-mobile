@@ -12,7 +12,6 @@ import { ClockIcon } from 'phosphor-react-native/src/icons/Clock';
 import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
 import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
-import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
 import { PencilSimpleLineIcon } from 'phosphor-react-native/src/icons/PencilSimpleLine';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
 import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
@@ -41,6 +40,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/ui/text';
+import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import TopBlurFade from '@/components/ui/top-blur-fade';
 import { chatWithAtlas, createChatSession, fetchConversation } from '@/services/api/apiService';
@@ -203,6 +203,7 @@ export default function AIChatBox({
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [inputContentHeight, setInputContentHeight] = useState(21);
+  const [voiceRecording, setVoiceRecording] = useState(false);
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
   >({});
@@ -739,7 +740,7 @@ export default function AIChatBox({
               onContentSizeChange={({ nativeEvent }) => {
                 setInputContentHeight(Math.max(21, Math.ceil(nativeEvent.contentSize.height)));
               }}
-              placeholder="Ask AtlasAI"
+              placeholder={voiceRecording ? 'Hold to speak' : 'Ask AtlasAI'}
               placeholderTextColor="#B0B0B0"
               style={[
                 styles.composerInput,
@@ -760,13 +761,12 @@ export default function AIChatBox({
             </View>
 
             <View style={styles.composerTrailingActions}>
-              <View
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
+              <VoiceInputButton
+                disabled={pending}
+                onRecordingChange={setVoiceRecording}
+                onTranscript={(text) => setInputText((current) => current ? `${current} ${text}` : text)}
                 style={styles.utilityButton}
-              >
-                <MicrophoneIcon size={24} weight="regular" color={COLOR.foreground} />
-              </View>
+              />
 
               {sendButton}
             </View>

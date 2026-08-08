@@ -238,7 +238,7 @@ async function deleteAtlasOnline(atlasId: string): Promise<void> {
 }
 
 async function insertAtlasPlacesOnline(write: AddAtlasPlacesWrite): Promise<AtlasPlace[]> {
-  const rows = write.localRows.map(({ atlas_id, place_id, sort_order }) => ({ atlas_id, place_id, sort_order }));
+  const rows = write.localRows.map(({ atlas_id, place_id, sort_order, place_name, place_subtitle, latitude, longitude, photo_url, external_place_id, city, region, country }) => ({ atlas_id, place_id, sort_order, place_name: place_name ?? null, place_subtitle: place_subtitle ?? null, latitude: latitude ?? null, longitude: longitude ?? null, photo_url: photo_url ?? null, external_place_id: external_place_id ?? null, city: city ?? null, region: region ?? null, country: country ?? null }));
   const { data, error } = await withTimeout(
     supabase.from('atlas_places').insert(rows).select(ATLAS_PLACES_SELECT_COLUMNS),
   );

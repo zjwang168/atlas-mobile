@@ -19,7 +19,9 @@ Endpoints:
 import logging
 import os
 import sys
+import base64
 from typing import Optional
+import httpx
 
 from dotenv import load_dotenv
 
@@ -108,6 +110,10 @@ class ParseTextRequest(BaseModel):
     text: str
     request_id: Optional[str] = None
     web_search: bool = False
+
+
+class AtlasRouteRequest(BaseModel):
+    coordinates: list[tuple[float, float]]
 
 
 class CreateSessionRequest(BaseModel):
@@ -816,6 +822,85 @@ def _place_search_http_error(exc: Exception) -> HTTPException:
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         return HTTPException(status_code=429, detail="Place search is rate limited", headers=headers)
     return HTTPException(status_code=502, detail=f"Place search upstream failed: {exc}")
+
+
+@app.post("/atlas/route")
+async def atlas_route(req: AtlasRouteRequest) -> dict:
+    """Return a walking-network route for Atlas points, without exposing the key."""
+    if len(req.coordinates) < 2:
+        raise HTTPException(status_code=422, detail="At least two coordinates are required")
+    if len(req.coordinates) > 25:
+        raise HTTPException(status_code=422, detail="An Atlas route supports up to 25 places")
+    token = os.getenv("MAPBOX_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=503, detail="Map routing is not configured")
+    coordinate_string = ";".join(f"{longitude},{latitude}" for longitude, latitude in req.coordinates)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                f"https://api.mapbox.com/directions/v5/mapbox/walking/{coordinate_string}",
+                params={"access_token": token, "geometries": "geojson", "overview": "full"},
+            )
+            response.raise_for_status()
+        route = (response.json().get("routes") or [None])[0]
+        if not route or not route.get("geometry"):
+            raise ValueError("No route returned")
+        return {
+            "route": {"type": "Feature", "properties": {}, "geometry": route["geometry"]},
+            "distance_km": round(float(route.get("distance", 0)) / 1000, 2),
+            "duration_minutes": round(float(route.get("duration", 0)) / 60),
+        }
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Map routing failed: {exc}")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/speech/transcribe")
+async def speech_transcribe(file: UploadFile = File(...)) -> dict:
+    """Transcribe a short voice note with Groq Whisper Large V3 Turbo."""
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Speech recognition is not configured")
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=422, detail="No audio received")
+    if len(audio) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Voice note is too large")
+
+    # Groq accepts m4a and the other audio types emitted by supported clients.
+    filename = file.filename or "atlas-note.m4a"
+    content_type = file.content_type or "audio/m4a"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                data={
+                    "model": "whisper-large-v3-turbo",
+                    "response_format": "json",
+                },
+                files={"file": (filename, audio, content_type)},
+            )
+        if response.status_code == 429:
+            retry_after = response.headers.get("retry-after")
+            headers = {"Retry-After": retry_after} if retry_after else None
+            raise HTTPException(status_code=429, detail="Speech recognition is rate limited", headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        text = payload.get("text", "") if isinstance(payload, dict) else ""
+        return {"text": text if isinstance(text, str) else ""}
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as exc:
+        logging.getLogger("atlas").warning(
+            "Groq speech recognition failed with status %s", exc.response.status_code
+        )
+        raise HTTPException(status_code=502, detail="Speech recognition failed") from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        logging.getLogger("atlas").exception("Groq speech recognition failed")
+        raise HTTPException(status_code=502, detail="Speech recognition failed") from exc
 
 
 @app.get("/places/search", response_model=PlaceSuggestResponse,

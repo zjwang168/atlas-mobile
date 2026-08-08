@@ -67,9 +67,23 @@ export type PlaceDetail = Place & {
 export type AtlasPlace = {
   id: string;
   atlas_id: string;
-  place_id: string;
+  /** A My Places row when this Atlas item originated from a saved place. */
+  place_id: string | null;
   added_by: string | null;
   note: string | null;
   sort_order: number;
   created_at: string;
+  /** Optional schedule metadata for the map-first Atlas editor. */
+  timeline_day?: number | null;
+  timeline_time?: string | null;
+  /** Atlas-owned fields let a searched place stay out of My Places. */
+  place_name?: string | null;
+  place_subtitle?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  photo_url?: string | null;
+  external_place_id?: string | null;
+  city?: string | null;
+  region?: string | null;
+  country?: string | null;
 };

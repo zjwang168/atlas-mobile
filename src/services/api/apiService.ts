@@ -134,6 +134,29 @@ export type AtlasChatResponse = {
   partial: boolean;
 };
 
+export type AtlasRouteResponse = {
+  route: GeoJSON.Feature<GeoJSON.LineString>;
+  distance_km: number;
+  duration_minutes: number;
+};
+
+/** Road-network route for an ordered Atlas. The backend retains the token. */
+export function requestAtlasRoute(coordinates: Array<[number, number]>): Promise<AtlasRouteResponse> {
+  return postJson<AtlasRouteResponse>('/atlas/route', { coordinates });
+}
+
+export async function transcribeAudio(uri: string): Promise<{ text: string }> {
+  const form = new FormData();
+  form.append('file', { uri, name: 'atlas-note.m4a', type: 'audio/m4a' } as unknown as Blob);
+  const response = await fetch(`${API_BASE_URL}/speech/transcribe`, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: form,
+  });
+  if (!response.ok) throw new Error(`Speech API error (${response.status})`);
+  return response.json() as Promise<{ text: string }>;
+}
+
 export type MemoryRecord = {
   id: string;
   key: string;

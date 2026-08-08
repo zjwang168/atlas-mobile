@@ -71,6 +71,16 @@ const medianCenter = (places: ParsedPlace[]): [number, number] => {
   return [mid(places.map((p) => p.longitude)), mid(places.map((p) => p.latitude))];
 };
 
+const medianSavedCenter = (places: SavedPlace[]): [number, number] => {
+  if (places.length === 0) return [-122.3321, 47.6062];
+  const midpoint = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
+  return [midpoint(places.map((place) => place.longitude)), midpoint(places.map((place) => place.latitude))];
+};
+
 // ---- Root export — HomeProvider is now in App.tsx ----
 
 export default function HomeScreen({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
@@ -101,6 +111,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     setActiveSidekick,
     userLocation,
     savedPlaces,
+    atlasMapState,
   } = useHome();
   const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
   // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
@@ -134,11 +145,15 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // 地图中心：优先使用选中地点坐标，其次使用 parsedPlaces 的中心，
   // 再次使用用户 GPS 定位，最后用默认值（西雅图）
   const mapCenter = useMemo(() => {
+    if (atlasMapState?.centerCoordinate) return atlasMapState.centerCoordinate;
     if (selectedPlaceCoordinate) return selectedPlaceCoordinate;
     if (hasParsedPlaces) return medianCenter(parsedPlaces);
+    if (savedPlaces.length) {
+      return medianSavedCenter(savedPlaces);
+    }
     if (userLocation) return userLocation;
     return [-122.3321, 47.6062] as [number, number];
-  }, [selectedPlaceCoordinate, hasParsedPlaces, parsedPlaces, userLocation]);
+  }, [atlasMapState?.centerCoordinate, selectedPlaceCoordinate, hasParsedPlaces, parsedPlaces, savedPlaces, userLocation]);
 
   // savedPlaces 常驻标记
   const savedMarkers = useMemo(
@@ -154,18 +169,20 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
 
   // 合并标记：有 parsedPlaces 时优先显示解析结果，否则显示已保存地点
   const mapMarkers = useMemo(() => {
+    if (atlasMapState) return atlasMapState.markers;
     const markers = hasParsedPlaces ? parsedMarkers : savedMarkers;
     return deletingMarker && !markers.some((marker) => marker.id === deletingMarker.id)
       ? [...markers, deletingMarker]
       : markers;
-  }, [savedMarkers, parsedMarkers, hasParsedPlaces, deletingMarker]);
+  }, [atlasMapState, savedMarkers, parsedMarkers, hasParsedPlaces, deletingMarker]);
 
   // 动态 zoom 级别
   const mapZoom = useMemo(() => {
+    if (atlasMapState?.zoomLevel) return atlasMapState.zoomLevel;
     if (selectedPlaceCoordinate) return 15;
     if (hasParsedPlaces) return 10;
-    return 12;
-  }, [selectedPlaceCoordinate, hasParsedPlaces]);
+    return savedPlaces.length ? 6 : 12;
+  }, [atlasMapState?.zoomLevel, selectedPlaceCoordinate, hasParsedPlaces, savedPlaces.length]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
   const historyChatRequested = activeSidekick === 'aiChat' && panelVisible;
@@ -296,14 +313,20 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         markers={mapMarkers}
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
+        bounds={atlasMapState?.bounds}
         padding={mapPadding}
-        selectedMarkerId={selectedPlaceId}
+        routeGeoJSON={atlasMapState?.routeGeoJSON}
+        selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}
         deletingMarkerId={deletingMarker?.id}
-        onMarkerPress={handleMarkerPress}
+        onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
+        onMapPress={atlasMapState?.onMapPress}
+        compassEnabled={!atlasMapState}
+        markerPopup={atlasMapState?.markerPopup}
       />
 
       <TopBlurFade />
-      <TopNav onSearchPress={handleSearchPress} />
+      <TopNav onSearchPress={handleSearchPress} hideSearchButton={Boolean(atlasMapState?.hideTopSearchButton)} />
+      {atlasMapState?.overlay}
 
       <View style={styles.pagerViewport} pointerEvents="box-none">
         <Animated.View

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 import { useAppDialog } from '../../components/feedback/AppDialog';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
@@ -12,6 +12,7 @@ import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } 
 import { loadChatHistory, supabase } from '../../services/supabase/supabaseClient';
 import type { Atlas } from '../../types/atlas';
 import type { AtlasPlace, PlaceDetail } from '../../types/place';
+import type { MapMarker } from '../map/MapboxMap';
 
 // --- Chat History ---
 
@@ -44,11 +45,32 @@ export type Overlay =
   | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }
   | { kind: 'createPlan' };
 
+/**
+ * Temporary map ownership for the map-first Atlas editor. It deliberately
+ * lives outside the editor panel so there is always one full-screen map.
+ */
+export type AtlasMapState = {
+  markers: MapMarker[];
+  centerCoordinate?: [number, number];
+  zoomLevel?: number;
+  bounds?: { ne: [number, number]; sw: [number, number] };
+  selectedMarkerId?: string | null;
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
+  onMarkerPress?: (marker: MapMarker) => void;
+  onMapPress?: () => void;
+  /** Atlas-only controls live above the one shared map, never in its panel. */
+  overlay?: ReactNode;
+  markerPopup?: { markerId: string; content: ReactNode } | null;
+  hideTopSearchButton?: boolean;
+} | null;
+
 type HomeContextValue = {
   overlay: Overlay;
   setOverlay: (overlay: Overlay) => void;
   tabBarVisible: boolean;
   setTabBarVisible: (visible: boolean) => void;
+  atlasMapState: AtlasMapState;
+  setAtlasMapState: (state: AtlasMapState) => void;
   /** 最新解析出的地点（来自 import 流程），供 HomeScreen 地图显示 */
   parsedPlaces: ParsedPlace[];
   setParsedPlaces: (places: ParsedPlace[]) => void;
@@ -115,6 +137,8 @@ const HomeContext = createContext<HomeContextValue>({
   setOverlay: () => {},
   tabBarVisible: true,
   setTabBarVisible: () => {},
+  atlasMapState: null,
+  setAtlasMapState: () => {},
   parsedPlaces: [],
   setParsedPlaces: () => {},
   savedPlaces: [],
@@ -167,6 +191,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const { show: showDialog } = useAppDialog();
   const [overlay, setOverlay] = useState<Overlay>({ kind: 'none' });
   const [tabBarVisible, setTabBarVisible] = useState(true);
+  const [atlasMapState, setAtlasMapState] = useState<AtlasMapState>(null);
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [atlases, setAtlases] = useState<Atlas[]>([]);
@@ -411,6 +436,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setOverlay,
       tabBarVisible,
       setTabBarVisible,
+      atlasMapState,
+      setAtlasMapState,
       parsedPlaces,
       setParsedPlaces,
       savedPlaces,
@@ -447,6 +474,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     [
       overlay,
       tabBarVisible,
+      atlasMapState,
       parsedPlaces,
       savedPlaces,
       refreshSavedPlaces,

@@ -1,24 +1,14 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import { typography } from '@/theme/typography';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, useColorScheme, View } from 'react-native';
-import { useAppDialog } from '@/components/feedback/AppDialog';
-
-import ContentPanel from '../../../../components/content-panel/ContentPanel';
-import { useHome } from '../../../home/HomeContext';
-import { toPlaceDetail } from '@/services/place/placeService';
+import ContentPanel from '@/components/content-panel/ContentPanel';
+import { useHome } from '@/features/home/HomeContext';
+import type { MapMarker } from '@/features/map/MapboxMap';
+import AtlasBuilder from '@/features/my-plan/atlas-builder/AtlasBuilder';
 import type { Atlas } from '@/types/atlas';
-import type { PlaceDetail as PlaceDetailType } from '@/types/place';
-import { PlaceCard } from '../../all-places/PlaceCard';
-import AtlasOverviewSection from './AtlasOverviewSection';
-
-function ItemSeparator() {
-  return (
-    <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
-  );
-}
+import type { SavedPlace } from '@/services/place/placeService';
+import { useEffect, useMemo, useState } from 'react';
+import { FlatList, Image, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 
 type AtlasDetailProps = {
   atlasId: string | null;
@@ -27,201 +17,96 @@ type AtlasDetailProps = {
   onHeightChange?: (height: number) => void;
 };
 
+type AtlasDisplayPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url'>;
+type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null };
+
+function getMapPresentation(items: ItineraryItem[], route: Atlas['route_geojson']) {
+  if (!items.length) return { markers: [] as MapMarker[], centerCoordinate: undefined, zoomLevel: 6 };
+  const longitudes = items.map((item) => item.place.longitude);
+  const latitudes = items.map((item) => item.place.latitude);
+  const minLng = Math.min(...longitudes); const maxLng = Math.max(...longitudes);
+  const minLat = Math.min(...latitudes); const maxLat = Math.max(...latitudes);
+  const span = Math.max(maxLng - minLng, (maxLat - minLat) * 1.35);
+  const zoomLevel = span < 0.015 ? 13 : span < 0.08 ? 11 : span < 0.35 ? 9 : span < 1.2 ? 7 : 5;
+  return {
+    markers: items.map((item, index) => ({ id: item.place.id, title: item.place.name, description: item.place.subtitle, latitude: item.place.latitude, longitude: item.place.longitude, tone: 'atlas' as const, order: index + 1 })),
+    centerCoordinate: [
+      (minLng + maxLng) / 2,
+      (minLat + maxLat) / 2,
+    ] as [number, number],
+    zoomLevel,
+    bounds: items.length > 1 ? {
+      ne: [maxLng + Math.max(0.01, (maxLng - minLng) * 0.12), maxLat + Math.max(0.01, (maxLat - minLat) * 0.12)] as [number, number],
+      sw: [minLng - Math.max(0.01, (maxLng - minLng) * 0.12), minLat - Math.max(0.01, (maxLat - minLat) * 0.12)] as [number, number],
+    } : undefined,
+    routeGeoJSON: route ?? undefined,
+  };
+}
+
 export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightChange }: AtlasDetailProps) {
-  const { show: showDialog } = useAppDialog();
-  const { atlases, savedPlaces, setOverlay, atlasPlaces, addPlacesToAtlas, removePlaceFromAtlas, deleteAtlas } = useHome();
-  const [atlas, setAtlas] = useState<Atlas | null>(null);
-  const [isVisible, setIsVisible] = useState(false);
+  const { atlases, savedPlaces, atlasPlaces, setAtlasMapState } = useHome();
+  const [editing, setEditing] = useState(false);
+  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
+  const atlas = useMemo(() => atlases.find((item) => item.id === atlasId) ?? null, [atlasId, atlases]);
+  const items = useMemo<ItineraryItem[]>(() => {
+    if (!atlasId) return [];
+    const byId = new Map(savedPlaces.map((place) => [place.id, place]));
+    return atlasPlaces.filter((row) => row.atlas_id === atlasId).sort((a, b) => a.sort_order - b.sort_order).flatMap((row) => {
+      const saved = row.place_id ? byId.get(row.place_id) : undefined;
+      const place: AtlasDisplayPlace | null = saved ?? (row.place_name && row.latitude != null && row.longitude != null ? {
+        id: row.external_place_id ?? row.id,
+        name: row.place_name,
+        subtitle: row.place_subtitle ?? '',
+        latitude: row.latitude,
+        longitude: row.longitude,
+        photo_url: row.photo_url ?? null,
+      } : null);
+      return place ? [{ place, rowId: row.id, note: row.note, day: row.timeline_day ?? null, time: row.timeline_time ?? null }] : [];
+    });
+  }, [atlasId, atlasPlaces, savedPlaces]);
+
+  const presentation = useMemo(() => getMapPresentation(items, atlas?.route_visible ? atlas.route_geojson ?? null : null), [atlas?.route_geojson, atlas?.route_visible, items]);
 
   useEffect(() => {
-    if (atlasId) {
-      setAtlas(atlases.find((a) => a.id === atlasId) ?? null);
-      setIsVisible(true);
-    } else {
-      setIsVisible(false);
-    }
-  }, [atlasId, atlases]);
-
-  // This atlas's join rows, sorted for display — atlasPlaces itself covers every
-  // atlas and is loaded once by HomeContext, same as savedPlaces/atlases.
-  const atlasPlaceRows = useMemo(() => {
-    if (!atlasId) return [];
-    return atlasPlaces.filter((row) => row.atlas_id === atlasId).sort((a, b) => a.sort_order - b.sort_order);
-  }, [atlasId, atlasPlaces]);
-
-  // atlas_places.id (the join row, needed to remove membership) keyed by place_id,
-  // since PlaceCard's onDelete only gives back the place id.
-  const joinRowIdByPlaceId = useMemo(
-    () => new Map(atlasPlaceRows.map((row) => [row.place_id, row.id])),
-    [atlasPlaceRows],
-  );
-
-  const places = useMemo(() => {
-    const savedById = new Map(savedPlaces.map((place) => [place.id, place]));
-    return atlasPlaceRows
-      .map((row) => savedById.get(row.place_id))
-      .filter((place): place is NonNullable<typeof place> => Boolean(place))
-      .map(toPlaceDetail);
-  }, [atlasPlaceRows, savedPlaces]);
-
-  // Removes the place from this atlas only — the saved place itself is untouched.
-  const handleDelete = useCallback((placeId: string) => {
-    const joinRowId = joinRowIdByPlaceId.get(placeId);
-    if (joinRowId) removePlaceFromAtlas(joinRowId);
-  }, [joinRowIdByPlaceId, removePlaceFromAtlas]);
-
-  const handleAddPress = useCallback(() => {
-    if (!atlasId) return;
-    const excludeIds = atlasPlaceRows.map((row) => row.place_id);
-    setOverlay({
-      kind: 'addPlace',
-      excludeIds,
-      returnTo: { kind: 'atlasDetail', atlasId },
-      onSelect: (selected) => {
-        addPlacesToAtlas(atlasId, selected.map((place) => place.id));
-      },
+    if (!atlas || editing) return;
+    setAtlasMapState({
+      ...presentation,
+      selectedMarkerId: selectedPlaceId,
+      onMarkerPress: (marker) => setSelectedPlaceId(marker.id),
+      onMapPress: () => setSelectedPlaceId(null),
     });
-  }, [atlasId, atlasPlaceRows, setOverlay, addPlacesToAtlas]);
+    return () => setAtlasMapState(null);
+  }, [atlas, editing, presentation, selectedPlaceId, setAtlasMapState]);
 
-  const handleDeletePress = useCallback(() => {
-    if (!atlasId || !atlas) return;
-    const placeCount = places.length;
-    const message = placeCount > 0
-      ? `Delete "${atlas.title}"? Its ${placeCount} ${placeCount === 1 ? 'place' : 'places'} will stay in My Places but won't be grouped in this atlas anymore. This can't be undone.`
-      : `Delete "${atlas.title}"? This can't be undone.`;
-    showDialog({
-      title: 'Delete Atlas?',
-      message,
-      tone: 'danger',
-      actions: [
-        { label: 'Keep Atlas' },
-        {
-          label: 'Delete',
-          variant: 'destructive',
-          onPress: () => {
-            deleteAtlas(atlasId);
-            setOverlay({ kind: 'none' });
-          },
-        },
-      ],
-    });
-  }, [atlasId, atlas, places.length, deleteAtlas, setOverlay, showDialog]);
+  useEffect(() => {
+    if (!atlasId) setEditing(false);
+  }, [atlasId]);
 
-  const renderItem = useCallback(
-    ({ item }: { item: PlaceDetailType }) => <PlaceCard item={item} onDelete={handleDelete} />,
-    [handleDelete],
-  );
+  if (!atlas) return null;
 
-  const keyExtractor = useCallback((item: PlaceDetailType) => item.id, []);
-
-  return (
-    <ContentPanel
-      visible={isVisible}
-      onHidden={() => setAtlas(null)}
-      zIndex={40}
-      snapGroup={snapGroup}
-      minSnap="default"
-      onHeightChange={onHeightChange}
-      compactContent={({ snapTo }) =>
-        atlas ? (
-          <AtlasCompactView atlas={atlas} onDismiss={onDismiss} onExpand={() => snapTo('default')} />
-        ) : null
-      }
-    >
-      {({ reportScrollY, bottomInset }) => {
-        if (!atlas) return null;
-        return (
-          <>
-            <AtlasHeader atlas={atlas} onDismiss={onDismiss} />
-            <FlatList
-              data={places}
-              keyExtractor={keyExtractor}
-              style={{ flex: 1 }}
-              contentContainerStyle={{ paddingBottom: bottomInset + 20 }}
-              onScroll={(e) => reportScrollY(e.nativeEvent.contentOffset.y)}
-              scrollEventThrottle={16}
-              ListHeaderComponent={
-                <View style={{ paddingBottom: 16 }}>
-                  <AtlasOverviewSection atlas={atlas} placeCount={places.length} onAddPress={handleAddPress} onDeletePress={handleDeletePress} />
-                </View>
-              }
-              ItemSeparatorComponent={ItemSeparator}
-              ListEmptyComponent={
-                <View style={{ alignItems: 'center', paddingTop: 48, paddingHorizontal: 32 }}>
-                  <Text className="text-text-secondary" style={typography.bodySmall}>
-                    No places in this atlas yet.
-                  </Text>
-                </View>
-              }
-              renderItem={renderItem}
-              showsVerticalScrollIndicator
-            />
-          </>
-        );
-      }}
-    </ContentPanel>
-  );
+  return <ContentPanel visible={Boolean(atlasId)} onHidden={onDismiss} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={onDismiss} />}>
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} onClose={() => setEditing(false)} onSaved={() => setEditing(false)} /> : <>
+      <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={onDismiss} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>
+      <FlatList data={items} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20, gap: 7 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} />} />
+    </>}
+  </ContentPanel>;
 }
 
-function AtlasHeader({ atlas, onDismiss }: { atlas: Atlas; onDismiss: () => void }) {
-  const colorScheme = useColorScheme();
-  const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
-
-  return (
-    <View className="flex-row items-center px-4 pb-2 pt-1">
-      <Text className="flex-1 h2 text-foreground" numberOfLines={1}>
-        {atlas.title}
-      </Text>
-
-      <Button
-        accessibilityLabel="Dismiss atlas details"
-        onPress={onDismiss}
-        size="icon"
-        variant="ghost"
-        className="h-12 w-12 rounded-full bg-background"
-      >
-        <Ionicons name="close" size={24} color={foreground} />
-      </Button>
-    </View>
-  );
+function CompactAtlas({ atlas, onExpand, onDismiss }: { atlas: Atlas; onExpand: () => void; onDismiss: () => void }) {
+  return <Pressable style={styles.compact} onPress={onExpand}><View style={styles.compactMark}><Ionicons name="map-outline" size={17} color="#B5551B" /></View><Text numberOfLines={1} style={styles.compactTitle}>{atlas.title}</Text><TouchableOpacity onPress={onDismiss} style={styles.compactClose}><Ionicons name="close" size={19} color="#303035" /></TouchableOpacity></Pressable>;
 }
 
-function AtlasCompactView({
-  atlas,
-  onDismiss,
-  onExpand,
-}: {
-  atlas: Atlas;
-  onDismiss: () => void;
-  onExpand: () => void;
-}) {
-  const colorScheme = useColorScheme();
-  const foreground = colorScheme === 'dark' ? '#fafafa' : '#18181B';
-
-  return (
-    <Pressable
-      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 8 }}
-      onPress={onExpand}
-    >
-      <View className="flex-1 flex-row items-center gap-2">
-        <Text style={{ fontSize: 20 }}>{atlas.emoji}</Text>
-        <Text numberOfLines={1} className="flex-1 text-lg font-semibold text-foreground">
-          {atlas.title}
-        </Text>
-      </View>
-
-      <Button
-        accessibilityLabel="Dismiss atlas details"
-        onPress={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        size="icon"
-        variant="ghost"
-        className="rounded-full bg-background"
-      >
-        <Ionicons name="close" size={20} color={foreground} />
-      </Button>
-    </Pressable>
-  );
+function ItineraryRow({ item, index, selected, onPress }: { item: ItineraryItem; index: number; selected: boolean; onPress: () => void }) {
+  return <View>
+    {item.day && item.time ? <View style={styles.dayMarker}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>Day {item.day} · {item.time}</Text></View> : null}
+    <TouchableOpacity onPress={onPress} activeOpacity={0.76} style={[styles.row, selected && styles.rowSelected]}>
+      <View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>
+      {item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.image} /> : <View style={[styles.image, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}
+      <View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text>{item.note ? <Text numberOfLines={2} style={styles.note}>{item.note}</Text> : null}</View>
+    </TouchableOpacity>
+  </View>;
 }
+
+const styles = StyleSheet.create({
+  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5, marginTop: 8, marginBottom: 4 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FFF4EC', borderWidth: 1, borderColor: '#F1B98E' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
+});
