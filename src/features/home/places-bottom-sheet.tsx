@@ -24,7 +24,9 @@ import Animated, {
 
 import { useContentPanelSnapGroup } from '@/components/content-panel/ContentPanelSnapProvider';
 import type { SnapState } from '@/components/content-panel/ContentPanel';
+import type { TopMode } from '@/components/top-nav/TopNav';
 import type { Place } from '@/types/place';
+import Discover from '../discover/Discover';
 import MyPlaces, { type PlacesView } from '../my-places/MyPlaces';
 
 const SNAP_POINTS = ['40%', '54%', '94%'];
@@ -35,6 +37,7 @@ const BOTTOM_BAR_CLEARANCE = 84;
 type PlacesBottomSheetProps = {
   visible: boolean;
   activeTab?: string;
+  topMode?: TopMode;
   snapGroup?: string;
   activeView: PlacesView;
   onPlacePress: (place: Place) => void;
@@ -65,6 +68,7 @@ function PlacesSheetBackground({ style }: BottomSheetBackgroundProps) {
 
 function PlacesBottomSheet({
   visible,
+  topMode = 'saved',
   snapGroup,
   activeView,
   onPlacePress,
@@ -175,11 +179,34 @@ function PlacesBottomSheet({
       style={[styles.sheetShell, sheetAnimatedStyle]}
     >
       <BottomSheetView style={styles.content}>
-        <MyPlaces
-          onPlacePress={onPlacePress}
-          bottomInset={BOTTOM_BAR_CLEARANCE}
-          activeView={activeView}
-        />
+        <View
+          collapsable={false}
+          pointerEvents={topMode === 'saved' ? 'auto' : 'none'}
+          style={[
+            styles.modePane,
+            topMode !== 'saved' && styles.modePaneHidden,
+          ]}
+        >
+          <MyPlaces
+            active={topMode === 'saved'}
+            onPlacePress={onPlacePress}
+            bottomInset={BOTTOM_BAR_CLEARANCE}
+            activeView={activeView}
+          />
+        </View>
+        <View
+          collapsable={false}
+          pointerEvents={topMode === 'discover' ? 'auto' : 'none'}
+          style={[
+            styles.modePane,
+            topMode !== 'discover' && styles.modePaneHidden,
+          ]}
+        >
+          <Discover
+            active={topMode === 'discover'}
+            bottomInset={BOTTOM_BAR_CLEARANCE}
+          />
+        </View>
         {bottomBar}
       </BottomSheetView>
     </BottomSheet>
@@ -208,5 +235,15 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  modePane: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  modePaneHidden: {
+    opacity: 0,
   },
 });

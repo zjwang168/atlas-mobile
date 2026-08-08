@@ -4,14 +4,14 @@ import {
   isGlassEffectAPIAvailable,
   isLiquidGlassAvailable,
 } from 'expo-glass-effect';
-import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 
 const LIQUID_GLASS_AVAILABLE =
   isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
 
 type LeftNavProps = {
-  onSearchPress?: () => void;
+  onNavigatePress?: () => void;
 };
 
 const glassShadow = {
@@ -34,11 +34,13 @@ const blurStyle = {
   justifyContent: 'center' as const,
 };
 
-export default function LeftNav({ onSearchPress }: LeftNavProps) {
+export default function LeftNav({ onNavigatePress }: LeftNavProps) {
   return (
     <View className="flex-col items-center gap-2">
       <TouchableOpacity
-        onPress={onSearchPress}
+        accessibilityRole="button"
+        accessibilityLabel="Center map on my location"
+        onPress={onNavigatePress}
         activeOpacity={0.8}
         style={buttonStyle}
       >
@@ -58,7 +60,7 @@ export default function LeftNav({ onSearchPress }: LeftNavProps) {
           />
         )}
         <View style={blurStyle}>
-          <MagnifyingGlassIcon size={24} weight="regular" color="#171717" />
+          <NavigationArrowIcon size={24} weight="regular" color="#175CFF" />
         </View>
       </TouchableOpacity>
     </View>

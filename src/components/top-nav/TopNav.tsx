@@ -1,7 +1,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
-import type { PlacesView } from '@/features/my-places/MyPlaces';
 import { typography } from '@/theme/typography';
 import { BlurView } from 'expo-blur';
 import {
@@ -9,10 +8,8 @@ import {
   isGlassEffectAPIAvailable,
   isLiquidGlassAvailable,
 } from 'expo-glass-effect';
-import { MapPinSimpleLineIcon } from 'phosphor-react-native/src/icons/MapPinSimpleLine';
-import { NotebookIcon } from 'phosphor-react-native/src/icons/Notebook';
 import { memo, useEffect } from 'react';
-import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -22,34 +19,33 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mockUser } from '../../../mock-data/mockUser';
 import LeftNav from './left-nav/LeftNav';
-import RightNav from './right-nav/RightNav';
 
-const SEGMENT_WIDTH = 92;
+export type TopMode = 'saved' | 'discover';
+
+const SEGMENT_WIDTH = 80;
 const SEGMENT_CONTROL_WIDTH = SEGMENT_WIDTH * 2 + 4;
 const LIQUID_GLASS_AVAILABLE =
   isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
 
 type TopNavProps = {
-  onSearchPress?: () => void;
-  onGlobePress?: () => void;
   onNavigatePress?: () => void;
   onAvatarPress?: () => void;
-  placesView?: PlacesView;
-  onPlacesViewChange?: (view: PlacesView) => void;
-  showPlacesMode?: boolean;
+  topMode?: TopMode;
+  onTopModeChange?: (mode: TopMode) => void;
+  showTopMode?: boolean;
 };
 
-type PlacesModeSwitchProps = {
-  value: PlacesView;
-  onChange: (view: PlacesView) => void;
+type TopModeSwitchProps = {
+  value: TopMode;
+  onChange: (mode: TopMode) => void;
 };
 
-function PlacesModeSwitch({ value, onChange }: PlacesModeSwitchProps) {
+function TopModeSwitch({ value, onChange }: TopModeSwitchProps) {
   const reducedMotion = useReducedMotion();
-  const selectorX = useSharedValue(value === 'allPlaces' ? 0 : SEGMENT_WIDTH);
+  const selectorX = useSharedValue(value === 'saved' ? 0 : SEGMENT_WIDTH);
 
   useEffect(() => {
-    const next = value === 'allPlaces' ? 0 : SEGMENT_WIDTH;
+    const next = value === 'saved' ? 0 : SEGMENT_WIDTH;
     selectorX.value = reducedMotion
       ? next
       : withSpring(next, { damping: 20, stiffness: 240, mass: 0.72 });
@@ -62,33 +58,29 @@ function PlacesModeSwitch({ value, onChange }: PlacesModeSwitchProps) {
   return (
     <View style={styles.segmentShadow}>
       <View style={styles.segmentControl}>
-        {LIQUID_GLASS_AVAILABLE ? (
-          <GlassView
-            pointerEvents="none"
-            style={StyleSheet.absoluteFill}
-            glassEffectStyle="clear"
-            tintColor="rgba(255,255,255,0.7)"
-          />
-        ) : (
-          <BlurView
-            pointerEvents="none"
-            style={StyleSheet.absoluteFill}
-            tint="systemUltraThinMaterialLight"
-            intensity={10}
-          />
-        )}
+        <BlurView
+          pointerEvents="none"
+          style={StyleSheet.absoluteFill}
+          tint="systemUltraThinMaterialLight"
+          intensity={80}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            { borderRadius: 100, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.45)' },
+          ]}
+        />
         <Animated.View pointerEvents="none" style={[styles.segmentSelector, selectorStyle]} />
         <SegmentButton
-          active={value === 'allPlaces'}
-          label="Places"
-          icon="places"
-          onPress={() => onChange('allPlaces')}
+          active={value === 'saved'}
+          label="Saved"
+          onPress={() => onChange('saved')}
         />
         <SegmentButton
-          active={value === 'atlas'}
-          label="Atlas"
-          icon="atlas"
-          onPress={() => onChange('atlas')}
+          active={value === 'discover'}
+          label="Discover"
+          onPress={() => onChange('discover')}
         />
       </View>
     </View>
@@ -98,17 +90,12 @@ function PlacesModeSwitch({ value, onChange }: PlacesModeSwitchProps) {
 function SegmentButton({
   active,
   label,
-  icon,
   onPress,
 }: {
   active: boolean;
   label: string;
-  icon: 'places' | 'atlas';
   onPress: () => void;
 }) {
-  const Icon = icon === 'places' ? MapPinSimpleLineIcon : NotebookIcon;
-  const color = active ? (icon === 'places' ? '#12C170' : '#12C170') : '#717171';
-
   return (
     <Pressable
       accessibilityRole="tab"
@@ -117,12 +104,11 @@ function SegmentButton({
       onPress={onPress}
       style={({ pressed }) => [styles.segmentButton, pressed && styles.segmentPressed]}
     >
-      <Icon size={18} weight={active ? 'fill' : 'regular'} color={color} />
       <Text
         style={[
           typography.subheader,
           styles.segmentLabel,
-          { color: active ? '#1A1A1A' : '#717171' },
+          { color: active ? '#1A1A1A' : '#1A1A1A' },
         ]}
       >
         {label}
@@ -132,30 +118,27 @@ function SegmentButton({
 }
 
 function TopNav({
-  onSearchPress,
-  onGlobePress,
   onNavigatePress,
   onAvatarPress,
-  placesView = 'allPlaces',
-  onPlacesViewChange,
-  showPlacesMode = true,
+  topMode = 'saved',
+  onTopModeChange,
+  showTopMode = true,
 }: TopNavProps) {
   const { top } = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       <View
         pointerEvents="box-none"
-        style={[styles.topRow, { paddingTop: top + 8 }]}
+        style={[styles.topRow, { paddingTop: top }]}
       >
-        <LeftNav onSearchPress={onSearchPress} />
-        {showPlacesMode && onPlacesViewChange ? (
-          <View style={[styles.modeHost, { top: top + 8 }]}>
-            <PlacesModeSwitch value={placesView} onChange={onPlacesViewChange} />
+        <LeftNav onNavigatePress={onNavigatePress} />
+        {showTopMode && onTopModeChange ? (
+          <View style={[styles.modeHost, { top: top }]}>
+            <TopModeSwitch value={topMode} onChange={onTopModeChange} />
           </View>
         ) : null}
-        {showPlacesMode ? (
+        {showTopMode ? (
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Open profile"
@@ -173,13 +156,6 @@ function TopNav({
         ) : (
           <View style={styles.avatarSpacer} />
         )}
-      </View>
-
-      <View
-        pointerEvents="box-none"
-        style={[styles.mapControls, { top: Math.round(height * 0.326) }]}
-      >
-        <RightNav onGlobePress={onGlobePress} onNavigatePress={onNavigatePress} />
       </View>
     </View>
   );
@@ -246,6 +222,9 @@ const styles = StyleSheet.create({
     opacity: 0.68,
   },
   segmentLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 20,
     letterSpacing: -0.15,
   },
   avatarShadow: {
@@ -261,9 +240,5 @@ const styles = StyleSheet.create({
   avatarSpacer: {
     width: 44,
     height: 44,
-  },
-  mapControls: {
-    position: 'absolute',
-    right: 12,
   },
 });

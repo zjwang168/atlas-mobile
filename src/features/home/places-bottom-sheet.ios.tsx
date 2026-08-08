@@ -21,18 +21,20 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Keyboard, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import type { SnapState } from '@/components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '@/components/content-panel/ContentPanelSnapProvider';
 import TopBlurFade from '@/components/ui/top-blur-fade';
+import type { TopMode } from '@/components/top-nav/TopNav';
 import type { Place } from '@/types/place';
+import Discover from '../discover/Discover';
 import MyPlaces, { type PlacesView } from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import { TAB_PLAN } from './HomeTabBar';
 
-const SHORT_DETENT = { fraction: 0.4 } as const;
-const DEFAULT_DETENT = { fraction: 0.54 } as const;
+const SHORT_DETENT = { fraction: 0.30 } as const;
+const DEFAULT_DETENT = { fraction: 0.60 } as const;
 const TALL_DETENT = 'large' as const;
 const DETENTS: PresentationDetent[] = [SHORT_DETENT, DEFAULT_DETENT, TALL_DETENT];
 // Edit this number to tune the 40% / 54% card transparency.
@@ -44,6 +46,7 @@ const TAB_BAR_BOTTOM_OFFSET = 16;
 type PlacesBottomSheetProps = {
   visible: boolean;
   activeTab: string;
+  topMode?: TopMode;
   snapGroup?: string;
   activeView: PlacesView;
   onPlacePress: (place: Place) => void;
@@ -74,6 +77,7 @@ function snapStateForDetent(detent: PresentationDetent): SnapState {
 function PlacesBottomSheet({
   visible,
   activeTab,
+  topMode = 'saved',
   snapGroup,
   activeView,
   onPlacePress,
@@ -83,6 +87,20 @@ function PlacesBottomSheet({
 }: PlacesBottomSheetProps) {
   const { width, height } = useWindowDimensions();
   const [isPresented, setIsPresented] = useState(visible);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardWillShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener('keyboardWillHide', () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
   const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(
     snapGroup,
     'default',
@@ -114,7 +132,7 @@ function PlacesBottomSheet({
       detent: DEFAULT_DETENT,
     }),
     interactiveDismissDisabled(true),
-    presentationBackground('#FFFFFF'),
+    presentationBackground('#FAFAFA'),
   ], [handleDetentChange, selection]);
 
   return (
@@ -136,24 +154,58 @@ function PlacesBottomSheet({
                   }
                 />
               ) : (
-                <MyPlaces
-                  onPlacePress={onPlacePress}
-                  bottomInset={BOTTOM_BAR_CLEARANCE}
-                  activeView={activeView}
-                  verticalScrollEnabled={
-                    groupSnapState === 'tall' || groupSnapState === 'full'
-                  }
-                />
+                <>
+                  <View
+                    collapsable={false}
+                    pointerEvents={topMode === 'saved' ? 'auto' : 'none'}
+                    style={[
+                      styles.modePane,
+                      topMode !== 'saved' && styles.modePaneHidden,
+                    ]}
+                  >
+                    <MyPlaces
+                      active={topMode === 'saved'}
+                      onPlacePress={onPlacePress}
+                      bottomInset={BOTTOM_BAR_CLEARANCE}
+                      activeView={activeView}
+                      verticalScrollEnabled={
+                        groupSnapState === 'tall' || groupSnapState === 'full'
+                      }
+                    />
+                  </View>
+                  <View
+                    collapsable={false}
+                    pointerEvents={topMode === 'discover' ? 'auto' : 'none'}
+                    style={[
+                      styles.modePane,
+                      topMode !== 'discover' && styles.modePaneHidden,
+                    ]}
+                  >
+                    <Discover
+                      active={topMode === 'discover'}
+                      bottomInset={BOTTOM_BAR_CLEARANCE}
+                      verticalScrollEnabled={
+                        groupSnapState === 'tall' || groupSnapState === 'full'
+                      }
+                    />
+                  </View>
+                </>
               )}
-              <TopBlurFade
+              {/* <TopBlurFade
                 edge="bottom"
                 height={120}
                 intensity={80}
                 tint="systemUltraThinMaterialLight"
                 scrim={0}
-              />
+              /> */}
               {bottomBar ? (
-                <View style={styles.bottomBarOverlay} pointerEvents="box-none">
+                <View
+                  style={[
+                    styles.bottomBarOverlay,
+                    keyboardHeight > 0 && { transform: [{ translateY: keyboardHeight }] },
+                  ]}
+                  pointerEvents="box-none"
+                >
                   {bottomBar}
                 </View>
               ) : null}
@@ -176,6 +228,16 @@ const styles = StyleSheet.create({
     height: 0,
     paddingTop: 12,
     backgroundColor: 'transparent',
+  },
+  modePane: {
+    position: 'absolute',
+    top: 12,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  modePaneHidden: {
+    opacity: 0,
   },
   bottomBarOverlay: {
     position: 'absolute',
