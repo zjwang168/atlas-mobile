@@ -216,6 +216,7 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
         markers={markers}
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
+        cameraAnimationDurationMs={360}
         selectedMarkerId={selectedPlaceId}
         padding={{ paddingTop: 0, paddingBottom: mapPaddingBottom, paddingLeft: 0, paddingRight: 0 }}
         onMarkerPress={(marker) => {

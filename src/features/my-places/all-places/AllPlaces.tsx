@@ -1,6 +1,6 @@
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
-import { fetchSavedPlaces, toPlaceDetail, type SavedPlace } from '@/services/place/placeService';
+import { toPlaceDetail, type SavedPlace } from '@/services/place/placeService';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -19,9 +19,6 @@ type AllPlacesProps = {
   bottomInset?: number;
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
-  onDeleteSwipeStart?: (place: PlaceDetail) => void;
-  onDeleteSwipeProgress?: (place: PlaceDetail, progress: number) => void;
-  onDeleteSwipeSettle?: (place: PlaceDetail, opened: boolean) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
@@ -96,51 +93,19 @@ function contextForPlace(place: SavedPlace | undefined, sortMode: SortMode): str
   return sortMode === 'recent' ? formatAddedDate(place.created_at) : placeLocationLabel(place);
 }
 
-function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteSwipeStart, onDeleteSwipeProgress, onDeleteSwipeSettle, onDeleteInitiated }: AllPlacesProps) {
-  const [rows, setRows] = useState<SavedPlace[]>([]);
-  const [loading, setLoading] = useState(true);
+function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated }: AllPlacesProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [activeContext, setActiveContext] = useState('Recently added');
-  const { deleteSavedPlace, recentlySavedPlaceIds, savedPlaces, setRecentlySavedPlaceIds, selectedPlaceId, userLocation } = useHome();
+  const { deleteSavedPlace, refreshSavedPlaces, savedPlaces, selectedPlaceId, userLocation } = useHome();
   const listRef = useRef<FlatList<SavedPlace>>(null);
   const contextByIdRef = useRef(new Map<string, string>());
-  const renderedRecentlySavedIds = useMemo(
-    () => recentlySavedPlaceIds.filter((id) => savedPlaces.some((place) => place.id === id)),
-    [recentlySavedPlaceIds, savedPlaces],
-  );
-
-  useEffect(() => {
-    if (!renderedRecentlySavedIds.length) return;
-    const timeoutId = setTimeout(() => setRecentlySavedPlaceIds([]), 1800);
-    return () => clearTimeout(timeoutId);
-  }, [renderedRecentlySavedIds, setRecentlySavedPlaceIds]);
-
-  const load = useCallback(async () => {
-    try {
-      setRows(await fetchSavedPlaces());
-    } catch (e) {
-      console.error('[AllPlaces] failed to load places:', e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  useEffect(() => {
-    setRows(savedPlaces);
-    setLoading(false);
-  }, [savedPlaces]);
 
   const sortedRows = useMemo(
-    () => sortRows(rows, sortMode, userLocation),
-    [rows, sortMode, userLocation],
+    () => sortRows(savedPlaces, sortMode, userLocation),
+    [savedPlaces, sortMode, userLocation],
   );
   const placesById = useMemo(
     () => new Map(sortedRows.map((row) => [row.id, toPlaceDetail(row)])),
@@ -169,7 +134,6 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteSwipeStart
 
   const handleDelete = useCallback((id: string) => {
     deleteSavedPlace(id);
-    setRows((current) => current.filter((place) => place.id !== id));
   }, [deleteSavedPlace]);
 
   const handleEndReached = useCallback(() => {
@@ -198,29 +162,17 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteSwipeStart
       return (
         <PlaceCard
           item={place}
-          recentlyAdded={recentlySavedPlaceIds.includes(item.id)}
           selected={selectedPlaceId === item.id}
           onPress={onPlacePress}
           onDelete={handleDelete}
-          onDeleteSwipeStart={onDeleteSwipeStart}
-          onDeleteSwipeProgress={onDeleteSwipeProgress}
-          onDeleteSwipeSettle={onDeleteSwipeSettle}
           onDeleteInitiated={onDeleteInitiated}
         />
       );
     },
-    [placesById, onPlacePress, handleDelete, recentlySavedPlaceIds, selectedPlaceId, onDeleteSwipeStart, onDeleteSwipeProgress, onDeleteSwipeSettle, onDeleteInitiated],
+    [placesById, onPlacePress, handleDelete, selectedPlaceId, onDeleteInitiated],
   );
 
   const keyExtractor = useCallback((item: SavedPlace) => item.id, []);
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
 
   return (
     <View style={{ flex: 1 }}>
@@ -255,7 +207,7 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteSwipeStart
         onRefresh={() => {
           setRefreshing(true);
           setVisibleCount(PAGE_SIZE);
-          load();
+          refreshSavedPlaces().finally(() => setRefreshing(false));
         }}
         onEndReached={handleEndReached}
         onEndReachedThreshold={0.5}

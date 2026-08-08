@@ -21,7 +21,6 @@ import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
 import HomeTabBar, {
   TAB_CHAT,
-  TAB_ADD,
   TAB_PLACES,
   TAB_PLAN,
   TAB_PROFILE,
@@ -90,11 +89,8 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     overlay,
     setOverlay,
     tabBarVisible,
-    chatHistory,
-    setChatHistory,
     parsedPlaces,
     setParsedPlaces,
-    refreshSavedPlaces,
     selectedPlaceCoordinate,
     setSelectedPlaceCoordinate,
     selectedPlaceId,
@@ -105,7 +101,6 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     setActiveSidekick,
     userLocation,
     savedPlaces,
-    recentlySavedPlaceIds,
   } = useHome();
   const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
   // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
@@ -213,20 +208,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
   const bottomPanelHeightRef = useRef(SNAP_HEIGHTS[settledPanelSnapState]);
   const mapRef = useRef<MapboxMapHandle>(null);
-  const selectedCoordinateRef = useRef(selectedPlaceCoordinate);
-  const selectedIdRef = useRef(selectedPlaceId);
-  const deleteSwipeRef = useRef<{
-    placeId: string;
-    previousCoordinate: [number, number] | null;
-    previousId: string | null;
-    lastProgress: number;
-    currentCoordinate: [number, number];
-    far: boolean;
-    lastCameraUpdateAt: number;
-  } | null>(null);
   const deletingMarkerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { selectedCoordinateRef.current = selectedPlaceCoordinate; }, [selectedPlaceCoordinate]);
-  useEffect(() => { selectedIdRef.current = selectedPlaceId; }, [selectedPlaceId]);
   // Recomputed whenever the active bottom panel toggles OR its resolved snap state
   // changes, so a discrete camera recenter (e.g. selecting a different marker while
   // the panel is at a non-default snap height) uses padding matching the panel's
@@ -277,25 +259,6 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   }, [animateToTab]);
 
   useEffect(() => {
-    if (!recentlySavedPlaceIds.length) return;
-    // The new pins originate from Add places. Let the liquid selector first
-    // land there, then travel to Bookmarks while the rows enter the list.
-    setActiveTab(TAB_ADD);
-    const timeoutId = setTimeout(() => animateToTab(TAB_PLACES), 340);
-    return () => clearTimeout(timeoutId);
-  }, [animateToTab, recentlySavedPlaceIds]);
-
-  useEffect(() => {
-    if (!recentlySavedPlaceIds.length) return;
-    setHomePanelVisible(false);
-    const hasNewRows = recentlySavedPlaceIds.some((id) =>
-      savedPlaces.some((place) => place.id === id),
-    );
-    if (!hasNewRows) return;
-    const timeoutId = setTimeout(() => setHomePanelVisible(true), 56);
-    return () => clearTimeout(timeoutId);
-  }, [recentlySavedPlaceIds, savedPlaces]);
-  useEffect(() => {
     animateToTab(activeTab);
   }, []);
   // --- Search & History handlers ---
@@ -308,75 +271,11 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
   }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
 
-  const handleDeleteSwipeStart = useCallback((place: PlaceDetailRecord) => {
-    const start = selectedCoordinateRef.current ?? userLocation;
-    const distance = Math.hypot(place.longitude - start[0], place.latitude - start[1]);
-    deleteSwipeRef.current = {
-      placeId: place.id,
-      previousCoordinate: selectedCoordinateRef.current,
-      previousId: selectedIdRef.current,
-      lastProgress: 0,
-      currentCoordinate: start,
-      far: distance > 0.35,
-      lastCameraUpdateAt: 0,
-    };
-    if (distance > 0.35) mapRef.current?.focusCoordinate(start, 10, 260);
-  }, [userLocation]);
-
-  const handleDeleteSwipeProgress = useCallback((place: PlaceDetailRecord, progress: number) => {
-    const swipe = deleteSwipeRef.current;
-    if (!swipe || swipe.placeId !== place.id) return;
-    const amount = Math.min(Math.max(progress, 0), 1);
-    const start = swipe.previousCoordinate ?? userLocation;
-    const target: [number, number] = [place.longitude, place.latitude];
-    if (amount < swipe.lastProgress) {
-      if (Date.now() - swipe.lastCameraUpdateAt > 130) {
-        mapRef.current?.focusCoordinate(swipe.currentCoordinate, swipe.far ? 9.5 : 11, 300);
-        swipe.lastCameraUpdateAt = Date.now();
-      }
-      swipe.lastProgress = amount;
-      if (amount < 0.02) setSelectedPlaceId(swipe.previousId);
-      return;
-    }
-    const eased = amount * amount * (3 - 2 * amount);
-    const coordinate: [number, number] = [
-      start[0] + (target[0] - start[0]) * eased,
-      start[1] + (target[1] - start[1]) * eased,
-    ];
-    swipe.currentCoordinate = coordinate;
-    swipe.lastProgress = amount;
-    if (Date.now() - swipe.lastCameraUpdateAt > 130 || amount > 0.96) {
-      mapRef.current?.focusCoordinate(coordinate, swipe.far ? 10 : 12, 300);
-      swipe.lastCameraUpdateAt = Date.now();
-    }
-    if (amount > 0.02) setSelectedPlaceId(place.id);
-    if (amount < 0.02) setSelectedPlaceId(swipe.previousId);
-  }, [setSelectedPlaceId, userLocation]);
-
-  const handleDeleteSwipeSettle = useCallback((place: PlaceDetailRecord, opened: boolean) => {
-    const swipe = deleteSwipeRef.current;
-    if (!swipe || swipe.placeId !== place.id) return;
-    if (opened) {
-      const coordinate: [number, number] = [place.longitude, place.latitude];
-      setSelectedPlaceId(place.id);
-      setSelectedPlaceCoordinate(coordinate);
-      mapRef.current?.focusCoordinate(coordinate, 15, 360);
-      return;
-    }
-    const coordinate = swipe.currentCoordinate;
-    setSelectedPlaceId(swipe.previousId);
-    setSelectedPlaceCoordinate(coordinate);
-    mapRef.current?.focusCoordinate(coordinate, swipe.far ? 9.5 : 11, 260);
-    deleteSwipeRef.current = null;
-  }, [setSelectedPlaceCoordinate, setSelectedPlaceId, userLocation]);
-
   const handleDeleteInitiated = useCallback((place: PlaceDetailRecord) => {
     if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
-    setSelectedPlaceId(place.id);
-    setSelectedPlaceCoordinate([place.longitude, place.latitude]);
     setDeletingMarker({ id: place.id, longitude: place.longitude, latitude: place.latitude, title: place.name, description: place.subtitle });
     deletingMarkerTimerRef.current = setTimeout(() => setDeletingMarker(null), 470);
-  }, [setSelectedPlaceCoordinate, setSelectedPlaceId]);
+  }, []);
 
   useEffect(() => () => {
     if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
@@ -385,8 +284,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   useEffect(() => {
     if (hasParsedPlaces || !selectedPlaceId || savedPlaces.some((place) => place.id === selectedPlaceId)) return;
     setSelectedPlaceId(null);
-    deleteSwipeRef.current = null;
-  }, [hasParsedPlaces, savedPlaces, selectedPlaceId, setSelectedPlaceCoordinate, setSelectedPlaceId]);
+  }, [hasParsedPlaces, savedPlaces, selectedPlaceId, setSelectedPlaceId]);
 
   return (
     <View style={styles.container}>
@@ -424,9 +322,6 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
               snapGroup={HOME_PANEL_SNAP_GROUP}
               visible={panelVisible && homePanelVisible}
               onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
-              onDeleteSwipeStart={handleDeleteSwipeStart}
-              onDeleteSwipeProgress={handleDeleteSwipeProgress}
-              onDeleteSwipeSettle={handleDeleteSwipeSettle}
               onDeleteInitiated={handleDeleteInitiated}
             />
           </View>
@@ -466,56 +361,6 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatVisible}
         conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
-        onPlacesCommitted={(newPlaces, action) => {
-          const currentItem = standaloneChatVisible ? null : activeHistoryItem;
-          if (!currentItem) {
-            if (action === 'pin_in_chat' || action === 'both') {
-              const merged = [...parsedPlaces];
-              newPlaces.forEach((place) => {
-                const duplicate = merged.some(
-                  (item) =>
-                    item.name === place.name &&
-                    Math.abs(item.latitude - place.latitude) < 0.0002 &&
-                    Math.abs(item.longitude - place.longitude) < 0.0002,
-                );
-                if (!duplicate) merged.push(place);
-              });
-              setParsedPlaces(merged);
-              if (merged[0]) {
-                setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
-              }
-            }
-            refreshSavedPlaces().catch((error) => {
-              console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
-            });
-            return;
-          }
-
-          const existing = currentItem.places ?? [];
-          const merged = [...existing];
-          newPlaces.forEach((place) => {
-            const duplicate = merged.some(
-              (item) =>
-                item.name === place.name &&
-                Math.abs(item.latitude - place.latitude) < 0.0002 &&
-                Math.abs(item.longitude - place.longitude) < 0.0002,
-            );
-            if (!duplicate) merged.push(place);
-          });
-
-          const nextItem = {
-            ...currentItem,
-            places: merged,
-            locationCount: merged.length,
-          };
-          setActiveHistoryItem(nextItem);
-          setParsedPlaces(merged);
-          setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
-          setChatHistory(chatHistory.map((item) => (item.id === nextItem.id ? nextItem : item)));
-          refreshSavedPlaces().catch((error) => {
-            console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
-          });
-        }}
       />
 
       {/* Native tab bar — fades out when overlay features request it */}

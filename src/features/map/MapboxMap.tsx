@@ -35,6 +35,9 @@ interface MapboxMapProps {
   routeMarkers?: MapMarker[];
   /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
   padding?: MapPadding;
+  /** Duration for prop-driven camera changes. The Save screen needs a brief
+      settle after its sheet enters; the home map keeps its slower transition. */
+  cameraAnimationDurationMs?: number;
   selectedMarkerId?: string | null;
   deletingMarkerId?: string | null;
 }
@@ -77,6 +80,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   routeGeoJSON,
   routeMarkers,
   padding,
+  cameraAnimationDurationMs = 2000,
   selectedMarkerId,
   deletingMarkerId,
 }, ref) {
@@ -92,13 +96,13 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   useEffect(() => {
     try {
       if (!MAPBOX_ACCESS_TOKEN) {
-        setError('Mapbox access token is missing. Check MAPBOX_ACCESS_TOKEN in .env and rebuild.');
+        setError('The map is unavailable right now. Please try again in a moment.');
         return;
       }
       MapboxGL.setAccessToken(MAPBOX_ACCESS_TOKEN);
       setIsReady(true);
     } catch (err) {
-      setError('Failed to initialise Mapbox: ' + (err instanceof Error ? err.message : String(err)));
+      setError('The map is unavailable right now. Please try again in a moment.');
     }
   }, []);
 
@@ -122,10 +126,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     cameraRef.current?.setCamera({
       centerCoordinate,
       zoomLevel,
-      animationDuration: 2000,
+      animationDuration: cameraAnimationDurationMs,
       padding,
     });
-  }, [centerCoordinate, zoomLevel, padding]);
+  }, [cameraAnimationDurationMs, centerCoordinate, zoomLevel, padding]);
 
   useImperativeHandle(ref, () => ({
     setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
@@ -178,7 +182,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       >
         <MapboxGL.Camera
           ref={cameraRef}
-          defaultSettings={{ centerCoordinate, zoomLevel }}
+          defaultSettings={{ centerCoordinate, zoomLevel, padding }}
         />
 
         {routeGeoJSON && (

@@ -80,6 +80,7 @@ type BackendLocation = {
 /** Fields of the backend parse response that we consume. */
 type BackendParseResponse = {
   title: string;
+  source_thumbnail?: string | null;
   locations: BackendLocation[];
   inferred_region?: string | null;
 };
@@ -123,6 +124,7 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
 
   return {
     sourceTitle: backend.title || 'Imported content',
+    sourceThumbnail: backend.source_thumbnail || undefined,
     centerCoordinate: medianCenter(backend.locations ?? []),
     region: backend.inferred_region ?? undefined,
     places,

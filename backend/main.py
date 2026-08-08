@@ -168,6 +168,7 @@ class NoiseInfo(BaseModel):
 
 class ParseResponse(BaseModel):
     title: str
+    source_thumbnail: Optional[str] = None
     locations: list[LocationItem]
     route: RouteResult
     removed_noise: Optional[list[NoiseInfo | str]] = None

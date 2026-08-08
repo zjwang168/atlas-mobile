@@ -38,6 +38,7 @@ type AnalyzingScreenProps = {
   progressEvents?: ParseProgressEvent[];
   onDismiss: () => void;
   onCancel: () => void;
+  onHeroReady?: () => void;
 };
 
 type AnalysisEntry = {
@@ -415,6 +416,7 @@ export default function AnalyzingScreen({
   progressEvents = [],
   onDismiss,
   onCancel,
+  onHeroReady,
 }: AnalyzingScreenProps) {
   const insets = useSafeAreaInsets();
   const [elapsed, setElapsed] = useState(0);
@@ -504,7 +506,9 @@ export default function AnalyzingScreen({
           Animated.timing(heroTitleReveal, { toValue: 1, duration: 420, useNativeDriver: true }),
           Animated.delay(90),
           Animated.timing(heroTaglineReveal, { toValue: 1, duration: 300, useNativeDriver: true }),
-        ]).start();
+        ]).start(({ finished: textFinished }) => {
+          if (textFinished) onHeroReady?.();
+        });
       });
       return;
     }
@@ -659,10 +663,10 @@ export default function AnalyzingScreen({
             </>
           ) : (
             <View style={styles.heroPlaceholder}>
-              <Animated.View style={[styles.placeholderTint, { opacity: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.62] }) }]} />
-              <Animated.View pointerEvents="none" style={[styles.placeholderBorder, { opacity: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.22, 0.9] }), transform: [{ scale: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) }] }]} />
+              <Animated.View style={[styles.placeholderTint, { opacity: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.28] }) }]} />
+              <Animated.View pointerEvents="none" style={[styles.placeholderBorder, { opacity: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.48] }), transform: [{ scale: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.99, 1] }) }] }]} />
               <View style={styles.placeholderSignalTrack}>
-                <Animated.View style={[styles.placeholderSignal, { opacity: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.95] }), transform: [{ translateX: placeholderScan.interpolate({ inputRange: [0, 1], outputRange: [-48, 48] }) }, { scaleX: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }] }]} />
+                <Animated.View style={[styles.placeholderSignal, { opacity: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.72] }), transform: [{ translateX: placeholderScan.interpolate({ inputRange: [0, 1], outputRange: [-48, 48] }) }, { scaleX: placeholderPulse.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1] }) }] }]} />
               </View>
               <Text style={styles.heroPlaceholderTitle}>Atlas is connecting the dots</Text>
               <Text style={styles.heroPlaceholderDetail}>Reading the clues that reveal where this story takes place.</Text>
@@ -705,20 +709,20 @@ const styles = StyleSheet.create({
   sourcePill: { alignSelf: 'center', maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 22, backgroundColor: COLOR.surface, paddingVertical: 7, paddingLeft: 7, paddingRight: 15, borderWidth: 1, borderColor: COLOR.border },
   sourceIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: COLOR.accent },
   sourceLabel: { flexShrink: 1, ...typography.bodyEmphasis, color: COLOR.textPrimary },
-  hero: { marginTop: 28, width: '100%', aspectRatio: 1.72, borderRadius: 8, overflow: 'hidden', backgroundColor: '#E5F0EA' },
+  hero: { marginTop: 28, width: '100%', aspectRatio: 1.72, borderRadius: 28, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: '#F0F2F0' },
   heroImageWrap: { ...StyleSheet.absoluteFill },
   heroImage: { ...StyleSheet.absoluteFill },
   heroTitleFrame: { ...StyleSheet.absoluteFill, zIndex: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   heroTitle: { color: '#FFFFFF', fontSize: 34, lineHeight: 41, fontWeight: '600', letterSpacing: 0, textAlign: 'center', textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 7 },
   heroTagline: { marginTop: 6, color: 'rgba(255,255,255,0.88)', fontSize: 10, lineHeight: 13, fontWeight: '700', letterSpacing: 1.4, textAlign: 'center', textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },
   heroPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, overflow: 'hidden' },
-  placeholderTint: { ...StyleSheet.absoluteFill, backgroundColor: '#CFEFDB' },
-  placeholderBorder: { position: 'absolute', top: 1, right: 1, bottom: 1, left: 1, borderRadius: 7, borderWidth: 1.5, borderColor: COLOR.accent },
-  placeholderSignalTrack: { width: 104, height: 4, overflow: 'hidden', borderRadius: 2, backgroundColor: 'rgba(18,193,112,0.13)', marginBottom: 15 },
-  placeholderSignal: { width: 58, height: 4, borderRadius: 2, backgroundColor: COLOR.accent },
+  placeholderTint: { ...StyleSheet.absoluteFill, backgroundColor: '#DDE5DF' },
+  placeholderBorder: { position: 'absolute', top: 1, right: 1, bottom: 1, left: 1, borderRadius: 27, borderCurve: 'continuous', borderWidth: 1, borderColor: '#AAB7AF' },
+  placeholderSignalTrack: { width: 104, height: 4, overflow: 'hidden', borderRadius: 2, backgroundColor: 'rgba(76, 91, 83, 0.11)', marginBottom: 15 },
+  placeholderSignal: { width: 58, height: 4, borderRadius: 2, backgroundColor: '#7F9087' },
   heroPlaceholderTitle: { marginTop: 4, color: COLOR.textPrimary, fontSize: 22, lineHeight: 29, fontWeight: '700', textAlign: 'center' },
   heroPlaceholderDetail: { marginTop: 8, maxWidth: 270, color: COLOR.textSecondary, fontSize: 13, lineHeight: 19, textAlign: 'center' },
-  analysisPanel: { flex: 1, minHeight: 220, maxHeight: 340, marginTop: 18, backgroundColor: COLOR.surface, borderRadius: 8, borderWidth: 1, borderColor: COLOR.border, overflow: 'hidden' },
+  analysisPanel: { flex: 1, minHeight: 220, maxHeight: 340, marginTop: 18, backgroundColor: COLOR.surface, borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: COLOR.border, overflow: 'hidden' },
   panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 17, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLOR.border },
   panelTitle: { ...typography.bodyEmphasis, color: COLOR.textPrimary },
   elapsed: { fontSize: 12, color: COLOR.textTertiary, fontVariant: ['tabular-nums'] },

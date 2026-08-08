@@ -19,9 +19,6 @@ type HomePanelProps = {
   defaultSnapHeight?: number;
   maxHeight?: number;
   onHeightChange?: (height: number) => void;
-  onDeleteSwipeStart?: (place: PlaceDetail) => void;
-  onDeleteSwipeProgress?: (place: PlaceDetail, progress: number) => void;
-  onDeleteSwipeSettle?: (place: PlaceDetail, opened: boolean) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
@@ -33,9 +30,6 @@ function HomePanel({
   defaultSnapHeight,
   maxHeight,
   onHeightChange,
-  onDeleteSwipeStart,
-  onDeleteSwipeProgress,
-  onDeleteSwipeSettle,
   onDeleteInitiated,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
@@ -85,9 +79,6 @@ function HomePanel({
                 avatarUri={mockUser.avatarUri}
                 avatarFallback={mockUser.avatarFallback}
                 onAvatarPress={() => setAccountOpen(true)}
-                onDeleteSwipeStart={onDeleteSwipeStart}
-                onDeleteSwipeProgress={onDeleteSwipeProgress}
-                onDeleteSwipeSettle={onDeleteSwipeSettle}
                 onDeleteInitiated={onDeleteInitiated}
               />
             </View>

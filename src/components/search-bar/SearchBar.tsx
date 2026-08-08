@@ -2,7 +2,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   StyleSheet,
   Text,
   TextInput,
@@ -10,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 
 // ---- Types ----
 
@@ -41,6 +41,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
   isLoading,
   onHistoryPress,
 }) => {
+  const { show: showDialog } = useAppDialog();
   const [text, setText] = useState('');
   const inputRef = useRef<TextInput>(null);
 
@@ -58,22 +59,19 @@ const SearchBar: React.FC<SearchBarProps> = ({
     try {
       const clipboardContent = await Clipboard.getStringAsync();
       if (clipboardContent && isRedditUrl(clipboardContent) && clipboardContent !== text) {
-        Alert.alert(
-          'Detect link from Reddit?',
-          `We found a link on your clipboard:\n${clipboardContent.substring(0, 80)}…`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Paste',
-              onPress: () => setText(clipboardContent),
-            },
+        showDialog({
+          title: 'Paste this Reddit link?',
+          message: `We found ${clipboardContent.substring(0, 80)}… on your clipboard.`,
+          actions: [
+            { label: 'Not now' },
+            { label: 'Paste Link', variant: 'primary', onPress: () => setText(clipboardContent) },
           ],
-        );
+        });
       }
     } catch {
       // Clipboard access may fail; silently ignore.
     }
-  }, [text]);
+  }, [showDialog, text]);
 
   return (
     <View style={styles.container}>

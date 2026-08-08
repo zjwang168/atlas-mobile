@@ -2,7 +2,7 @@
 
 ## Overview
 
-`AIChatBox` is the full-screen conversation interface for a single chat/import session — it renders the message thread, lets the user talk to Atlas AI about the places in that session, and surfaces "add to this map" / "save to my places" confirmation cards when the backend proposes places. It does not manage which chat is active or own place/plan state — the caller (`HomeScreen`) supplies `places`/`conversationId`/`title` and reacts to `onPlacesCommitted`.
+`AIChatBox` is the full-screen conversation interface for a single chat/import session. It renders the message thread and lets the user ask Atlas AI about the places explicitly attached to that chat. The baseline chat is intentionally a plain model conversation: it has no tools, cross-chat memory, automatic place extraction, or map mutation.
 
 ## File Structure
 
@@ -16,16 +16,14 @@ src/features/atlas-ai/ai-chat/
 
 ```ts
 type AIChatBoxProps = {
-  places: ParsedPlace[];        // places associated with this session; shown as context and as the default set when the model asks "want me to add these?"
+  places: ParsedPlace[];        // places explicitly attached to this chat; provided as model context
   onClose: () => void;
   onOpenHistory?: () => void;
   title?: string;
   visible?: boolean;
   conversationId?: string | null;  // Supabase conversation id; loads history via fetchConversation, or lazily creates a session on first message when null
-  onPlacesCommitted?: (places: ParsedPlace[], action: PendingMode) => void;  // user confirmed a pending place action; caller merges into the active history item / saved places
 };
 
-export function looksLikePlaceName(name: string): boolean  // false for values that read as prose rather than a place label
 ```
 
 ## Behaviour
@@ -36,13 +34,10 @@ export function looksLikePlaceName(name: string): boolean  // false for values t
 - Gives the composer its own native Liquid Glass surface with a light white frost wash; unsupported platforms fall back to `systemMaterialLight`.
 - Matches the two Figma composer states: an empty 56 pt single-row composer (28 pt side/bottom inset, 32 pt radius), and an animated content composer (12 pt side inset, 28 pt bottom inset, 24 pt radius).
 - Keeps one persistent multiline `TextInput` mounted across both composer states; entering the first character changes layout without replacing the native input or dropping keyboard focus.
-- Parses backend replies for a `[[CONFIRM_ADD_PLACES:{...}]]` marker (`extractPendingAction`) to render an inline place-action confirmation card instead of raw JSON.
-- Screens every route that carries extractor output — the structured `place_cards` field, the `[[PLACE_ACTION_CARD]]` / `[[CONFIRM_ADD_PLACES]]` markers, and the reply-text heuristic — through `looksLikePlaceName`, dropping places whose name reads as prose rather than a label. A card left with no places is dropped; a confirm marker left with no places yields no pending action but still reports `hasConfirmMarker`, so the natural-language fallbacks can offer the session's own places instead. Rejections are logged with `console.warn`. Places sourced from the `places` prop are not screened.
-- Presents place actions as vertically stacked neutral capsules with 16/24 semibold labels, bold 16 pt arrows, 8 pt vertical padding, and 16 pt effective horizontal padding (the Figma component's 12 pt padding plus its 4 pt internal spacer), while preserving the existing `pin_in_chat` / `save_to_my_places` handlers.
+- Displays ordinary model text. Historical action markers are stripped from the visible transcript for compatibility, but they cannot create buttons or mutate places.
 - Adds a bold 16 pt feedback row beneath every assistant response: local like/dislike selection, clipboard copy, native share, and a compact overflow action sheet.
 - Matches the Figma message rhythm with SF Pro 16/24 body text, an 8 pt label-to-body gap, 12 pt gaps between content/actions/feedback, and no extra Markdown paragraph margin.
-- Has heuristic fallbacks (`looksLikeAddToMapQuestion`, `looksLikeAffirmativeReply`, `looksLikeSaveCurrentChatRequest`, `looksLikeManualAddFallback`) for turning natural-language model replies into the same confirmation flow when the backend doesn't emit a structured marker.
-- Talks to the backend via `chatWithAtlas`, `createChatSession`, `fetchConversation` (`@/services/api/apiService`).
+- Talks to the backend via `chatWithAtlas`, `createChatSession`, and `fetchConversation` (`@/services/api/apiService`).
 
 ## Integration
 
@@ -59,7 +54,7 @@ export function looksLikePlaceName(name: string): boolean  // false for values t
 />
 ```
 
-Only `HomeScreen` mounts this component; it is keyed on the active history item id so switching chats resets local message state.
+Only `HomeScreen` mounts this component; it is keyed on the active history item id so switching chats resets local message state. Chat history persistence remains a product feature, but it is not injected as cross-chat memory.
 
 ## Related docs
 

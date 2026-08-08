@@ -3,13 +3,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, AppState, LogBox, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, AppState, LogBox, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import './global.css';
 
 import { savePlaces } from '@/services/place/placeService';
 import { HomeProvider, useHome } from './src/features/home/HomeContext';
+import { AppDialogProvider, useAppDialog } from './src/components/feedback/AppDialog';
 import { signInAnonymously, supabase } from './src/services/supabase/supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import HomeScreen from './src/features/home/HomeScreen';
@@ -73,6 +74,8 @@ type BackgroundImport = {
 };
 
 const COMPLETED_IMPORT_STORAGE_KEY = 'atlas.completed-import';
+const ANALYSIS_HERO_HOLD_MS = 1000;
+const ANALYSIS_HERO_FALLBACK_MS = 4500;
 
 function importTheme(
   meta: ImportMeta | null,
@@ -281,7 +284,7 @@ class MapErrorBoundary extends React.Component<
         <View style={errorBoundaryStyles.container}>
           <Text style={errorBoundaryStyles.title}>Something went wrong</Text>
           <Text style={errorBoundaryStyles.message}>
-            {this.state.error?.message || 'An unexpected error occurred.'}
+            We hit an unexpected snag while opening this view. Please return to My Places and try again.
           </Text>
         </View>
       );
@@ -330,12 +333,12 @@ function AppContent() {
   const openCompletedImportRef = useRef<(() => void) | null>(null);
   const openWhenImportReadyRef = useRef(false);
   const resumingBackgroundImportRef = useRef(false);
+  const analysisHeroReadyRef = useRef(false);
+  const advanceAfterHeroRef = useRef<(() => void) | null>(null);
+  const { show: showDialog } = useAppDialog();
   const {
     chatHistory,
-    savedPlaces,
     setParsedPlaces,
-    setRecentlySavedPlaceIds,
-    refreshSavedPlaces,
     setOverlay: setHomeOverlay,
     addChatHistoryItem,
     replaceChatHistoryItem,
@@ -370,14 +373,14 @@ function AppContent() {
     if (!completionCelebration) return;
     const timeoutId = setTimeout(() => {
       setCompletionCelebration(null);
-      Alert.alert(
-        'Places added to Chat History',
-        `${completionCelebration} is ready to revisit in Chat History.`,
-        [
-          { text: 'Later', style: 'cancel' },
-          { text: 'Open Chat History', onPress: () => setShowChatHistory(true) },
+      showDialog({
+        title: 'Ready in Chat History',
+        message: `${completionCelebration} is ready whenever you want to revisit it.`,
+        actions: [
+          { label: 'Later' },
+          { label: 'Open Chat History', variant: 'primary', onPress: () => setShowChatHistory(true) },
         ],
-      );
+      });
     }, 10_000);
     return () => clearTimeout(timeoutId);
   }, [completionCelebration]);
@@ -430,6 +433,8 @@ function AppContent() {
     let cancelled = false;
     let dismissed = false;
     let requestId: string | null = null;
+    analysisHeroReadyRef.current = false;
+    advanceAfterHeroRef.current = null;
     setParseProgressEvents([]);
     const handleProgress: ParseProgressHandler = (progress) => {
       if (cancelled) return;
@@ -442,8 +447,19 @@ function AppContent() {
       requestId = id;
       if (cancelled) void cancelParseRequest(id);
     };
-    const completeImport = (result: ParseResult) => {
+    const completeImport = (result: ParseResult | null | undefined) => {
       if (cancelled) return;
+      if (!result || result.places.length === 0) {
+        showDialog({
+          title: 'We couldn\'t find any places',
+          message: importMeta?.mode === 'web_scrape'
+            ? 'This page did not share enough public information to identify places. Try another public link or paste the relevant text instead.'
+            : 'Try adding a little more context, choosing a public link, or using a different source.',
+          tone: 'warning',
+        });
+        setOverlay('import');
+        return;
+      }
       if (dismissed || appStateRef.current !== 'active') {
         const completed: CompletedImport = { result, importMeta, importText };
         setBackgroundImport(null);
@@ -461,12 +477,29 @@ function AppContent() {
       }
       parseResultRef.current = result;
       setParsedPlaces(result.places);
-      setTimeout(() => {
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let advanced = false;
+      const advanceToSave = () => {
+        if (advanced) return;
+        advanced = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        advanceAfterHeroRef.current = null;
         if (!cancelled && !dismissed) setOverlay('save');
-      }, 2000);
+      };
+      const advanceAfterHeroHold = () => {
+        if (advanced) return;
+        if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(advanceToSave, ANALYSIS_HERO_HOLD_MS);
+      };
+      advanceAfterHeroRef.current = advanceAfterHeroHold;
+      timeoutId = setTimeout(advanceToSave, ANALYSIS_HERO_FALLBACK_MS);
+      if (analysisHeroReadyRef.current) {
+        advanceAfterHeroHold();
+      }
     };
     const dismiss = () => {
       dismissed = true;
+      advanceAfterHeroRef.current = null;
       void requestImportNotificationPermission();
       setBackgroundImport({ title: importTheme(importMeta, importText, parseProgressEvents) });
       if (parseResultRef.current) {
@@ -477,6 +510,7 @@ function AppContent() {
     };
     const cancel = () => {
       cancelled = true;
+      advanceAfterHeroRef.current = null;
       parseResultRef.current = null;
       setBackgroundImport(null);
       if (requestId) void cancelParseRequest(requestId);
@@ -496,7 +530,11 @@ function AppContent() {
       const sourceUrl = importMeta?.rawInput || importText;
       scanAnyLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = {
             ...result,
@@ -514,7 +552,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('Any Links scan failed:', err);
-            Alert.alert('Scan Failed', err.message || 'Failed to scan URL.');
+            showDialog({
+              title: 'We couldn\'t open this page',
+              message: 'It may require sign-in, be unavailable in your region, or block automated access. Try another public link or paste the relevant text instead.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -525,7 +567,11 @@ function AppContent() {
       const sourceUrl = importMeta?.rawInput || importText;
       parseYoutubeLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = {
             ...result,
@@ -564,7 +610,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('YouTube parse failed:', err);
-            Alert.alert('Parse Failed', err.message || 'Failed to parse YouTube URL.');
+            showDialog({
+              title: 'We couldn\'t read this YouTube video',
+              message: 'The video may be private, unavailable in your region, or missing a readable transcript. Please try a public video or another link.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -575,7 +625,11 @@ function AppContent() {
       const sourceUrl = importMeta?.rawInput || importText;
       parseTikTokLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
           const tempHistoryId = addChatHistoryItem({
@@ -609,7 +663,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('TikTok parse failed:', err);
-            Alert.alert('TikTok Import Failed', err.message || 'Unable to read that TikTok video.');
+            showDialog({
+              title: 'We couldn\'t read this TikTok video',
+              message: 'The post may be private, unavailable in your region, or not offer enough public information to identify places. Try another public video.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -620,7 +678,11 @@ function AppContent() {
       const sourceUrl = importMeta?.rawInput || importText;
       parseInstagramReelLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
           const tempHistoryId = addChatHistoryItem({
@@ -654,7 +716,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('Instagram Reel parse failed:', err);
-            Alert.alert('Instagram Import Failed', err.message || 'Unable to read that Instagram Reel.');
+            showDialog({
+              title: 'We couldn\'t read this Instagram Reel',
+              message: 'The Reel may be private, unavailable in your region, or restricted by Instagram. Please try another public Reel.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -665,8 +731,12 @@ function AppContent() {
       const sourceUrl = importMeta?.rawInput || importText;
       parseFacebookReelLink(sourceUrl, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
-          const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
+          const effectiveTitle = result.sourceTitle || importMeta?.title || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
           const tempHistoryId = addChatHistoryItem({
             title: effectiveTitle,
@@ -699,7 +769,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('Facebook Reel parse failed:', err);
-            Alert.alert('Facebook Import Failed', err.message || 'Unable to read that Facebook Reel.');
+            showDialog({
+              title: 'We couldn\'t read this Facebook Reel',
+              message: 'The video may be private, unavailable in your region, or restricted by Facebook. Please try another public video.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -712,7 +786,11 @@ function AppContent() {
       const imageDataList = importMeta?.imageDataList || JSON.parse(importText);
       scanImagesForTextPlaces(imageDataList, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
           const effectiveTitle = result.sourceTitle || 'Scanned places from image';
           addChatHistoryItem({
             title: effectiveTitle,
@@ -726,7 +804,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('Image scan failed:', err);
-            Alert.alert('Scan Failed', err.message || 'Failed to scan images.');
+            showDialog({
+              title: 'We couldn\'t read those images',
+              message: 'Try a clearer image with visible place names, signs, or addresses, then give it another go.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -738,20 +820,29 @@ function AppContent() {
     if (importMeta?.mode === 'find_image_places') {
       const imageData = importMeta?.imageDataList?.[0];
       if (!imageData) {
-        Alert.alert('Error', 'No image data available.');
+        showDialog({
+          title: 'That image is no longer available',
+          message: 'Choose the image again and we\'ll take another look.',
+          tone: 'warning',
+        });
         setOverlay('import');
         return;
       }
       findImagePlace(imageData, handleProgress, handleRequestId)
         .then((result) => {
-          if (cancelled || !result) return;
+          if (cancelled) return;
+          if (!result) {
+            completeImport(result);
+            return;
+          }
           const firstPlace = result.places[0];
           const isUnknown = !firstPlace?.latitude && !firstPlace?.longitude;
           if (isUnknown) {
-            Alert.alert(
-              'Could Not Identify Location',
-              'We were unable to identify the geographic location in this image. Please try a different photo.',
-            );
+            showDialog({
+              title: 'We couldn\'t identify that place',
+              message: 'Try a different photo with a clearer landmark, sign, or storefront.',
+              tone: 'warning',
+            });
             setOverlay('import');
             return;
           }
@@ -768,7 +859,11 @@ function AppContent() {
         .catch((err) => {
           if (!cancelled) {
             console.warn('Find image place failed:', err);
-            Alert.alert('Failed', err.message || 'Failed to identify location.');
+            showDialog({
+              title: 'We couldn\'t identify that place',
+              message: 'Try a different photo with a clearer landmark, sign, or storefront.',
+              tone: 'warning',
+            });
             setOverlay('import');
           }
         });
@@ -840,10 +935,11 @@ function AppContent() {
       .catch((err) => {
         if (!cancelled) {
           console.warn('Parse failed:', err);
-          Alert.alert(
-            'Atlas AI 解析失败',
-            err instanceof Error ? err.message : '请稍后再试。',
-          );
+          showDialog({
+            title: 'We couldn\'t find places in that',
+            message: 'Try adding a little more context, choosing a public link, or using a different source.',
+            tone: 'warning',
+          });
           if (importMeta?.mode === 'atlas_discover') {
             setImportMeta(null);
             setOverlay('none');
@@ -890,19 +986,11 @@ function AppContent() {
           onSave={async (ids) => {
             try {
               const selected = parseResult.places.filter((p) => ids.includes(p.id));
-              const existingIds = new Set(savedPlaces.map((place) => place.id));
               const saved = await savePlaces(selected, {
                 region: parseResult.region,
                 url: importMeta?.sourceUrl || importText,
               });
-              // The home list owns the saved-place presentation. Keep only the
-              // rows inserted by this action marked for its one-time entrance.
-              const newlySavedIds = saved
-                .filter((place) => !existingIds.has(place.id))
-                .map((place) => place.id);
-              setRecentlySavedPlaceIds(newlySavedIds);
               setParsedPlaces([]);
-              await refreshSavedPlaces();
               console.log(`Saved ${saved.length} places to Supabase`);
             } catch (e) {
               console.error('Save failed:', e);
@@ -919,16 +1007,10 @@ function AppContent() {
           onSaveAndAskAI={async (ids) => {
             try {
               const selected = parseResult.places.filter((p) => ids.includes(p.id));
-              const existingIds = new Set(savedPlaces.map((place) => place.id));
               const saved = await savePlaces(selected, {
                 region: parseResult.region,
                 url: importMeta?.sourceUrl || importText,
               });
-              const newlySavedIds = saved
-                .filter((place) => !existingIds.has(place.id))
-                .map((place) => place.id);
-              setRecentlySavedPlaceIds(newlySavedIds);
-              await refreshSavedPlaces();
 
               const sourceUrl = importMeta?.sourceUrl || importText;
               const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
@@ -949,9 +1031,7 @@ function AppContent() {
             setImportMeta(null);
             parseResultRef.current = null;
             setOverlay('none');
-            // First let the new rows complete their Bookmarks entrance, then
-            // travel the liquid selector to AI before opening the chat sheet.
-            setTimeout(() => setActiveSidekick('aiChat'), 820);
+            setActiveSidekick('aiChat');
           }}
         />
       ) : null}
@@ -1013,6 +1093,10 @@ function AppContent() {
               progressEvents={parseProgressEvents}
               onDismiss={() => dismissActiveImportRef.current?.()}
               onCancel={() => cancelActiveImportRef.current?.()}
+              onHeroReady={() => {
+                analysisHeroReadyRef.current = true;
+                advanceAfterHeroRef.current?.();
+              }}
             />
           )}
 
@@ -1106,11 +1190,13 @@ export default function App() {
     <SafeAreaProvider>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthGate>
-        <HomeProvider>
-          <StatusBar style="dark" />
-          <AppContent />
-          <PortalHost />
-        </HomeProvider>
+        <AppDialogProvider>
+          <HomeProvider>
+            <StatusBar style="dark" />
+            <AppContent />
+            <PortalHost />
+          </HomeProvider>
+        </AppDialogProvider>
       </AuthGate>
     </GestureHandlerRootView>
     </SafeAreaProvider>

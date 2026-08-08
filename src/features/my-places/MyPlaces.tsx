@@ -23,9 +23,6 @@ type MyPlacesProps = {
   onSharePress?: () => void;
   /** Renders a condensed header only — used when the panel is in compact snap state */
   compact?: boolean;
-  onDeleteSwipeStart?: (place: PlaceDetail) => void;
-  onDeleteSwipeProgress?: (place: PlaceDetail, progress: number) => void;
-  onDeleteSwipeSettle?: (place: PlaceDetail, opened: boolean) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
@@ -38,9 +35,6 @@ function MyPlaces({
   onAvatarPress,
   onSharePress,
   compact = false,
-  onDeleteSwipeStart,
-  onDeleteSwipeProgress,
-  onDeleteSwipeSettle,
   onDeleteInitiated,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
@@ -182,9 +176,6 @@ function MyPlaces({
           onScroll={onScroll}
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
-          onDeleteSwipeStart={onDeleteSwipeStart}
-          onDeleteSwipeProgress={onDeleteSwipeProgress}
-          onDeleteSwipeSettle={onDeleteSwipeSettle}
           onDeleteInitiated={onDeleteInitiated}
         />
       </View>

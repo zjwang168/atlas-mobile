@@ -8,7 +8,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Reanimated, { FadeInDown, FadeInUp, FadeOutDown, FadeOutUp } from 'react-native-reanimated';
 import {
-  Alert,
   Animated,
   Image,
   Keyboard,
@@ -24,6 +23,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getLinkPreview, type LinkPreview } from '../../../services/api/apiService';
+import { useAppDialog } from '../../../components/feedback/AppDialog';
 import { typography } from '../../../theme/typography';
 
 export type ImportMode =
@@ -291,6 +291,7 @@ export default function ImportScreen({
   onSubmit,
   onSubmitImageScan,
 }: ImportScreenProps) {
+  const { show: showDialog } = useAppDialog();
   const insets = useSafeAreaInsets();
   const sheetRef = useRef<BottomSheet>(null);
   const inputRef = useRef<TextInput>(null);
@@ -483,7 +484,11 @@ export default function ImportScreen({
         .filter((base64): base64 is string => Boolean(base64));
 
       if (imageDataList.length === 0) {
-        Alert.alert('Error', 'No image data available.');
+        showDialog({
+          title: 'That image is no longer available',
+          message: 'Choose the image again and we\'ll take another look.',
+          tone: 'warning',
+        });
         return;
       }
 
@@ -514,6 +519,7 @@ export default function ImportScreen({
     onSubmitImageScan,
     section,
     selectedMode,
+    showDialog,
     text,
     webSearchEnabled,
   ]);

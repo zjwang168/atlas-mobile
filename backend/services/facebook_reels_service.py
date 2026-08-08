@@ -1,8 +1,8 @@
-"""Facebook Reel place extraction backed by Apify's official Reels actor.
+"""Facebook video place extraction backed by a direct-link Apify actor.
 
-The actor supplies Reel text and, when Facebook exposes it, caption-file URLs.
-It has no speech-to-text input flag, so the second pass downloads only public
-captions and never attempts to download or transcribe video/audio itself.
+The actor accepts one public Facebook video or Reel URL and returns its public
+metadata. Atlas intentionally does not download, caption, or transcribe media
+in this flow; place extraction uses only title, description, and uploader data.
 """
 
 from __future__ import annotations
@@ -22,45 +22,36 @@ from backend.services.universal_web_content import _assert_public_host
 
 logger = logging.getLogger("atlas.facebook_reels")
 
-FACEBOOK_REELS_ACTOR_ID = os.environ.get("FACEBOOK_REELS_APIFY_ACTOR", "apify/facebook-reels-scraper")
-FACEBOOK_REELS_METADATA_TIMEOUT_S = float(os.environ.get("FACEBOOK_REELS_METADATA_TIMEOUT_S", "45"))
-FACEBOOK_REELS_CAPTIONS_TIMEOUT_S = float(os.environ.get("FACEBOOK_REELS_CAPTIONS_TIMEOUT_S", "45"))
+FACEBOOK_VIDEO_ACTOR_ID = os.environ.get(
+    "FACEBOOK_VIDEO_APIFY_ACTOR",
+    "scrapepilot/facebook-reels-downloader-video-metadata-extractor",
+)
+FACEBOOK_VIDEO_METADATA_TIMEOUT_S = float(os.environ.get("FACEBOOK_VIDEO_METADATA_TIMEOUT_S", "60"))
 
 
 async def parse_facebook_reel_url(url: str, request_id: str | None = None) -> dict:
-    """Parse a public Facebook Reel or share URL into Atlas's place response."""
+    """Parse a public Facebook video, Reel, watch, or share URL into Atlas's place response."""
     facebook_url = await _normalize_facebook_url(url)
 
     from backend.services import progress
 
-    progress.stream_note(request_id, "facebook:fetch", {"detail": "Collecting the public Reel text and metadata."})
-    item = await _fetch_facebook_reel(facebook_url)
+    progress.stream_note(request_id, "facebook:fetch", {"detail": "Collecting public video metadata."})
+    item = await _fetch_facebook_video(facebook_url)
     title, source_text = _source_text_from_item(item, facebook_url)
-    progress.mark(request_id, "source_fetched", "Source prepared.", {"title": title, "source_type": "facebook_reels"})
-    progress.stream_note(request_id, "facebook:caption", {"detail": "Reel text and public metadata collected."})
+    source_thumbnail = _source_thumbnail_from_item(item)
+    progress.mark(request_id, "source_fetched", "Source prepared.", {
+        "title": title,
+        "thumbnail_url": source_thumbnail,
+        "source_type": "facebook_reels",
+    })
+    progress.stream_note(request_id, "facebook:caption", {"detail": "Public video metadata collected."})
 
-    extracted: dict[str, Any] = {}
-    if source_text:
-        english_text = await translate_to_english(source_text, request_id=request_id)
-        progress.stream_note(request_id, "facebook:deepseek", {"detail": "Extracting places from the Reel context."})
-        extracted = await ExtractionPipeline.extract(english_text, source_type="facebook_reels", request_id=request_id)
+    if not source_text:
+        raise ValueError("This Facebook video has no public title, description, or creator information to analyze.")
 
-    # This actor exposes Facebook's existing caption files but has no
-    # speech-to-text option. Download those only when metadata is insufficient.
-    if _needs_captions(extracted):
-        caption_text = await _download_caption_text(item)
-        if caption_text:
-            progress.stream_note(request_id, "facebook:transcript", {"detail": "Public captions ready; checking spoken place references."})
-            _, enriched_text = _source_text_from_item(item, facebook_url, caption_text=caption_text)
-            if enriched_text != source_text:
-                english_text = await translate_to_english(enriched_text, request_id=request_id)
-                progress.stream_note(request_id, "facebook:deepseek", {"detail": "Extracting places from the Reel text and captions."})
-                extracted = await ExtractionPipeline.extract(english_text, source_type="facebook_reels", request_id=request_id)
-        else:
-            progress.stream_note(request_id, "facebook:captions_unavailable", {"detail": "No public caption file was available for this Reel."})
-
-    if not source_text and not extracted:
-        raise ValueError("This Facebook Reel has no public text or captions to analyze.")
+    english_text = await translate_to_english(source_text, request_id=request_id)
+    progress.stream_note(request_id, "facebook:deepseek", {"detail": "Extracting places from the video context."})
+    extracted = await ExtractionPipeline.extract(english_text, source_type="facebook_reels", request_id=request_id)
 
     location_names = extracted.get("locations", [])
     progress.stream_identified_places(request_id, location_names)
@@ -105,6 +96,7 @@ async def parse_facebook_reel_url(url: str, request_id: str | None = None) -> di
         "removed_hierarchy": extracted.get("removed_hierarchy", []),
         "inferred_region": inferred_region,
         "source_type": "facebook_reels",
+        "source_thumbnail": source_thumbnail or None,
     }
 
 
@@ -119,109 +111,60 @@ async def _normalize_facebook_url(value: str) -> str:
     return url
 
 
-async def _fetch_facebook_reel(url: str) -> dict[str, Any]:
+async def _fetch_facebook_video(url: str) -> dict[str, Any]:
     token = os.environ.get("APIFY_TOKEN", "").strip()
     if not token:
-        raise ValueError("Facebook Reel import is not configured. Set APIFY_TOKEN on the backend.")
+        raise ValueError("Facebook video import is not configured. Set APIFY_TOKEN on the backend.")
 
-    actor_id = FACEBOOK_REELS_ACTOR_ID.replace("/", "~")
+    actor_id = FACEBOOK_VIDEO_ACTOR_ID.replace("/", "~")
     endpoint = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
-    payload = {
-        "startUrls": [{"url": url}],
-        "resultsLimit": 1,
-    }
+    payload = _facebook_video_actor_input(url)
     try:
-        async with httpx.AsyncClient(timeout=FACEBOOK_REELS_METADATA_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=FACEBOOK_VIDEO_METADATA_TIMEOUT_S) as client:
             response = await client.post(endpoint, params={"token": token}, json=payload)
             response.raise_for_status()
             data = response.json()
     except httpx.HTTPStatusError as exc:
         logger.warning("[FacebookReels] Apify rejected %s: %s", url, exc.response.text[:500])
-        raise ValueError("Facebook could not read this Reel. It may be private, deleted, or unavailable in the scraper region.") from exc
+        raise ValueError("Facebook could not read this video. It may be private, deleted, or unavailable in the scraper region.") from exc
     except httpx.HTTPError as exc:
         logger.warning("[FacebookReels] Apify request failed for %s: %s", url, exc)
-        raise ValueError("Facebook Reel import timed out while reading the public video.") from exc
+        raise ValueError("Facebook video import timed out while reading the public video.") from exc
 
     if not isinstance(data, list) or not data or not isinstance(data[0], dict):
-        raise ValueError("Facebook did not return readable data for this Reel.")
+        raise ValueError("Facebook did not return readable data for this video.")
     return data[0]
 
 
-def _source_text_from_item(item: dict[str, Any], url: str, caption_text: str = "") -> tuple[str, str]:
-    text = _string(item.get("text")) or _value_text(item.get("message"))
-    creator_url = _string(item.get("facebookUrl")) or _string(item.get("inputUrl"))
-    reel_url = _string(item.get("shareable_url")) or _string(item.get("topLevelReelUrl")) or url
-    title = text or "Facebook Reel"
+def _facebook_video_actor_input(url: str) -> dict[str, str]:
+    # The Actor's live schema currently accepts its `urls` field as a single
+    # string, despite its public README also showing an array example.
+    return {"urls": url}
+
+
+def _source_text_from_item(item: dict[str, Any], url: str) -> tuple[str, str]:
+    video_title = _string(item.get("title"))
+    description = _string(item.get("description")) or _string(item.get("caption")) or _string(item.get("text"))
+    uploader = _string(item.get("uploader")) or _string(item.get("author")) or _string(item.get("owner"))
+    video_url = _string(item.get("url")) or url
+    title = video_title or description or (f"Facebook video by {uploader}" if uploader else "Facebook video")
     title = re.sub(r"\s+", " ", title).strip()[:160]
-    parts = [f"Facebook Reel URL: {reel_url}"]
-    if text:
-        parts.append(f"Reel text: {text}")
-    if creator_url:
-        parts.append(f"Creator page: {creator_url}")
-    if caption_text:
-        parts.append(f"Reel captions: {caption_text}")
-    return title, "\n\n".join(parts) if text or caption_text else ""
+    parts = [f"Facebook video URL: {video_url}"]
+    if video_title:
+        parts.append(f"Video title: {video_title}")
+    if description:
+        parts.append(f"Video description: {description}")
+    if uploader:
+        parts.append(f"Uploader: {uploader}")
+    return title, "\n\n".join(parts) if any([video_title, description, uploader]) else ""
 
 
-async def _download_caption_text(item: dict[str, Any]) -> str:
-    links = _caption_urls(item)
-    if not links:
-        return ""
-    texts: list[str] = []
-    async with httpx.AsyncClient(timeout=FACEBOOK_REELS_CAPTIONS_TIMEOUT_S, follow_redirects=True) as client:
-        # Facebook commonly returns the same caption in several locales; two
-        # distinct files are enough for a fast fallback without delaying import.
-        for link in links[:2]:
-            try:
-                await _assert_public_host(link)
-                response = await client.get(link)
-                response.raise_for_status()
-                cleaned = _clean_caption_file(response.text)
-                if cleaned:
-                    texts.append(cleaned)
-            except (ValueError, httpx.HTTPError) as exc:
-                logger.info("[FacebookReels] Caption download failed: %s", exc)
-    return " ".join(dict.fromkeys(texts))
-
-
-def _caption_urls(item: dict[str, Any]) -> list[str]:
-    playback = item.get("playback_video") if isinstance(item.get("playback_video"), dict) else {}
-    candidates: list[Any] = [
-        item.get("captions_url"),
-        item.get("caption_file_url"),
-        playback.get("captions_url"),
-        playback.get("caption_file_url"),
-    ]
-    locales = playback.get("video_available_captions_locales") or item.get("video_available_captions_locales") or []
-    if isinstance(locales, list):
-        candidates.extend(entry.get("captions_url") for entry in locales if isinstance(entry, dict))
-    return list(dict.fromkeys(value.strip() for value in candidates if isinstance(value, str) and value.strip()))
-
-
-def _clean_caption_file(value: str) -> str:
-    lines: list[str] = []
-    for line in value.replace("\r", "").splitlines():
-        line = re.sub(r"<[^>]+>", " ", line).strip()
-        if not line or line.upper() == "WEBVTT" or "-->" in line or re.fullmatch(r"\d+", line):
-            continue
-        if line not in lines:
-            lines.append(line)
-    return " ".join(lines)
-
-
-def _needs_captions(extracted: dict[str, Any]) -> bool:
-    locations = extracted.get("locations") if isinstance(extracted, dict) else None
-    if not isinstance(locations, list) or not locations:
-        return True
-    for location in locations:
-        if not isinstance(location, dict):
-            continue
-        try:
-            if int(location.get("hierarchy_level", 2)) <= 1:
-                return False
-        except (TypeError, ValueError):
-            continue
-    return True
+def _source_thumbnail_from_item(item: dict[str, Any]) -> str:
+    return (
+        _string(item.get("thumbnail"))
+        or _string(item.get("thumbnail_url"))
+        or _string(item.get("thumbnailUrl"))
+    )
 
 
 def _build_geocode_queries(locations: list[dict], inferred_region: str | None) -> list[dict]:

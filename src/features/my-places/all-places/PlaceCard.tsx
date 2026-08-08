@@ -7,17 +7,13 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useEffect, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
-import Reanimated, { FadeInUp, runOnJS, SharedValue, useAnimatedReaction, useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
 type PlaceCardProps = {
   item: PlaceDetail;
-  recentlyAdded?: boolean;
   selected?: boolean;
   onPress?: (place: PlaceDetail) => void;
   onDelete: (id: string) => void;
-  onDeleteSwipeStart?: (place: PlaceDetail) => void;
-  onDeleteSwipeProgress?: (place: PlaceDetail, progress: number) => void;
-  onDeleteSwipeSettle?: (place: PlaceDetail, opened: boolean) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
@@ -27,7 +23,7 @@ const DELETE_BUTTON_SIZE = 48;
 /** Fixed at the right edge behind the card — doesn't translate with the
     swipe. Scale and fade track swipe progress directly (0 = untouched, 1 =
     fully open), no open/closed state. */
-function DeleteAction({ progress, onDelete, onProgress }: { progress: SharedValue<number>; onDelete: () => void; onProgress?: (progress: number) => void }) {
+function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; onDelete: () => void }) {
   const style = useAnimatedStyle(() => {
     const amount = Math.min(progress.value, 1);
     return {
@@ -35,15 +31,6 @@ function DeleteAction({ progress, onDelete, onProgress }: { progress: SharedValu
       transform: [{ scale: amount }],
     };
   });
-  useAnimatedReaction(
-    () => Math.min(Math.max(progress.value, 0), 1),
-    (current, previous) => {
-      if (onProgress && (previous === null || Math.abs(current - previous) >= 0.02)) {
-        runOnJS(onProgress)(current);
-      }
-    },
-    [onProgress],
-  );
   return (
     <Reanimated.View style={[styles.deleteAction, style]}>
       <TouchableOpacity onPress={onDelete} style={styles.deleteButton}>
@@ -56,7 +43,7 @@ function DeleteAction({ progress, onDelete, onProgress }: { progress: SharedValu
 /** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
     frames) don't force every visible row to re-render — only rows whose
     own props actually changed do. */
-export const PlaceCard = memo(function PlaceCard({ item, recentlyAdded = false, selected = false, onPress, onDelete, onDeleteSwipeStart, onDeleteSwipeProgress, onDeleteSwipeSettle, onDeleteInitiated }: PlaceCardProps) {
+export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPress, onDelete, onDeleteInitiated }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
   const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const [locallySelected, setLocallySelected] = useState(false);
@@ -87,10 +74,7 @@ export const PlaceCard = memo(function PlaceCard({ item, recentlyAdded = false, 
   };
 
   return (
-    <Reanimated.View
-      entering={recentlyAdded ? FadeInUp.springify().damping(16).stiffness(260).mass(0.56) : undefined}
-      style={{ paddingHorizontal: 16 }}
-    >
+    <View style={{ paddingHorizontal: 16 }}>
       <View style={[styles.cardShell, (selected || locallySelected) && styles.cardShellSelected]}>
       <ReanimatedSwipeable
         ref={swipeableRef}
@@ -99,10 +83,7 @@ export const PlaceCard = memo(function PlaceCard({ item, recentlyAdded = false, 
         overshootRight
         overshootFriction={2}
         animationOptions={{ mass: 1, damping: 14, stiffness: 90, overshootClamping: false }}
-        onSwipeableOpenStartDrag={() => onDeleteSwipeStart?.(item)}
-        onSwipeableOpen={() => onDeleteSwipeSettle?.(item, true)}
-        onSwipeableClose={() => onDeleteSwipeSettle?.(item, false)}
-        renderRightActions={(progress) => <DeleteAction progress={progress} onDelete={handleDelete} onProgress={(value) => onDeleteSwipeProgress?.(item, value)} />}
+        renderRightActions={(progress) => <DeleteAction progress={progress} onDelete={handleDelete} />}
       >
         <TouchableOpacity onPress={handleOpenDetail} activeOpacity={0.7}>
           <View style={styles.cardContent}>
@@ -162,7 +143,7 @@ export const PlaceCard = memo(function PlaceCard({ item, recentlyAdded = false, 
         </ScrollView>
       ) : null}
       </View>
-    </Reanimated.View>
+    </View>
   );
 });
 

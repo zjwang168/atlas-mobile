@@ -3,7 +3,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ActivityIndicator, Animated, FlatList, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, TouchableOpacity, View } from 'react-native';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import { useHome } from '../home/HomeContext';
@@ -82,6 +83,7 @@ function MyPlan({
   compact = false,
   snapTo,
 }: MyPlanProps) {
+  const { show: showDialog } = useAppDialog();
   const [showCreatePlan, setShowCreatePlan] = useState(false);
   // Both the grid and CreatePlan stay permanently mounted (mirrors
   // ContentPanel's compact/default crossfade) — no unmount/remount at the
@@ -169,21 +171,27 @@ function MyPlan({
   const onRequestDelete = useCallback((id: string) => {
     const plan = dbPlans.find((p) => p.id === id);
     if (!plan) return;
-    Alert.alert('Delete Plan', `Are you sure you want to delete "${plan.title}"?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          setDbPlans((prev) => prev.filter((p) => p.id !== id));
-          deleteSavedPlan(id).catch((error) => {
-            console.warn('[MyPlan] Failed to delete plan:', error);
-            setDbPlans((prev) => [plan, ...prev]);
-          });
+    showDialog({
+      title: 'Delete this plan?',
+      message: `"${plan.title}" and its schedule will be removed. Your saved places will stay in My Places.`,
+      tone: 'danger',
+      actions: [
+        { label: 'Keep Plan' },
+        {
+          label: 'Delete',
+          variant: 'destructive',
+          onPress: () => {
+            setDbPlans((prev) => prev.filter((p) => p.id !== id));
+            deleteSavedPlan(id).catch((error) => {
+              console.warn('[MyPlan] Failed to delete plan:', error);
+              setDbPlans((prev) => [plan, ...prev]);
+              showDialog({ title: 'We couldn\'t delete this plan', message: 'Nothing has changed. Please try again in a moment.', tone: 'warning' });
+            });
+          },
         },
-      },
-    ]);
-  }, [dbPlans]);
+      ],
+    });
+  }, [dbPlans, showDialog]);
 
   const keyExtractor = useCallback((item: PlanGridItem) => item.id, []);
 
