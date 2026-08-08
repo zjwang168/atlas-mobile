@@ -1,6 +1,6 @@
 import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Reanimated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
@@ -52,6 +52,75 @@ interface MapboxMapProps {
 // Small ease applied to every live padding update so the map visibly trails
 // the panel edge by a beat instead of snapping to it 1:1 every frame.
 const PADDING_FOLLOW_DURATION_MS = 300;
+// Labels become useful at a city or compact-state scale. This is based on the
+// visible geographic footprint, not an arbitrary Mapbox zoom number.
+const LABEL_MAX_VIEWPORT_KM = 360;
+
+type MapViewport = {
+  center: [number, number];
+  zoom: number;
+  bounds?: { ne: [number, number]; sw: [number, number] };
+};
+type ScreenRect = { left: number; top: number; right: number; bottom: number };
+
+function projectToWorld([longitude, latitude]: [number, number], zoom: number): [number, number] {
+  const worldSize = 512 * 2 ** zoom;
+  const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  const latitudeRadians = clampedLatitude * Math.PI / 180;
+  return [
+    (longitude + 180) / 360 * worldSize,
+    (1 - Math.log(Math.tan(latitudeRadians) + 1 / Math.cos(latitudeRadians)) / Math.PI) / 2 * worldSize,
+  ];
+}
+
+function overlaps(a: ScreenRect, b: ScreenRect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function labelWidthForTitle(title: string): number {
+  return Math.min(196, Math.max(72, title.length * 7.4 + 20));
+}
+
+function viewportIsLocal(viewport: MapViewport): boolean {
+  if (!viewport.bounds) return false;
+  const [neLongitude, neLatitude] = viewport.bounds.ne;
+  const [swLongitude, swLatitude] = viewport.bounds.sw;
+  const latitudeSpanKm = Math.abs(neLatitude - swLatitude) * 111.32;
+  const longitudeSpan = Math.abs(neLongitude - swLongitude);
+  const longitudeSpanKm = Math.min(longitudeSpan, 360 - longitudeSpan) * 111.32 * Math.cos(((neLatitude + swLatitude) / 2) * Math.PI / 180);
+  return Math.max(latitudeSpanKm, longitudeSpanKm) <= LABEL_MAX_VIEWPORT_KM;
+}
+
+/**
+ * Labels are emitted only if their estimated screen rectangle clears every
+ * visible marker and every label accepted earlier in this pass. This keeps a
+ * dense area quiet until the user has zoomed far enough into it.
+ */
+function visibleLabelIds(markers: MapMarker[], viewport: MapViewport, width: number, height: number, selectedMarkerId?: string | null, popupMarkerId?: string | null): Set<string> {
+  if (!viewportIsLocal(viewport)) return new Set();
+  const center = projectToWorld(viewport.center, viewport.zoom);
+  const pointRects = markers.map((marker) => {
+    const point = projectToWorld([marker.longitude, marker.latitude], viewport.zoom);
+    const x = point[0] - center[0] + width / 2;
+    const y = point[1] - center[1] + height / 2;
+    return { id: marker.id, x, y, rect: { left: x - 18, top: y - 18, right: x + 18, bottom: y + 18 } };
+  }).filter((point) => point.x >= -24 && point.x <= width + 24 && point.y >= -24 && point.y <= height + 24);
+  const accepted: ScreenRect[] = [];
+  const visible = new Set<string>();
+  const priority = [...pointRects].sort((a, b) => Number(b.id === selectedMarkerId) - Number(a.id === selectedMarkerId));
+  for (const point of priority) {
+    const marker = markers.find((entry) => entry.id === point.id);
+    if (!marker?.title || marker.id === popupMarkerId) continue;
+    const labelWidth = labelWidthForTitle(marker.title);
+    const label: ScreenRect = { left: point.x - labelWidth / 2, right: point.x + labelWidth / 2, top: point.y - 43, bottom: point.y - 21 };
+    if (label.left < 8 || label.right > width - 8 || label.top < 8) continue;
+    if (pointRects.some((other) => other.id !== point.id && overlaps(label, other.rect))) continue;
+    if (accepted.some((other) => overlaps(label, other))) continue;
+    accepted.push(label);
+    visible.add(marker.id);
+  }
+  return visible;
+}
 
 function MarkerDot({ selected, deleting, tone = 'saved', order }: { selected: boolean; deleting: boolean; tone?: MapMarker['tone']; order?: number }) {
   const exit = useSharedValue(0);
@@ -107,6 +176,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<MapViewport>({ center: centerCoordinate, zoom: zoomLevel });
+  const labelIds = useMemo(
+    () => visibleLabelIds(displayMarkers, viewport, width, height, selectedMarkerId, markerPopup?.markerId),
+    [displayMarkers, height, markerPopup?.markerId, selectedMarkerId, viewport, width],
+  );
 
   useEffect(() => {
     try {
@@ -209,6 +283,17 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         attributionEnabled={false}
         scaleBarEnabled={false}
         onPress={onMapPress}
+        onMapIdle={(state) => {
+          const [longitude, latitude] = state.properties.center;
+          setViewport({
+            center: [longitude, latitude],
+            zoom: state.properties.zoom,
+            bounds: {
+              ne: [state.properties.bounds.ne[0], state.properties.bounds.ne[1]],
+              sw: [state.properties.bounds.sw[0], state.properties.bounds.sw[1]],
+            },
+          });
+        }}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -237,6 +322,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
           >
             <View style={styles.markerContainer} onTouchEnd={() => onMarkerPress?.(marker)}>
               <MarkerDot selected={selectedMarkerId === marker.id} deleting={deletingMarkerId === marker.id} tone={marker.tone} order={marker.order} />
+              {labelIds.has(marker.id) && marker.title ? <View pointerEvents="none" style={[styles.markerLabel, { width: labelWidthForTitle(marker.title), marginLeft: -labelWidthForTitle(marker.title) / 2 }]}><Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{marker.title}</Text></View> : null}
               {markerPopup?.markerId === marker.id ? <View style={styles.markerPopup}>{markerPopup.content}</View> : null}
             </View>
           </MapboxGL.MarkerView>
@@ -265,6 +351,29 @@ const styles = StyleSheet.create({
     minWidth: 220,
     maxWidth: 274,
     alignSelf: 'center',
+  },
+  markerLabel: {
+    position: 'absolute',
+    bottom: 24,
+    left: '50%',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.12)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.13,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  markerLabelText: {
+    color: '#1F2937',
+    fontSize: 12,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 0,
   },
   marker: {
     width: 20,
