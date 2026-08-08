@@ -172,7 +172,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       <MapboxGL.MapView
         style={{ width, height }}
         styleURL={MapboxGL.StyleURL.Street}
-        compassEnabled={true}
+        compassEnabled={false}
         compassPosition={{ top: compassTop, right: 16 }}
         logoEnabled={false}
         attributionEnabled={false}
