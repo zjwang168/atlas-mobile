@@ -88,29 +88,15 @@ function HomeTabBar({
   onChatPress,
 }: HomeTabBarProps) {
   const reducedMotion = useReducedMotion();
-  const activeIndex = Math.max(
-    0,
-    TAB_ITEMS.findIndex((item) => item.key === activeTab),
-  );
-  const selectorX = useSharedValue(activeIndex * TAB_WIDTH);
   const barScale = useSharedValue(1);
   const previousActiveTab = useRef(activeTab);
 
   useEffect(() => {
-    const nextX = activeIndex * TAB_WIDTH;
-
     if (reducedMotion) {
-      selectorX.value = nextX;
       barScale.value = 1;
       previousActiveTab.current = activeTab;
       return;
     }
-
-    selectorX.value = withSpring(nextX, {
-      damping: 18,
-      stiffness: 220,
-      mass: 0.68,
-    });
 
     if (previousActiveTab.current !== activeTab) {
       barScale.value = withSequence(
@@ -127,11 +113,7 @@ function HomeTabBar({
     }
 
     previousActiveTab.current = activeTab;
-  }, [activeIndex, activeTab, barScale, reducedMotion, selectorX]);
-
-  const selectorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: selectorX.value }],
-  }));
+  }, [activeTab, barScale, reducedMotion]);
 
   const barScaleStyle = useAnimatedStyle(() => ({
     transform: [{ scale: barScale.value }],
@@ -169,11 +151,6 @@ function HomeTabBar({
             />
           )}
           <View pointerEvents="none" style={styles.frost} />
-          <Animated.View
-            pointerEvents="none"
-            style={[styles.selector, selectorStyle]}
-          />
-
           {TAB_ITEMS.map((item) => {
             const selected = !item.action && item.key === activeTab;
             const IconComponent = item.icon;
@@ -187,6 +164,7 @@ function HomeTabBar({
                 onPress={() => handlePress(item)}
                 style={({ pressed }) => [
                   styles.tab,
+                  selected && styles.tabSelected,
                   pressed && styles.tabPressed,
                 ]}
               >
@@ -247,14 +225,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  selector: {
-    position: 'absolute',
-    left: 4,
-    top: 4,
-    width: TAB_WIDTH,
-    height: 44,
-    borderRadius: 30,
-    borderCurve: 'continuous',
+  tabSelected: {
     backgroundColor: 'rgba(0,0,0,0.05)',
   },
   tabPressed: {

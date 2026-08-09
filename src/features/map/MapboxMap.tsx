@@ -1,4 +1,5 @@
 import MapboxGL from '@rnmapbox/maps';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
@@ -16,7 +17,9 @@ export interface MapMarker {
   longitude: number;
   title?: string;
   description?: string;
-  tone?: 'saved' | 'focused' | 'atlas';
+  labelHint?: string;
+  ai?: boolean;
+  tone?: 'saved' | 'focused' | 'atlas' | 'recommended';
   /** Number shown inside a saved Atlas route pin. */
   order?: number;
 }
@@ -33,6 +36,8 @@ interface MapboxMapProps {
   centerCoordinate?: [number, number];
   zoomLevel?: number;
   bounds?: { ne: [number, number]; sw: [number, number] };
+  /** Forces a fresh fit when the geographic bounds are intentionally unchanged. */
+  cameraKey?: string;
   style?: ViewStyle;
   onMarkerPress?: (marker: MapMarker) => void;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
@@ -200,10 +205,14 @@ function visibleLabelIds(
 
 function MarkerLabel({
   title,
+  hint,
+  ai,
   visible,
   selected,
 }: {
   title: string;
+  hint?: string;
+  ai?: boolean;
   visible: boolean;
   selected: boolean;
 }) {
@@ -229,7 +238,11 @@ function MarkerLabel({
       ]}
     >
       <View style={styles.markerLabelContent}>
-        <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
+        {ai ? <Ionicons name="sparkles" size={12} color="#885CF6" style={styles.markerAiIcon} /> : null}
+        <View style={styles.markerLabelCopy}>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
+          {hint ? <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelHint}>{hint}</Text> : null}
+        </View>
       </View>
     </Animated.View>
   );
@@ -260,20 +273,24 @@ function MarkerDot({
     const duration = isFocused ? 140 : hasActiveSelection ? 0 : 220;
     selectedProgress.value = withTiming(isFocused ? 1 : 0, { duration });
   }, [hasActiveSelection, selected, selectedProgress, tone]);
-  const animatedStyle = useAnimatedStyle(() => ({
+  const animatedStyle = useAnimatedStyle(() => {
+    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : '#007AFF';
+    const selectedColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : '#12C170';
+    return {
     opacity: 1 - exit.value,
     backgroundColor: interpolateColor(
       exit.value,
       [0, 1],
       [
-        interpolateColor(selectedProgress.value, [0, 1], [tone === 'atlas' ? '#E77B32' : '#007AFF', tone === 'atlas' ? '#E77B32' : '#12C170']),
+        interpolateColor(selectedProgress.value, [0, 1], [baseColor, selectedColor]),
         '#DC2626',
       ],
     ),
     transform: [{ scale: (1 + selectedProgress.value * 0.5) * (1 - exit.value * 0.76) }],
-  }));
+    };
+  });
   return (
-    <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
+    <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
       {order ? <Text style={styles.markerOrder}>{order}</Text> : null}
     </Reanimated.View>
   );
@@ -296,6 +313,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   centerCoordinate = [-122.3321, 47.6062],
   zoomLevel = 12,
   bounds,
+  cameraKey,
   style,
   onMarkerPress,
   routeGeoJSON,
@@ -387,6 +405,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const prevCenterRef = useRef(centerCoordinate);
   const prevZoomRef = useRef(zoomLevel);
   const prevPaddingRef = useRef(padding);
+  const prevCameraKeyRef = useRef(cameraKey);
   const previousBoundsRef = useRef<string | null>(null);
   useEffect(() => {
     if (!bounds) {
@@ -394,7 +413,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       return;
     }
     if (!isReady) return;
-    const nextBounds = `${bounds.ne.join(',')}:${bounds.sw.join(',')}:padding-${padding?.paddingTop ?? 0},${padding?.paddingRight ?? 0},${padding?.paddingBottom ?? 0},${padding?.paddingLeft ?? 0}`;
+    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}:padding-${padding?.paddingTop ?? 0},${padding?.paddingRight ?? 0},${padding?.paddingBottom ?? 0},${padding?.paddingLeft ?? 0}`;
     if (nextBounds === previousBoundsRef.current) return;
     previousBoundsRef.current = nextBounds;
     const fitPadding: [number, number, number, number] = [
@@ -404,7 +423,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       Math.max(24, padding?.paddingLeft ?? 0),
     ];
     cameraRef.current?.fitBounds(bounds.ne, bounds.sw, fitPadding, cameraAnimationDurationMs);
-  }, [bounds, cameraAnimationDurationMs, isReady, padding]);
+  }, [bounds, cameraAnimationDurationMs, cameraKey, isReady, padding]);
   useEffect(() => {
     const [lng, lat] = centerCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;
@@ -415,17 +434,20 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       padding?.paddingTop !== prevPaddingRef.current?.paddingTop ||
       padding?.paddingLeft !== prevPaddingRef.current?.paddingLeft ||
       padding?.paddingRight !== prevPaddingRef.current?.paddingRight;
+    const cameraKeyChanged = cameraKey !== prevCameraKeyRef.current;
     if (bounds) {
       prevCenterRef.current = centerCoordinate;
       prevZoomRef.current = zoomLevel;
       prevPaddingRef.current = padding;
+      prevCameraKeyRef.current = cameraKey;
       if (paddingChanged) cameraRef.current?.setCamera({ padding, animationDuration: cameraAnimationDurationMs });
       return;
     }
-    if (!centerChanged && !zoomChanged && !paddingChanged) return;
+    if (!centerChanged && !zoomChanged && !paddingChanged && !cameraKeyChanged) return;
     prevCenterRef.current = centerCoordinate;
     prevZoomRef.current = zoomLevel;
     prevPaddingRef.current = padding;
+    prevCameraKeyRef.current = cameraKey;
     cameraRef.current?.setCamera({
       centerCoordinate,
       zoomLevel,
@@ -537,6 +559,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               {marker.title ? (
                 <MarkerLabel
                   title={marker.title}
+                  hint={marker.labelHint}
+                  ai={marker.ai}
                   visible={selectedMarkerId === marker.id || labelIds.has(marker.id)}
                   selected={selectedMarkerId === marker.id}
                 />
@@ -605,6 +629,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minWidth: 0,
   },
+  markerAiIcon: {
+    marginRight: 4,
+  },
+  markerLabelCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
   markerLabelText: {
     flex: 1,
     color: '#1F2937',
@@ -612,6 +643,14 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     fontWeight: '600',
     letterSpacing: 0,
+    textAlign: 'center',
+  },
+  markerLabelHint: {
+    color: '#171717',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '500',
+    marginTop: 1,
     textAlign: 'center',
   },
   marker: {
@@ -642,6 +681,9 @@ const styles = StyleSheet.create({
   },
   markerAtlas: {
     backgroundColor: '#E77B32',
+  },
+  markerRecommended: {
+    backgroundColor: '#885CF6',
   },
   markerAtlasSelected: {
     borderColor: '#FFFFFF',

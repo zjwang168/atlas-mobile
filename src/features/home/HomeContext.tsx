@@ -64,6 +64,8 @@ export type AtlasMapState = {
   centerCoordinate?: [number, number];
   zoomLevel?: number;
   bounds?: { ne: [number, number]; sw: [number, number] };
+  /** Changes when an Atlas view must re-apply identical bounds after reopening. */
+  cameraKey?: string;
   selectedMarkerId?: string | null;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
   onMarkerPress?: (marker: MapMarker) => void;

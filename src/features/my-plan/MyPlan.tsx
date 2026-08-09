@@ -4,8 +4,9 @@ import { useHome } from '@/features/home/HomeContext';
 import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import AtlasBuilder from './atlas-builder/AtlasBuilder';
+import type { DraftPlace } from './atlas-builder/AtlasBuilder';
 import PlanCard from './PlanCard';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Share, TouchableOpacity, View } from 'react-native';
 
 type MyPlanProps = {
@@ -22,6 +23,12 @@ function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, sna
   const { atlases, atlasPlaces, setOverlay, setActiveSidekick, deleteAtlas } = useHome();
   const [editing, setEditing] = useState(false);
   const [builderVisible, setBuilderVisible] = useState(false);
+  const [buildSeed, setBuildSeed] = useState<DraftPlace[] | null>(null);
+  const [draftItems, setDraftItems] = useState<DraftPlace[]>([]);
+  const [buildCenter, setBuildCenter] = useState<[number, number] | undefined>();
+  const [buildBounds, setBuildBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>();
+  const [builderKey, setBuilderKey] = useState(0);
+  const buildStartedRef = useRef(false);
 
   const data = useMemo<GridItem[]>(() => [
     { id: '__create__', title: 'Create an Atlas', placeCount: 0, create: true },
@@ -36,11 +43,36 @@ function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, sna
     // Keep the shared map visible above the Atlas editor rather than turning
     // the editor into a full-screen white page.
     snapTo?.('default');
+    setBuildSeed(null);
+    setDraftItems([]);
+    setBuildCenter(undefined);
+    setBuildBounds(undefined);
+    buildStartedRef.current = false;
+    setBuilderKey((value) => value + 1);
     setBuilderVisible(true);
   }, [snapTo]);
   const closeBuilder = useCallback(() => {
     setBuilderVisible(false);
+    setBuildSeed(null);
+    setDraftItems([]);
+    setBuildCenter(undefined);
+    setBuildBounds(undefined);
+    buildStartedRef.current = false;
     snapTo?.('default');
+  }, [snapTo]);
+  const openBuildPlan = useCallback((_location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => {
+    setBuildSeed(candidates);
+    setBuildCenter(center);
+    setBuildBounds(bounds);
+    if (!buildStartedRef.current) {
+      buildStartedRef.current = true;
+      setBuilderKey((value) => value + 1);
+    }
+    setBuilderVisible(true);
+    snapTo?.('default');
+  }, [snapTo]);
+  const handleFirstPlaceAdded = useCallback(() => {
+    snapTo?.('tall');
   }, [snapTo]);
 
   const shareAtlas = useCallback(async (item: GridItem) => {
@@ -55,7 +87,7 @@ function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, sna
   }
 
   if (builderVisible) {
-    return <AtlasBuilder onClose={closeBuilder} onSaved={(atlasId, askAI) => {
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} started={buildSeed !== null} onItemsChange={setDraftItems} onFirstPlaceAdded={handleFirstPlaceAdded} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI) => {
       closeBuilder();
       if (askAI) setActiveSidekick('aiChat');
       else setOverlay({ kind: 'atlasDetail', atlasId });
