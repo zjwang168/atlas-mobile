@@ -26,7 +26,7 @@ Output ONLY valid JSON with this exact structure:
       "name": "real-world place name",
       "address": "full postal address with street number, city, state/region, country if known",
       "context": "city, state/region",
-      "description": "one short sentence about why this place is relevant",
+      "description": "a location-specific, license-plate-style English slogan of no more than 4 English words",
       "sentiment": "positive",
       "category": "Tourist Attractions",
       "fictional_or_alt_name": "optional fictional/alternate label or null"
@@ -42,12 +42,13 @@ Rules:
    to English. If a place has a well-known English name, use it in "name".
 3. If a place is commonly known by a fictional label, keep the real place in "name" and put the fictional label in "fictional_or_alt_name".
 4. If you are not reasonably confident in a precise address, omit that place.
-5. Keep descriptions concise, under 24 words.
+5. The description must be a location-specific, license-plate-style English slogan of no more than 4 English words.
+   Do not use a category label, do not truncate a sentence, and do not write a complete sentence.
 6. "sentiment" must be one of "positive", "neutral", "negative".
 7. "category" must be one of:
    "Tourist Attractions", "Dining & Drinking", "Entertainment",
    "Museums & Exhibitions", "Transit Hubs", "Religious Sites", "Others"
-8. Return 3-12 places depending on the request.
+8. Return exactly the number of places requested when the user specifies a number; otherwise return 3-12 places.
 9. Set region_tagline to exactly 2-4 refined English words, not a sentence.
 
 User request:
@@ -83,16 +84,14 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
         progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     places = parsed.get("places", [])
 
-    geocode_queries = []
+    # Geocode by place name and regional context. AI-generated street numbers
+    # are often fictional for attractions and can force a low-confidence fuzzy
+    # match, so the discovery address is intentionally not sent to geocoders.
+    geocode_queries: list[str] = []
     for place in places:
-        address = (place.get("address") or "").strip()
         context = (place.get("context") or "").strip()
         name = (place.get("name") or "").strip()
-        fallback = ", ".join(part for part in [name, context] if part)
-        geocode_queries.append({
-            "query": address or fallback,
-            "fallback_query": fallback if fallback and fallback != address else None,
-        })
+        geocode_queries.append(", ".join(part for part in [name, context] if part))
 
     geocoded = await batch_geocode(geocode_queries, city_name=inferred_region)
     progress.stream_note(request_id, "atlas_ai:geocode", {"detail": f"Resolved {len([g for g in geocoded if g])} candidate places."})
@@ -111,7 +110,7 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
             "name": display_name,
             "latitude": geo["latitude"],
             "longitude": geo["longitude"],
-            "full_address": place.get("address") or geo.get("full_address") or display_name,
+            "full_address": geo.get("full_address") or display_name,
             "description": description,
             "category": place.get("category"),
             "sentiment": place.get("sentiment"),

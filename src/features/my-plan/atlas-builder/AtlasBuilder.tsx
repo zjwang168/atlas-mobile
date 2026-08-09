@@ -74,6 +74,7 @@ type AtlasBuilderProps = {
   initialItems?: DraftPlace[];
   initialCenter?: [number, number];
   initialBounds?: { ne: [number, number]; sw: [number, number] };
+  initialLocation?: string;
   started?: boolean;
   onItemsChange?: (items: DraftPlace[]) => void;
   onFirstPlaceAdded?: () => void;
@@ -90,7 +91,7 @@ const PLANNING_HOURS = Array.from({ length: 17 }, (_, index) => {
 // a rectangular fit. Adjust this zoom to widen/tighten the mainland-US view.
 // A slightly northern center moves the mainland south on screen, clear of the
 // Atlas search field, while this zoom leaves the entire lower 48 in view.
-const CONTINENTAL_US_CENTER = [-98.5, 40.4] as [number, number];
+const CONTINENTAL_US_CENTER = [-98.5, 46.0] as [number, number];
 const CONTINENTAL_US_ZOOM = 1.9;
 
 function boundsFromPolygon(polygon: Array<[number, number]>, padding = 0.06) {
@@ -221,7 +222,7 @@ function buildAtlasTitle(items: DraftPlace[]) {
   return items.length === 1 ? 'A Place To Remember' : 'A Day Well Spent';
 }
 
-export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, started = false, onItemsChange, onFirstPlaceAdded, onBuildPlan }: AtlasBuilderProps) {
+export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, onItemsChange, onFirstPlaceAdded, onBuildPlan }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation } = useHome();
   const searchSession = useRef(createSearchSession()).current;
@@ -245,12 +246,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [pendingDay, setPendingDay] = useState(1);
   const [pendingTime, setPendingTime] = useState('9am');
   const [transportModalIndex, setTransportModalIndex] = useState<number | null>(null);
+  const [focusLabel, setFocusLabel] = useState(initialLocation ?? '');
+  const [focusSearchActive, setFocusSearchActive] = useState(false);
+  const [handoffStarted, setHandoffStarted] = useState(false);
   const [recommendedPlaces, setRecommendedPlaces] = useState<DraftPlace[]>(initialCandidates ?? []);
   const popupScale = useRef(new Animated.Value(0.92)).current;
   const popupOpacity = useRef(new Animated.Value(0)).current;
+  const popupBottom = useRef(new Animated.Value(0)).current;
   const searchAppear = useRef(new Animated.Value(0)).current;
   const cameraKey = useRef(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
   const initialPlaceSelected = useRef(false);
+
+  useEffect(() => {
+    if (initialLocation) setFocusLabel(initialLocation);
+  }, [initialLocation]);
 
   const existingAtlas = useMemo(() => atlases.find((atlas) => atlas.id === atlasId), [atlasId, atlases]);
   const focusAreas = useMemo(() => deriveFocusAreas(savedPlaces), [savedPlaces]);
@@ -287,12 +296,16 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       })
       .filter((place): place is DraftPlace => Boolean(place));
     setItems(restored);
+    if (!initialLocation) {
+      const firstArea = restored.find((place) => place.city || place.region || place.country);
+      if (firstArea) setFocusLabel(firstArea.city ?? firstArea.region ?? firstArea.country ?? firstArea.name);
+    }
     setRoute(existingAtlas?.route_geojson && existingAtlas.route_visible ? {
       route: existingAtlas.route_geojson,
       distance_km: 0,
       duration_minutes: 0,
     } : null);
-  }, [atlasId, atlasPlaces, existingAtlas?.route_geojson, existingAtlas?.route_visible, savedPlaces]);
+  }, [atlasId, atlasPlaces, existingAtlas?.route_geojson, existingAtlas?.route_visible, initialLocation, savedPlaces]);
 
   useEffect(() => () => {
     queryAbortRef.current?.abort();
@@ -309,25 +322,23 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       queryAbortRef.current?.abort();
       const controller = new AbortController();
       queryAbortRef.current = controller;
-      const local = savedPlaces.filter((place) => isLocalMatch(place, trimmed)).slice(0, 2)
+      const local = savedPlaces.filter((place) => isLocalMatch(place, trimmed)).slice(0, 8)
         .map((place): SearchResult => ({ kind: 'saved', place }));
-      setResults(local);
-      if (local.length === 2) {
-        setSearching(false);
-        return;
-      }
+      setResults([]);
       setSearching(true);
       try {
         const remote = await suggestPlaces(trimmed, searchSession, mapCenter ? { proximity: mapCenter } : {}, controller.signal);
         if (controller.signal.aborted) return;
-        const localIds = new Set(local.map((result) => result.kind === 'saved' ? result.place.id : ''));
         const uniqueRemote = remote
-          .filter((suggestion) => !savedPlaces.some((place) => localIds.has(place.id) || normalize(place.name) === normalize(suggestion.name)))
-          .slice(0, 2 - local.length)
+          .filter((suggestion) => !local.some((result) => result.kind === 'saved' && normalize(result.place.name) === normalize(suggestion.name)))
+          .slice(0, 2)
           .map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type }));
-        setResults([...local, ...uniqueRemote]);
+        setResults([...uniqueRemote, ...local].slice(0, 4));
       } catch (error) {
-        if (!isAbortError(error)) console.warn('[AtlasBuilder] search failed', error);
+        if (!isAbortError(error)) {
+          console.warn('[AtlasBuilder] search failed', error);
+          setResults(local.slice(0, 4));
+        }
       } finally {
         if (!controller.signal.aborted) setSearching(false);
       }
@@ -346,7 +357,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setFocused(place);
     setMapCenter([place.longitude, place.latitude]);
     setMapBounds(bounds);
-    setMapZoom(bounds ? CONTINENTAL_US_ZOOM : 15);
+    setMapZoom(bounds ? zoomForBounds(bounds) : 15);
     setPopupVisible(showPopup);
     if (showPopup) {
       popupScale.setValue(0.92);
@@ -358,8 +369,23 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
   }, [popupOpacity, popupScale]);
 
+  const openFocusSearch = useCallback(() => {
+    setFocusSearchActive(true);
+    setQuery('');
+    setResults([]);
+    setTimeout(() => inputRef.current?.focus(), 40);
+  }, []);
+
+  const closeFocusSearch = useCallback(() => {
+    inputRef.current?.blur();
+    setFocusSearchActive(false);
+    setQuery('');
+    setResults([]);
+    setFullResults(null);
+  }, []);
+
   const discoverDeepSeekPlaces = useCallback(async (city: string, count: number): Promise<DraftPlace[]> => {
-    const result = await discoverAtlasPlaces(`推荐${city}${count}个出名地点。只需返回地名、坐标，以及一个description字段。description必须是每个地点专属的车牌式英文slogan，最多4个英文单词；不要返回地点分类，不要截取一句话的前4个词，也不要写完整句子。风格参考：The Emerald Needle、Where Fish Fly、Glass Without Limits、Rock Meets Tech、Art By The Sound、Skyline Capital、Rainforest Not Rain、Wisdom Under Cherry、Where Water Works、Wheel Over Waves。`);
+    const result = await discoverAtlasPlaces(`Recommend exactly ${count} famous places in ${city}. In this single response, return each place name, a precise full postal address, a category, and a description field. The description must be a location-specific, license-plate-style English slogan of no more than 4 English words. Do not return a category label as the description, do not take the first four words of a sentence, and do not write a complete sentence. Coordinates will be resolved from the precise addresses by Atlas geocoding. Style references: The Emerald Needle; Where Fish Fly; Glass Without Limits; Rock Meets Tech; Art By The Sound; Skyline Capital; Rainforest Not Rain; Wisdom Under Cherry; Where Water Works; Wheel Over Waves.`);
     return result.locations.slice(0, count).map((place, index): DraftPlace => ({
       id: `deepseek-${city}-${place.external_id ?? index}`,
       name: place.name,
@@ -379,15 +405,16 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, []);
 
   const discoverFocusPolygon = useCallback(async (area: string) => {
-    const result = await discoverAtlasPlaces(`我要用10个点做一个多边形框住${area}，给我这10个点的坐标。只返回10个边界坐标点，不要返回景点。`);
+    const result = await discoverAtlasPlaces(`I need 8 boundary points to form a polygon around ${area}. Return only 8 boundary coordinate points, not tourist attractions. These are camera-boundary points, not recommended places.`);
     const polygon = result.locations
-      .slice(0, 10)
+      .slice(0, 8)
       .filter((point) => Number.isFinite(point.longitude) && Number.isFinite(point.latitude))
       .map((point) => [point.longitude, point.latitude] as [number, number]);
     return polygon.length >= 3 ? boundsFromPolygon(polygon, 0.12) : undefined;
   }, []);
 
   const handoffToPlan = useCallback((location: string, candidates: DraftPlace[], center?: [number, number], bounds?: FocusArea['bounds']) => {
+    setHandoffStarted(true);
     onBuildPlan?.(location, candidates, center, bounds);
   }, [onBuildPlan]);
 
@@ -396,16 +423,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     if (!initial.length) return;
     handoffToPlan(area.label, initial, area.coordinate, area.bounds);
     try {
-      const [recommendations, polygonBounds] = await Promise.all([
-        discoverDeepSeekPlaces(area.label, 10),
-        discoverFocusPolygon(area.label),
-      ]);
+      const recommendations = await discoverDeepSeekPlaces(area.label, 10);
       setRecommendedPlaces(recommendations);
-      handoffToPlan(area.label, [...initial, ...recommendations], area.coordinate, polygonBounds ?? area.bounds);
     } catch (error) {
       console.warn('[AtlasBuilder] plan discovery failed', error);
     }
-  }, [discoverDeepSeekPlaces, discoverFocusPolygon, handoffToPlan]);
+  }, [discoverDeepSeekPlaces, handoffToPlan]);
 
   const simpleStart = useCallback(async () => {
     const nearbySaved = savedPlaces.filter((place) => isNearCoordinate(place, userLocation)).map((place) => toDraft(place));
@@ -425,21 +448,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
     try {
-      const [recommendations, polygonBounds] = await Promise.all([
-        discoverDeepSeekPlaces(city, 10),
-        discoverFocusPolygon(city),
-      ]);
+      const recommendations = await discoverDeepSeekPlaces(city, 10);
       setRecommendedPlaces(recommendations);
-      handoffToPlan(city, [...nearbySaved, ...recommendations], userLocation, polygonBounds ?? localBounds);
+      setFocusLabel(city);
     } catch (error) {
       // Recommendations are optional; search and saved places remain usable.
       console.warn('[AtlasBuilder] simple start recommendations failed', error);
     }
-  }, [discoverDeepSeekPlaces, discoverFocusPolygon, handoffToPlan, savedPlaces, userLocation]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, savedPlaces, userLocation]);
 
   useEffect(() => {
-    if (!started || atlasId || initialPlaceSelected.current) return;
-    const candidates = started && initialCandidates ? initialCandidates : savedPlaces.map((place) => toDraft(place));
+    if ((!started && !atlasId) || initialPlaceSelected.current) return;
+    const selectedIds = new Set(items.map((item) => item.id));
+    const candidates = (started && initialCandidates?.length ? initialCandidates : savedPlaces.map((place) => toDraft(place)))
+      .filter((place) => !selectedIds.has(place.id));
     const place = candidates[Math.floor(Math.random() * candidates.length)];
     if (!place) return;
     initialPlaceSelected.current = true;
@@ -451,7 +473,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       Animated.spring(popupScale, { toValue: 1, damping: 15, stiffness: 220, useNativeDriver: true }),
       Animated.timing(popupOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
     ]).start();
-  }, [atlasId, initialCandidates, popupOpacity, popupScale, savedPlaces, started]);
+  }, [atlasId, initialCandidates, items, popupOpacity, popupScale, savedPlaces, started]);
 
   const resolveResult = useCallback(async (result: SearchResult): Promise<DraftPlace | null> => {
     if (result.kind === 'saved') return toDraft(result.place);
@@ -470,6 +492,32 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       category: resolved.type ?? result.featureType ?? null,
     };
   }, [searchSession]);
+
+  const focusAreaResult = useCallback(async (result: SearchResult) => {
+    try {
+      const place = await resolveResult(result);
+      if (!place) return;
+      const bounds = boundsFromPolygon(polygonAroundCoordinate([place.longitude, place.latitude], 1.35, 0.9), 0.12);
+      setMapCenter([place.longitude, place.latitude]);
+      setMapBounds(bounds);
+      setMapZoom(zoomForBounds(bounds));
+      setFocused(null);
+      setPopupVisible(false);
+      setFocusLabel(place.city ?? place.region ?? place.name);
+      closeFocusSearch();
+      try {
+        const polygonBounds = await discoverFocusPolygon(place.city ?? place.name);
+        if (polygonBounds) {
+          setMapBounds(polygonBounds);
+          setMapZoom(zoomForBounds(polygonBounds));
+        }
+      } catch (error) {
+        console.warn('[AtlasBuilder] area boundary discovery failed', error);
+      }
+    } catch (error) {
+      console.warn('[AtlasBuilder] focusing search area failed', error);
+    }
+  }, [closeFocusSearch, discoverFocusPolygon, resolveResult]);
 
   const addPlace = useCallback((place: DraftPlace) => {
     const alreadyAdded = items.some((item) => item.id === place.id);
@@ -522,7 +570,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       const remote = await suggestPlaces(trimmed, searchSession, mapCenter ? { proximity: mapCenter } : {});
       const local = savedPlaces.filter((place) => isLocalMatch(place, trimmed)).map((place): SearchResult => ({ kind: 'saved', place }));
       const seen = new Set<string>();
-      setFullResults([...local, ...remote.map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type }))].filter((result) => {
+      setFullResults([...remote.map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type })), ...local].filter((result) => {
         const key = result.kind === 'saved' ? result.place.id : result.externalId;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -665,20 +713,28 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   const mapSearchOverlay = useMemo(() => <Animated.View pointerEvents="box-none" style={[styles.mapSearchLayer, { opacity: searchAppear, transform: [{ translateX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) }, { scaleX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }) }] }]}>
     <View pointerEvents="auto" style={styles.mapSearchBox}>
-      <Ionicons name="search" size={18} color="#6B7280" />
-      <TextInput ref={inputRef} value={query} onChangeText={setQuery} placeholder="Search places" placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={openFullSearch} />
-      {searching ? <ActivityIndicator size="small" color="#2563EB" /> : <TouchableOpacity accessibilityLabel="Search all places" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity>}
+      <Ionicons name={focusSearchActive ? 'locate-outline' : 'search'} size={18} color={focusSearchActive ? '#0F766E' : '#6B7280'} />
+      <TextInput ref={inputRef} value={query} onChangeText={setQuery} placeholder={focusSearchActive ? 'Search an area' : 'Search places'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={openFullSearch} />
+      {searching ? <ActivityIndicator size="small" color="#2563EB" /> : <TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus search area' : 'Search all places'} onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity>}
+      {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>
     {results.length > 0 ? <View pointerEvents="auto" style={styles.results}>{results.map((result) => {
       const key = result.kind === 'saved' ? result.place.id : result.externalId;
-      return <View key={key} style={styles.resultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => handleResultFocus(result)}><View style={styles.resultTitleRow}><Text numberOfLines={1} style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text>{result.kind === 'saved' ? <View style={styles.savedTag}><Text style={styles.savedTagText}>Saved</Text></View> : null}</View><Text numberOfLines={1} style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Add to Atlas" disabled={addingResult === key} onPress={() => handleResultAdd(result)} style={[styles.addResultButton, addingResult === key && styles.addResultButtonPending]}>{addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="add" size={18} color="#FFF" />}</TouchableOpacity></View>;
+      return <View key={key} style={styles.resultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultFocus(result)}><View style={styles.resultTitleRow}><Text numberOfLines={1} style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text>{result.kind === 'saved' ? <View style={styles.savedTag}><Text style={styles.savedTagText}>Saved</Text></View> : null}</View><Text numberOfLines={1} style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus this area' : 'Add to Atlas'} disabled={focusSearchActive ? false : addingResult === key} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultAdd(result)} style={[focusSearchActive ? styles.focusResultButton : styles.addResultButton, !focusSearchActive && addingResult === key && styles.addResultButtonPending]}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>;
     })}</View> : null}
-  </Animated.View>, [addingResult, handleResultAdd, handleResultFocus, openFullSearch, query, results, searchAppear, searching]);
+  </Animated.View>, [addingResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleResultAdd, handleResultFocus, openFullSearch, query, results, searchAppear, searching]);
+
+  const handlePanelHeightChange = useCallback((height: number) => {
+    // Keep the add-place popup just above the panel's top edge. This is a
+    // direct Animated.Value update, so it follows a drag without rerendering
+    // the map or introducing a second animation.
+    popupBottom.setValue(Math.max(0, height + 12));
+  }, [popupBottom]);
 
   const atlasMapOverlay = useMemo(() => <>
     {mapSearchOverlay}
-    {popupVisible && focused ? <View pointerEvents="box-none" style={styles.mapCandidateLayer}><View pointerEvents="auto"><MapPinPopup place={focused} added={items.some((item) => item.id === focused.id)} onAdd={() => addPlace(focused)} /></View></View> : null}
-  </>, [addPlace, focused, items, mapSearchOverlay, popupVisible, recommendedPlaces.length]);
+    {popupVisible && focused ? <Animated.View pointerEvents="box-none" style={[styles.mapCandidateLayer, { bottom: popupBottom }]}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View> : null}
+  </>, [addPlace, atlasId, focused, items, mapSearchOverlay, popupBottom, popupVisible, recommendedPlaces.length, started]);
 
   useEffect(() => {
     setAtlasMapState({
@@ -703,10 +759,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       },
       onMapPress: hideTransientUI,
       overlay: atlasMapOverlay,
+      onPanelHeightChange: handlePanelHeightChange,
       hideTopSearchButton: true,
       markerPopup: null,
     });
-  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, route?.route, savedPlaces, setAtlasMapState]);
+  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, route?.route, savedPlaces, setAtlasMapState]);
 
   useEffect(() => () => setAtlasMapState(null), [setAtlasMapState]);
 
@@ -717,13 +774,16 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     <View style={styles.root}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text style={styles.heading}>{atlasId || started ? 'Edit atlas' : 'Create an atlas'}</Text>
-          {items.length === 0 && !started && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
+          <Text style={styles.heading}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
+          {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
-        <View style={styles.headerRight}><TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity></View>
+        <View style={styles.headerRight}>
+          {(started || atlasId) && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={openFocusSearch} style={styles.focusAreaButton}><Ionicons name="locate-outline" size={16} color="#0F766E" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null}
+          <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
+        </View>
       </View>
 
-      {!atlasId && items.length === 0 && !started ? <View style={styles.createLanding}>
+      {!atlasId && items.length === 0 && !started && !handoffStarted ? <View style={styles.createLanding}>
         <View style={styles.simpleStartHero}><TouchableOpacity onPress={simpleStart} style={styles.simpleStartHeroButton}><View style={styles.simpleStartHeroTop}><View style={styles.simpleStartHeroIcon}><Ionicons name="map-outline" size={26} color="#0F766E" /></View><Ionicons name="arrow-forward" size={21} color="#0F766E" /></View><View style={styles.simpleStartHeroCopy}><Text style={styles.simpleStartHeroTitle}>Simple Start</Text><Text style={styles.simpleStartHeroSubtitle}>Build an atlas from scratch</Text></View></TouchableOpacity></View>
         <View style={styles.planListSection}><FocusAreas areas={focusAreas} onFocus={focusArea} /></View>
       </View> : items.length === 0 ? <AtlasEmptySkeleton /> : <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
@@ -740,7 +800,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       {items.length > 0 ? <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#1F3938" /> : <><Ionicons name="bookmark-outline" size={16} color="#1F3938" /><Text style={styles.secondarySaveText}>Save</Text></>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View> : null}
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => setTimeModalIndex(null)} onSave={saveTimeDivider} />
       <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={(mode) => { if (transportModalIndex !== null) commitItems(items.map((entry, index) => index === transportModalIndex ? { ...entry, transport: mode } : entry)); setTransportModalIndex(null); }} onClose={() => setTransportModalIndex(null)} />
-      <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => setFullResults(null)} style={styles.headerIcon}><Ionicons name="chevron-back" size={20} color="#26262A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>Search results</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={addingResult === key} onPress={() => { setFullResults(null); handleResultAdd(result); }} style={styles.addResultButton}>{addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="add" size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
+      <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)} style={styles.headerIcon}><Ionicons name={focusSearchActive ? 'close' : 'chevron-back'} size={20} color="#26262A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>{focusSearchActive ? 'Choose an area' : 'Search results'}</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={!focusSearchActive && addingResult === key} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultAdd(result); }} style={focusSearchActive ? styles.focusResultButton : styles.addResultButton}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
     </View>
   );
 }
@@ -792,7 +852,7 @@ function FocusAreas({ areas, onFocus, disabled, autoScroll = true }: { areas: Fo
 function AtlasEmptySkeleton() {
   const pulse = useRef(new Animated.Value(0.58)).current;
   const [typedHint, setTypedHint] = useState('');
-  const hint = '现在，加入第一个点进入 Atlas';
+  const hint = 'Now, add your first pin.';
 
   useEffect(() => {
     const animation = Animated.loop(
@@ -806,13 +866,30 @@ function AtlasEmptySkeleton() {
   }, [pulse]);
 
   useEffect(() => {
-    let index = 0;
-    const timer = setInterval(() => {
-      index += 1;
-      setTypedHint(hint.slice(0, index));
-      if (index >= hint.length) clearInterval(timer);
-    }, 115);
-    return () => clearInterval(timer);
+    let typingTimer: ReturnType<typeof setInterval> | undefined;
+    let restartTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+
+    const typeHint = () => {
+      let index = 0;
+      setTypedHint('');
+      typingTimer = setInterval(() => {
+        if (cancelled) return;
+        index += 1;
+        setTypedHint(hint.slice(0, index));
+        if (index >= hint.length) {
+          if (typingTimer) clearInterval(typingTimer);
+          restartTimer = setTimeout(typeHint, 3000);
+        }
+      }, 115);
+    };
+
+    typeHint();
+    return () => {
+      cancelled = true;
+      if (typingTimer) clearInterval(typingTimer);
+      if (restartTimer) clearTimeout(restartTimer);
+    };
   }, [hint]);
 
   return <Animated.View style={[styles.emptyAtlas, { opacity: pulse }]}>
@@ -831,7 +908,7 @@ function AtlasEmptySkeleton() {
         <View style={styles.emptyAtlasCopy}>
           {index === 0 ? <>
             <Text style={styles.emptyAtlasHint}>{typedHint}</Text>
-            <Text style={styles.emptyAtlasHintSub}>点击上方地点标签的 + 添加点</Text>
+            <Text style={styles.emptyAtlasHintSub}>Tap a Pin or Search. Then add it.</Text>
           </> : <>
             <View style={styles.emptyAtlasLine} />
             <View style={[styles.emptyAtlasLine, styles.emptyAtlasLineShort]} />
@@ -844,8 +921,30 @@ function AtlasEmptySkeleton() {
   </Animated.View>;
 }
 
-function MapPinPopup({ place, added, onAdd }: { place: DraftPlace; added: boolean; onAdd: () => void }) {
-  return <View style={styles.mapPopup}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.pinName}>{place.name}</Text><Text numberOfLines={1} style={styles.pinAddress}>{place.subtitle}</Text></View>{added ? <View style={styles.addedPill}><Ionicons name="checkmark" size={13} color="#A44D1A" /><Text style={styles.addedPillText}>Added</Text></View> : <TouchableOpacity accessibilityLabel="Add to Atlas" onPress={onAdd} style={styles.mapPinAction}><Ionicons name="add" size={19} color="#FFF" /></TouchableOpacity>}</View>;
+function AddHintTap({ visible }: { visible: boolean }) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    progress.setValue(0);
+    const tap = () => Animated.sequence([
+      Animated.timing(progress, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      Animated.delay(180),
+      Animated.timing(progress, { toValue: 0, duration: 460, useNativeDriver: true }),
+      Animated.delay(220),
+    ]);
+    const animation = Animated.sequence([tap(), tap()]);
+    animation.start();
+    return () => animation.stop();
+  }, [progress, visible]);
+
+  const scale = progress.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] });
+  const opacity = progress.interpolate({ inputRange: [0, 0.35, 0.68, 1], outputRange: [0, 0.58, 0.58, 0] });
+  return <Animated.View pointerEvents="none" style={[styles.addHintTap, { opacity, transform: [{ scale }] }]} />;
+}
+
+function MapPinPopup({ place, added, showTutorial, onAdd }: { place: DraftPlace; added: boolean; showTutorial: boolean; onAdd: () => void }) {
+  return <View style={styles.mapPopup}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.pinName}>{place.name}</Text><Text numberOfLines={1} style={styles.pinAddress}>{place.subtitle}</Text></View>{added ? <View style={styles.addedPill}><Ionicons name="checkmark" size={13} color="#A44D1A" /><Text style={styles.addedPillText}>Added</Text></View> : <View style={styles.mapPinActionWrap}><AddHintTap visible={showTutorial} /><TouchableOpacity accessibilityLabel="Add to Atlas" onPress={onAdd} style={styles.mapPinAction}><Ionicons name="add" size={19} color="#FFF" /></TouchableOpacity></View>}</View>;
 }
 
 function TimeInsert({ onPress }: { onPress: () => void }) {
@@ -940,6 +1039,8 @@ const styles = StyleSheet.create({
   simpleStartIcon: { width: 48, height: 48, borderRadius: 12, backgroundColor: '#885CF6', alignItems: 'center', justifyContent: 'center', shadowColor: '#885CF6', shadowOpacity: 0.22, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   simpleStartTitle: { color: '#5137A1', fontSize: 14, fontWeight: '800' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '55%' },
+  focusAreaButton: { maxWidth: 170, minHeight: 34, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#EDF7F4', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  focusAreaButtonText: { color: '#0F766E', fontSize: 11, fontWeight: '800', flexShrink: 1 },
   emptyAtlas: { flex: 1, paddingHorizontal: 15, paddingTop: 14, paddingBottom: 14, backgroundColor: '#FFFFFF' },
   emptyAtlasIntro: { paddingHorizontal: 4, paddingBottom: 15, gap: 8 },
   emptyAtlasKicker: { width: 76, height: 8, borderRadius: 4, backgroundColor: '#D9E1E4' },
@@ -960,12 +1061,16 @@ const styles = StyleSheet.create({
   emptyAtlasConnector: { width: 2, height: 16, borderRadius: 1, alignSelf: 'center', backgroundColor: '#DDE4E7' },
   mapSearchLayer: { position: 'absolute', top: 62, left: 16, right: 16, zIndex: 20 },
   mapSearchBox: { minHeight: 46, borderRadius: 18, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8, shadowColor: '#111827', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 7 },
+  searchClose: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
   searchSubmit: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   addResultButtonPending: { backgroundColor: '#94A3B8' },
+  focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F766E' },
   mapCandidateLayer: { position: 'absolute', left: 16, right: 16, bottom: '60%', alignItems: 'center', zIndex: 30 },
   mapPopup: { width: 312, minHeight: 76, borderRadius: 14, backgroundColor: '#FFFFFF', paddingHorizontal: 15, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', shadowColor: '#111827', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
   mapPopupArrow: { position: 'absolute', top: -7, left: '50%', marginLeft: -7, width: 14, height: 14, backgroundColor: '#FFFFFF', transform: [{ rotate: '45deg' }] },
-  mapPinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
+  mapPinActionWrap: { width: 34, height: 34, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },
+  mapPinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  addHintTap: { position: 'absolute', width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(100, 116, 139, 0.28)' },
   itemNoteModern: { color: '#475569', fontSize: 12, lineHeight: 17, marginTop: 5, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: '#CBD5E1', fontWeight: '500' },
   fullSearch: { flex: 1, backgroundColor: '#FFFFFF', paddingTop: 54 },
   fullSearchHeader: { minHeight: 56, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E7EB' },

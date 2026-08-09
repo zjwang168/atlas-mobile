@@ -540,7 +540,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             // A focused point is an explicit user choice. Let its annotation
             // render above nearby markers so its mandatory label cannot be
             // discarded by native collision handling.
-            allowOverlap={selectedMarkerId === marker.id}
+            // AI recommendations must remain discoverable even when they sit
+            // near a saved point; native MarkerView collision would otherwise
+            // hide the purple pin before the user can select it.
+            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'recommended'}
           >
             <View
               style={styles.markerContainer}

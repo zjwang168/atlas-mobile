@@ -72,6 +72,8 @@ export type AtlasMapState = {
   onMapPress?: () => void;
   /** Atlas-only controls live above the one shared map, never in its panel. */
   overlay?: ReactNode;
+  /** Receives the live Edit atlas panel height so map overlays can follow it. */
+  onPanelHeightChange?: (height: number) => void;
   markerPopup?: { markerId: string; content: ReactNode } | null;
   hideTopSearchButton?: boolean;
 } | null;

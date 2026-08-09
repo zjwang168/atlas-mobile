@@ -23,6 +23,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   const [draftItems, setDraftItems] = useState<DraftPlace[]>([]);
   const [buildCenter, setBuildCenter] = useState<[number, number] | undefined>();
   const [buildBounds, setBuildBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>();
+  const [buildLocation, setBuildLocation] = useState<string | undefined>();
   const [builderKey, setBuilderKey] = useState(0);
 
   const openBuilder = useCallback(() => {
@@ -33,6 +34,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setDraftItems([]);
     setBuildCenter(undefined);
     setBuildBounds(undefined);
+    setBuildLocation(undefined);
     setBuilderKey((value) => value + 1);
     setBuilderVisible(true);
   }, [snapTo]);
@@ -42,10 +44,12 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setDraftItems([]);
     setBuildCenter(undefined);
     setBuildBounds(undefined);
+    setBuildLocation(undefined);
     snapTo?.('default');
     onExit?.();
   }, [onExit, snapTo]);
   const openBuildPlan = useCallback((_location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => {
+    setBuildLocation(_location);
     setBuildSeed(candidates);
     setBuildCenter(center);
     setBuildBounds(bounds);
@@ -64,7 +68,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   }
 
   if (builderVisible) {
-    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} started={buildSeed !== null} onItemsChange={setDraftItems} onFirstPlaceAdded={handleFirstPlaceAdded} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI) => {
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} onItemsChange={setDraftItems} onFirstPlaceAdded={handleFirstPlaceAdded} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI) => {
       closeBuilder();
       if (askAI) setActiveSidekick('aiChat');
       else setOverlay({ kind: 'atlasDetail', atlasId });

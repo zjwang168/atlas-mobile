@@ -195,7 +195,17 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
     mapRef.current?.setPaddingBottom(bottomPanelActive ? height + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0) : 0);
+    atlasMapState?.onPanelHeightChange?.(height);
   }, [atlasMapState, bottomPanelActive]);
+
+  // A panel may already be resting when the Atlas overlay mounts, so its
+  // height listener is not guaranteed to emit an initial frame. Seed the
+  // popup position from the current snap height immediately.
+  useEffect(() => {
+    if (!atlasMapState?.onPanelHeightChange || !bottomPanelActive) return;
+    const panelHeight = Math.max(0, mapPadding.paddingBottom - (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0));
+    atlasMapState.onPanelHeightChange(panelHeight);
+  }, [atlasMapState?.onPanelHeightChange, bottomPanelActive, mapPadding.paddingBottom]);
 
   const handleAddPress = useCallback(() => {
     onOpenImport?.();
@@ -261,7 +271,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
         cameraKey={atlasMapState?.cameraKey}
-        cameraAnimationDurationMs={atlasMapState ? 2000 : selectedPlaceId ? 450 : 1200}
+        cameraAnimationDurationMs={atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200}
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
