@@ -7,7 +7,7 @@ import type { MapMarker } from '@/features/map/MapboxMap';
 import AtlasBuilder from '@/features/my-plan/atlas-builder/AtlasBuilder';
 import type { Atlas } from '@/types/atlas';
 import type { SavedPlace } from '@/services/place/placeService';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 
 type AtlasDetailProps = {
@@ -19,26 +19,37 @@ type AtlasDetailProps = {
 
 type AtlasDisplayPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url'>;
 type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null };
+type FocusBounds = { ne: [number, number]; sw: [number, number] };
+
+function boundsFromFocusPolygon(items: ItineraryItem[]): FocusBounds | undefined {
+  if (!items.length) return undefined;
+  const center: [number, number] = [
+    items.reduce((sum, item) => sum + item.place.longitude, 0) / items.length,
+    items.reduce((sum, item) => sum + item.place.latitude, 0) / items.length,
+  ];
+  const longitudeRadius = Math.max(0.07, ...items.map((item) => Math.abs(item.place.longitude - center[0]) * 1.35));
+  const latitudeRadius = Math.max(0.055, ...items.map((item) => Math.abs(item.place.latitude - center[1]) * 1.35));
+  const polygon = Array.from({ length: 10 }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / 10;
+    return [center[0] + Math.cos(angle) * longitudeRadius, center[1] + Math.sin(angle) * latitudeRadius] as [number, number];
+  });
+  return {
+    ne: [Math.max(...polygon.map(([longitude]) => longitude)) + 0.025, Math.max(...polygon.map(([, latitude]) => latitude)) + 0.02],
+    sw: [Math.min(...polygon.map(([longitude]) => longitude)) - 0.025, Math.min(...polygon.map(([, latitude]) => latitude)) - 0.02],
+  };
+}
 
 function getMapPresentation(items: ItineraryItem[], route: Atlas['route_geojson']) {
   if (!items.length) return { markers: [] as MapMarker[], centerCoordinate: undefined, zoomLevel: 6 };
-  const longitudes = items.map((item) => item.place.longitude);
-  const latitudes = items.map((item) => item.place.latitude);
-  const minLng = Math.min(...longitudes); const maxLng = Math.max(...longitudes);
-  const minLat = Math.min(...latitudes); const maxLat = Math.max(...latitudes);
-  const span = Math.max(maxLng - minLng, (maxLat - minLat) * 1.35);
-  const zoomLevel = span < 0.015 ? 13 : span < 0.08 ? 11 : span < 0.35 ? 9 : span < 1.2 ? 7 : 5;
+  const bounds = boundsFromFocusPolygon(items);
   return {
     markers: items.map((item, index) => ({ id: item.place.id, title: item.place.name, description: item.place.subtitle, latitude: item.place.latitude, longitude: item.place.longitude, tone: 'atlas' as const, order: index + 1 })),
     centerCoordinate: [
-      (minLng + maxLng) / 2,
-      (minLat + maxLat) / 2,
+      items.reduce((sum, item) => sum + item.place.longitude, 0) / items.length,
+      items.reduce((sum, item) => sum + item.place.latitude, 0) / items.length,
     ] as [number, number],
-    zoomLevel,
-    bounds: items.length > 1 ? {
-      ne: [maxLng + Math.max(0.01, (maxLng - minLng) * 0.12), maxLat + Math.max(0.01, (maxLat - minLat) * 0.12)] as [number, number],
-      sw: [minLng - Math.max(0.01, (maxLng - minLng) * 0.12), minLat - Math.max(0.01, (maxLat - minLat) * 0.12)] as [number, number],
-    } : undefined,
+    zoomLevel: 10,
+    bounds,
     routeGeoJSON: route ?? undefined,
   };
 }
@@ -67,10 +78,11 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
 
   const presentation = useMemo(() => getMapPresentation(items, atlas?.route_visible ? atlas.route_geojson ?? null : null), [atlas?.route_geojson, atlas?.route_visible, items]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!atlas || editing) return;
     setAtlasMapState({
       ...presentation,
+      cameraAnimationDurationMs: 320,
       selectedMarkerId: selectedPlaceId,
       onMarkerPress: (marker) => setSelectedPlaceId(marker.id),
       onMapPress: () => setSelectedPlaceId(null),
@@ -85,7 +97,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={onDismiss} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={onDismiss} />}>
-    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} onClose={() => setEditing(false)} onSaved={() => setEditing(false)} /> : <>
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={() => setEditing(false)} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={onDismiss} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>
       <FlatList data={items} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20, gap: 7 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} />} />
     </>}

@@ -55,10 +55,6 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setBuildBounds(bounds);
     setBuilderVisible(true);
   }, []);
-  const handleFirstPlaceAdded = useCallback(() => {
-    snapTo?.('tall');
-  }, [snapTo]);
-
   useEffect(() => {
     if (!compact && active && !builderVisible) openBuilder();
   }, [active, builderVisible, compact, openBuilder]);
@@ -68,7 +64,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   }
 
   if (builderVisible) {
-    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} onItemsChange={setDraftItems} onFirstPlaceAdded={handleFirstPlaceAdded} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI) => {
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI) => {
       closeBuilder();
       if (askAI) setActiveSidekick('aiChat');
       else setOverlay({ kind: 'atlasDetail', atlasId });

@@ -138,6 +138,8 @@ class LocationItem(BaseModel):
     category: Optional[str] = None
     is_exact: Optional[bool] = None
     confidence: Optional[float] = None
+    provisional: Optional[bool] = None
+    geocode_verified: Optional[bool] = None
     source: Optional[str] = None
     photo_url: Optional[str] = None
     # Provider's own id for this place, paired with `source`. Populated by

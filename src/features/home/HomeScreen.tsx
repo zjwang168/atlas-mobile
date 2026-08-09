@@ -271,7 +271,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
         cameraKey={atlasMapState?.cameraKey}
-        cameraAnimationDurationMs={atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200}
+        cameraAnimationDurationMs={atlasMapState?.cameraAnimationDurationMs ?? (atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200)}
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
@@ -283,7 +283,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
       />
 
       <TopBlurFade />
-      <TopNav onSearchPress={handleSearchPress} hideSearchButton={Boolean(atlasMapState?.hideTopSearchButton)} />
+      <TopNav onSearchPress={handleSearchPress} showScanButton={activeTab === TAB_PLACES && !atlasMapState} hideSearchButton={Boolean(atlasMapState?.hideTopSearchButton)} />
 
       <View style={styles.pagerViewport} pointerEvents="box-none">
         <Animated.View

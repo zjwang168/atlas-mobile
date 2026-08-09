@@ -5,7 +5,7 @@ import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useEffect, useRef, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
@@ -70,6 +70,13 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
     setOverlay({ kind: 'placeDetail', placeId: item.id, returnTo });
   };
 
+  const handleOpenGoogleMaps = () => {
+    const query = encodeURIComponent([item.name, item.subtitle, item.city, item.region, item.country].filter(Boolean).join(', '));
+    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`).catch((error) => {
+      console.warn('[PlaceCard] could not open Google Maps:', error);
+    });
+  };
+
   return (
     <View style={styles.rowContainer}>
       <View style={[styles.cardShell, (selected || locallySelected) && styles.cardShellSelected]}>
@@ -97,7 +104,7 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
               >
                 {item.name}
               </Text>
-              <Ionicons name="chevron-forward" size={15} color="#16845B" />
+              <Ionicons name="chevron-forward" size={15} color="#5F6368" />
             </Pressable>
             <TouchableOpacity onPress={handleSelect} activeOpacity={0.7} style={styles.summaryAction}>
               <Text
@@ -121,6 +128,17 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
           ) : null}
         </View>
       </ReanimatedSwipeable>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${item.name} in Google Maps`}
+        onPress={handleOpenGoogleMaps}
+        activeOpacity={0.72}
+        style={styles.googleMapsButton}
+      >
+        <Ionicons name="map-outline" size={13} color="#34383A" />
+        <Text style={styles.googleMapsText}>Maps</Text>
+        <Ionicons name="open-outline" size={12} color="#34383A" />
+      </TouchableOpacity>
       {item.tags?.length ? (
         <ScrollView
           horizontal
@@ -183,8 +201,30 @@ const styles = StyleSheet.create({
     opacity: 0.56,
   },
   titleLink: {
-    color: '#16845B',
+    color: '#2F3133',
     flexShrink: 1,
+  },
+  googleMapsButton: {
+    position: 'absolute',
+    right: 8,
+    top: 104,
+    minWidth: 82,
+    height: 27,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D4D9D8',
+    backgroundColor: '#EDF0EF',
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  googleMapsText: {
+    color: '#34383A',
+    fontSize: 11,
+    fontWeight: '700',
   },
   summaryAction: {
     minHeight: 60,
@@ -201,6 +241,8 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   cardShell: {
+    position: 'relative',
+    overflow: 'visible',
     borderRadius: 8,
     padding: 8,
     marginHorizontal: -8,
@@ -218,5 +260,6 @@ const styles = StyleSheet.create({
   tagsRowContent: {
     flexDirection: 'row',
     gap: 6,
+    paddingRight: 92,
   },
 });

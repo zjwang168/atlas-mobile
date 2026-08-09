@@ -7,6 +7,9 @@ export interface GeocodedLocation {
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
   description?: string | null;
   category?: string | null;
+  confidence?: number | null;
+  provisional?: boolean;
+  geocode_verified?: boolean;
   photo_url?: string | null;
   /** Provider's own id for this place, paired with `source`. Populated by
       place search; the parse pipelines leave these unset. */

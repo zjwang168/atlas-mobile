@@ -328,9 +328,17 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
 }, ref) {
   const displayMarkers = routeMarkers ?? markers;
   const renderedMarkers = useMemo(
-    () => selectedMarkerId
-      ? [...displayMarkers].sort((a, b) => Number(a.id === selectedMarkerId) - Number(b.id === selectedMarkerId))
-      : displayMarkers,
+    () => {
+      // A marker can be present in more than one source (for example a saved
+      // place that is also already in an Atlas). Native MarkerView requires
+      // one stable key per id, so collapse duplicates before rendering.
+      const unique = new Map<string, MapMarker>();
+      displayMarkers.forEach((marker) => unique.set(marker.id, marker));
+      const list = [...unique.values()];
+      return selectedMarkerId
+        ? list.sort((a, b) => Number(a.id === selectedMarkerId) - Number(b.id === selectedMarkerId))
+        : list;
+    },
     [displayMarkers, selectedMarkerId],
   );
   const { width, height } = useWindowDimensions();
@@ -346,8 +354,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const lastCameraStateKeyRef = useRef<string | null>(null);
   const markerPressTimestampRef = useRef(0);
   const screenMarkerPoints = useMemo(
-    () => screenMarkers(displayMarkers, viewport, width, height),
-    [displayMarkers, height, viewport, width],
+    () => screenMarkers(renderedMarkers, viewport, width, height),
+    [height, renderedMarkers, viewport, width],
   );
   const labelOwnerMarkerPoints = useMemo(
     () => labelOwnerPoints(screenMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
@@ -413,7 +421,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       return;
     }
     if (!isReady) return;
-    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}:padding-${padding?.paddingTop ?? 0},${padding?.paddingRight ?? 0},${padding?.paddingBottom ?? 0},${padding?.paddingLeft ?? 0}`;
+    // A panel can report many height changes while entering. Re-fitting the
+    // same geographic bounds for every padding update repeatedly restarts the
+    // camera animation and makes an Atlas feel slow to open. Bounds changes
+    // own zoom; padding-only changes are handled by the camera effect below.
+    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}`;
     if (nextBounds === previousBoundsRef.current) return;
     previousBoundsRef.current = nextBounds;
     const fitPadding: [number, number, number, number] = [

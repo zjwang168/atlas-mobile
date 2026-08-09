@@ -7,11 +7,12 @@ import RightNav from './right-nav/RightNav';
 type TopNavProps = {
   onSearchPress?: () => void;
   hideSearchButton?: boolean;
+  showScanButton?: boolean;
   onGlobePress?: () => void;
   onNavigatePress?: () => void;
 };
 
-function TopNav({ onSearchPress, hideSearchButton = false, onGlobePress, onNavigatePress }: TopNavProps) {
+function TopNav({ onSearchPress, hideSearchButton = false, showScanButton = false, onGlobePress, onNavigatePress }: TopNavProps) {
   const { top } = useSafeAreaInsets();
 
   return (
@@ -20,7 +21,7 @@ function TopNav({ onSearchPress, hideSearchButton = false, onGlobePress, onNavig
       style={{ top: 0, paddingTop: top + 8 }}
       pointerEvents="box-none"
     >
-      {hideSearchButton ? <View /> : <LeftNav onSearchPress={onSearchPress} />}
+      {hideSearchButton ? <View /> : <LeftNav onSearchPress={onSearchPress} showScanButton={showScanButton} />}
       <RightNav onGlobePress={onGlobePress} onNavigatePress={onNavigatePress} />
     </View>
   );

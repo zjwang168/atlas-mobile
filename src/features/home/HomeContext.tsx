@@ -66,6 +66,8 @@ export type AtlasMapState = {
   bounds?: { ne: [number, number]; sw: [number, number] };
   /** Changes when an Atlas view must re-apply identical bounds after reopening. */
   cameraKey?: string;
+  /** Optional override for the shared map camera transition. */
+  cameraAnimationDurationMs?: number;
   selectedMarkerId?: string | null;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
   onMarkerPress?: (marker: MapMarker) => void;

@@ -4,6 +4,7 @@ import { TouchableOpacity, View } from 'react-native';
 
 type LeftNavProps = {
   onSearchPress?: () => void;
+  showScanButton?: boolean;
 };
 
 const glassShadow = {
@@ -26,7 +27,7 @@ const blurStyle = {
   justifyContent: 'center' as const,
 };
 
-export default function LeftNav({ onSearchPress }: LeftNavProps) {
+export default function LeftNav({ onSearchPress, showScanButton = false }: LeftNavProps) {
   return (
     <View className="flex-col items-center gap-2">
       {/* 搜索按钮 */}
@@ -39,6 +40,19 @@ export default function LeftNav({ onSearchPress }: LeftNavProps) {
           <Ionicons name="search" size={24} color="#000" />
         </BlurView>
       </TouchableOpacity>
+      {showScanButton ? (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Scan a QR code"
+          onPress={() => {}}
+          activeOpacity={0.8}
+          style={buttonStyle}
+        >
+          <BlurView intensity={40} tint="light" style={blurStyle}>
+            <Ionicons name="qr-code-outline" size={23} color="#000" />
+          </BlurView>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }

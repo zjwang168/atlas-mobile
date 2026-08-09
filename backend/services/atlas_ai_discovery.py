@@ -1,9 +1,10 @@
-"""Atlas AI discovery flow: query -> exact addresses -> address-first geocoding."""
+"""Atlas AI discovery flow: DeepSeek candidates -> provisional pins -> geocode validation."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import math
 
 from backend.services.geocoder import batch_geocode
 from backend.services.llm_client import call_llm, parse_llm_response
@@ -26,6 +27,8 @@ Output ONLY valid JSON with this exact structure:
       "name": "real-world place name",
       "address": "full postal address with street number, city, state/region, country if known",
       "context": "city, state/region",
+      "latitude": 0.0,
+      "longitude": 0.0,
       "description": "a location-specific, license-plate-style English slogan of no more than 4 English words",
       "sentiment": "positive",
       "category": "Tourist Attractions",
@@ -36,12 +39,13 @@ Output ONLY valid JSON with this exact structure:
 
 Rules:
 1. Prefer REAL, VISITABLE places only.
-2. You MUST provide the most precise full street address you can for each place.
+2. You MUST provide plausible decimal latitude and longitude for each place.
+   These coordinates are provisional and will be verified by a geocoding service.
+3. You SHOULD provide the most precise full street address you can for each place.
    IMPORTANT: Addresses MUST be in English (e.g. "The Bund, 18 Zhongshan East 1st Rd, Huangpu, Shanghai, China")
    so that mapping APIs can geocode them correctly. Translate Chinese/other-language addresses
    to English. If a place has a well-known English name, use it in "name".
-3. If a place is commonly known by a fictional label, keep the real place in "name" and put the fictional label in "fictional_or_alt_name".
-4. If you are not reasonably confident in a precise address, omit that place.
+4. If a place is commonly known by a fictional label, keep the real place in "name" and put the fictional label in "fictional_or_alt_name".
 5. The description must be a location-specific, license-plate-style English slogan of no more than 4 English words.
    Do not use a category label, do not truncate a sentence, and do not write a complete sentence.
 6. "sentiment" must be one of "positive", "neutral", "negative".
@@ -84,6 +88,44 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
         progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     places = parsed.get("places", [])
 
+    def provisional_location(place: dict) -> dict | None:
+        try:
+            latitude = float(place.get("latitude"))
+            longitude = float(place.get("longitude"))
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(latitude) and math.isfinite(longitude)):
+            return None
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return None
+        if latitude == 0 and longitude == 0:
+            return None
+        name = str(place.get("name") or "").strip()
+        if not name:
+            return None
+        return {
+            "name": name,
+            "latitude": latitude,
+            "longitude": longitude,
+            "full_address": str(place.get("address") or place.get("context") or name).strip(),
+            "description": str(place.get("description") or "").strip() or None,
+            "category": place.get("category"),
+            "sentiment": place.get("sentiment"),
+            "is_exact": False,
+            "confidence": 0.35,
+            "provisional": True,
+            "geocode_verified": False,
+            "source": "atlas_ai_provisional",
+        }
+
+    provisional = [candidate for place in places if (candidate := provisional_location(place))]
+    if provisional:
+        # The client can render these immediately while the batch geocoder runs.
+        progress.stream_note(request_id, "atlas_ai:provisional_places", {
+            "locations": provisional,
+            "count": len(provisional),
+        })
+
     # Geocode by place name and regional context. AI-generated street numbers
     # are often fictional for attractions and can force a low-confidence fuzzy
     # match, so the discovery address is intentionally not sent to geocoders.
@@ -98,14 +140,19 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
 
     resolved_locations: list[dict] = []
     for place, geo in zip(places, geocoded):
-        if not geo:
-            print(f"[AtlasAIDiscovery] geocode failed | name={place.get('name')} | address={place.get('address')}")
-            continue
-        display_name = place.get("name", "").strip() or geo.get("name", "")
+        display_name = place.get("name", "").strip() or (geo.get("name", "") if geo else "")
         alt_name = place.get("fictional_or_alt_name")
         description = (place.get("description") or "").strip() or None
         if alt_name:
             description = f"{alt_name}. {description}" if description else alt_name
+        if not geo:
+            fallback = provisional_location(place)
+            if fallback:
+                fallback["description"] = description
+                fallback["confidence"] = 0.2
+                resolved_locations.append(fallback)
+            print(f"[AtlasAIDiscovery] geocode failed | name={place.get('name')} | address={place.get('address')}")
+            continue
         resolved_locations.append({
             "name": display_name,
             "latitude": geo["latitude"],
@@ -116,6 +163,8 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
             "sentiment": place.get("sentiment"),
             "is_exact": geo.get("is_exact"),
             "confidence": geo.get("confidence"),
+            "provisional": False,
+            "geocode_verified": True,
             "source": "atlas_ai_discovery",
         })
 
@@ -123,7 +172,8 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
         print(f"[AtlasAIDiscovery] no resolved locations | query={query!r} | candidates={len(places)}")
         raise ValueError("No valid places with precise addresses could be resolved from this request.")
 
-    route = plan_route(resolved_locations) if resolved_locations else {
+    verified_locations = [location for location in resolved_locations if location.get("geocode_verified")]
+    route = plan_route(verified_locations) if verified_locations else {
         "ordered_locations": [],
         "total_distance_km": 0.0,
         "segments": [],
