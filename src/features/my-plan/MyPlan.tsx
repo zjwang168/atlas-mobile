@@ -5,39 +5,25 @@ import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import AtlasBuilder from './atlas-builder/AtlasBuilder';
 import type { DraftPlace } from './atlas-builder/AtlasBuilder';
-import PlanCard from './PlanCard';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
-import { FlatList, Share, TouchableOpacity, View } from 'react-native';
+import { memo, useCallback, useEffect, useState } from 'react';
+import { TouchableOpacity, View } from 'react-native';
 
 type MyPlanProps = {
   onAvatarPress?: () => void;
-  onScroll?: (y: number) => void;
-  bottomInset?: number;
   compact?: boolean;
   snapTo?: (state: SnapState, animated?: boolean) => void;
+  active?: boolean;
+  onExit?: () => void;
 };
 
-type GridItem = { id: string; title: string; placeCount: number; imageUrl?: string; create?: boolean };
-
-function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, snapTo }: MyPlanProps) {
-  const { atlases, atlasPlaces, setOverlay, setActiveSidekick, deleteAtlas } = useHome();
-  const [editing, setEditing] = useState(false);
+function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit }: MyPlanProps) {
+  const { setOverlay, setActiveSidekick } = useHome();
   const [builderVisible, setBuilderVisible] = useState(false);
   const [buildSeed, setBuildSeed] = useState<DraftPlace[] | null>(null);
   const [draftItems, setDraftItems] = useState<DraftPlace[]>([]);
   const [buildCenter, setBuildCenter] = useState<[number, number] | undefined>();
   const [buildBounds, setBuildBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>();
   const [builderKey, setBuilderKey] = useState(0);
-  const buildStartedRef = useRef(false);
-
-  const data = useMemo<GridItem[]>(() => [
-    { id: '__create__', title: 'Create an Atlas', placeCount: 0, create: true },
-    ...atlases.map((atlas) => ({
-      id: atlas.id,
-      title: atlas.title,
-      placeCount: atlasPlaces.filter((row) => row.atlas_id === atlas.id).length,
-    })),
-  ], [atlases, atlasPlaces]);
 
   const openBuilder = useCallback(() => {
     // Keep the shared map visible above the Atlas editor rather than turning
@@ -47,7 +33,6 @@ function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, sna
     setDraftItems([]);
     setBuildCenter(undefined);
     setBuildBounds(undefined);
-    buildStartedRef.current = false;
     setBuilderKey((value) => value + 1);
     setBuilderVisible(true);
   }, [snapTo]);
@@ -57,30 +42,22 @@ function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, sna
     setDraftItems([]);
     setBuildCenter(undefined);
     setBuildBounds(undefined);
-    buildStartedRef.current = false;
     snapTo?.('default');
-  }, [snapTo]);
+    onExit?.();
+  }, [onExit, snapTo]);
   const openBuildPlan = useCallback((_location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => {
     setBuildSeed(candidates);
     setBuildCenter(center);
     setBuildBounds(bounds);
-    if (!buildStartedRef.current) {
-      buildStartedRef.current = true;
-      setBuilderKey((value) => value + 1);
-    }
     setBuilderVisible(true);
-    snapTo?.('default');
-  }, [snapTo]);
+  }, []);
   const handleFirstPlaceAdded = useCallback(() => {
     snapTo?.('tall');
   }, [snapTo]);
 
-  const shareAtlas = useCallback(async (item: GridItem) => {
-    await Share.share({
-      title: item.title,
-      message: `View ${item.title} in OurAtlas.`,
-    });
-  }, []);
+  useEffect(() => {
+    if (!compact && active && !builderVisible) openBuilder();
+  }, [active, builderVisible, compact, openBuilder]);
 
   if (compact) {
     return <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8 }}><Text style={{ fontSize: 18, fontWeight: '600', color: '#09090b' }}>Atlas</Text><TouchableOpacity onPress={onAvatarPress}><Avatar alt={mockUser.avatarFallback} style={{ width: 32, height: 32 }}>{mockUser.avatarUri ? <AvatarImage source={{ uri: mockUser.avatarUri }} /> : null}<AvatarFallback><Text style={{ fontSize: 11 }}>{mockUser.avatarFallback}</Text></AvatarFallback></Avatar></TouchableOpacity></View>;
@@ -94,23 +71,7 @@ function MyPlan({ onAvatarPress, onScroll, bottomInset = 0, compact = false, sna
     }} />;
   }
 
-  return (
-    <View style={{ flex: 1 }}>
-      <View style={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text style={{ fontSize: 28, fontWeight: '700', color: '#09090b' }}>Atlas</Text>
-        <TouchableOpacity onPress={() => setEditing((value) => !value)}><Text style={{ color: '#007AFF', fontSize: 15, fontWeight: '600' }}>{editing ? 'Done' : 'Edit'}</Text></TouchableOpacity>
-      </View>
-      <FlatList
-        data={data}
-        numColumns={2}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20, gap: 22 }}
-        columnWrapperStyle={{ gap: 16 }}
-        onScroll={(event) => onScroll?.(event.nativeEvent.contentOffset.y)}
-        renderItem={({ item }) => <View style={{ flex: 1 }}><PlanCard title={item.title} placeCount={item.placeCount} imageUrl={item.imageUrl} create={item.create} deletionMode={editing && !item.create} onPress={item.create ? openBuilder : () => setOverlay({ kind: 'atlasDetail', atlasId: item.id })} onLongPress={!item.create ? () => shareAtlas(item) : undefined} onDeletePress={!item.create ? () => deleteAtlas(item.id) : undefined} /></View>}
-      />
-    </View>
-  );
+  return <View style={{ flex: 1 }} />;
 }
 
 export default memo(MyPlan);

@@ -27,7 +27,7 @@ import SearchPanel from '../search/SearchPanel';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
-const ATLAS_PANEL_CAMERA_CLEARANCE = 32;
+const ATLAS_PANEL_CAMERA_CLEARANCE = 64;
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
 // 200 / mass 0.9) — see below for why the map's padding recompute waits this long
 // after a group snap change instead of reacting immediately.
@@ -223,6 +223,9 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const handleTabChange = useCallback((tab: string) => {
     animateToTab(tab);
   }, [animateToTab]);
+  const handlePlanExit = useCallback(() => {
+    animateToTab(TAB_PLACES);
+  }, [animateToTab]);
 
   useEffect(() => {
     animateToTab(activeTab);
@@ -297,6 +300,8 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
               snapGroup={HOME_PANEL_SNAP_GROUP}
               visible={panelVisible && homePanelVisible}
               onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
+              onExitPlan={handlePlanExit}
+              isActive={activeTab === TAB_PLAN}
             />
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>

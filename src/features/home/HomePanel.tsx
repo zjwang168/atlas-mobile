@@ -7,7 +7,7 @@ import MyPlaces from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import AccountModal from '../auth/AccountModal';
 import { useHome } from './HomeContext';
-import { TAB_PLAN, TAB_PLACES } from './HomeTabBar';
+import { TAB_PLAN } from './HomeTabBar';
 
 const BOTTOM_BAR_CLEARANCE = 84;
 
@@ -20,6 +20,8 @@ type HomePanelProps = {
   maxHeight?: number;
   onHeightChange?: (height: number) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
+  onExitPlan?: () => void;
+  isActive?: boolean;
 };
 
 function HomePanel({
@@ -31,6 +33,8 @@ function HomePanel({
   maxHeight,
   onHeightChange,
   onDeleteInitiated,
+  onExitPlan,
+  isActive = true,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
   const [accountOpen, setAccountOpen] = useState(false);
@@ -65,9 +69,9 @@ function HomePanel({
           {activeTab === TAB_PLAN ? (
             <View style={{ flex: 1 }}>
               <MyPlan
-                onScroll={reportScrollY}
-                bottomInset={BOTTOM_BAR_CLEARANCE}
                 snapTo={snapTo}
+                active={isActive}
+                onExit={onExitPlan}
               />
             </View>
           ) : (

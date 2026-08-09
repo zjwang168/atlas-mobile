@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Animated,
   Image,
+  LayoutAnimation,
   Modal,
   PanResponder,
   Pressable,
@@ -91,6 +92,42 @@ const PLANNING_HOURS = Array.from({ length: 17 }, (_, index) => {
 // Atlas search field, while this zoom leaves the entire lower 48 in view.
 const CONTINENTAL_US_CENTER = [-98.5, 40.4] as [number, number];
 const CONTINENTAL_US_ZOOM = 1.9;
+
+function boundsFromPolygon(polygon: Array<[number, number]>, padding = 0.06) {
+  const minLng = Math.min(...polygon.map(([lng]) => lng));
+  const maxLng = Math.max(...polygon.map(([lng]) => lng));
+  const minLat = Math.min(...polygon.map(([, lat]) => lat));
+  const maxLat = Math.max(...polygon.map(([, lat]) => lat));
+  return { ne: [maxLng + padding, maxLat + padding] as [number, number], sw: [minLng - padding, minLat - padding] as [number, number] };
+}
+
+function zoomForBounds(bounds: { ne: [number, number]; sw: [number, number] }) {
+  const longitudeSpan = Math.max(0.05, Math.abs(bounds.ne[0] - bounds.sw[0]));
+  const latitudeSpan = Math.max(0.05, Math.abs(bounds.ne[1] - bounds.sw[1]));
+  const widthZoom = Math.log2((360 * 390) / (512 * longitudeSpan));
+  const heightZoom = Math.log2((170 * 360) / (512 * latitudeSpan));
+  return Math.max(1.9, Math.min(14, Math.min(widthZoom, heightZoom) - 0.25));
+}
+
+function polygonAroundCoordinate([lng, lat]: [number, number], lngRadius: number, latRadius: number, points = 10) {
+  return Array.from({ length: points }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / points;
+    return [lng + Math.cos(angle) * lngRadius, lat + Math.sin(angle) * latRadius] as [number, number];
+  });
+}
+
+function acceptAiDescription(value?: string | null) {
+  const description = value?.trim();
+  if (!description || description.split(/\s+/).length > 4) return null;
+  return description;
+}
+
+const BAY_AREA_POLYGON: Array<[number, number]> = [
+  [-122.75, 38.18], [-122.16, 38.16], [-121.66, 37.90], [-121.62, 37.28], [-122.06, 37.08],
+  [-122.55, 37.15], [-123.00, 37.43], [-123.08, 37.88], [-122.95, 38.08], [-122.75, 38.18],
+];
+const BAY_AREA_BOUNDS = boundsFromPolygon(BAY_AREA_POLYGON, 0.08);
+
 const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const timeRank = (day: number, time: string) => day * 24 + Math.max(0, PLANNING_HOURS.indexOf(time) + 7);
 
@@ -168,17 +205,9 @@ function deriveFocusAreas(places: SavedPlace[]): FocusArea[] {
         group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
       ] as [number, number],
       count: group.length,
-      bounds: (() => {
-        const minLng = Math.min(...group.map((place) => place.longitude));
-        const maxLng = Math.max(...group.map((place) => place.longitude));
-        const minLat = Math.min(...group.map((place) => place.latitude));
-        const maxLat = Math.max(...group.map((place) => place.latitude));
-        // Single-place or tightly clustered areas still need an explorable
-        // regional view rather than a street-level zoom.
-        const lngPad = Math.max(0.4, (maxLng - minLng) * 0.22);
-        const latPad = Math.max(0.3, (maxLat - minLat) * 0.22);
-        return { ne: [maxLng + lngPad, maxLat + latPad] as [number, number], sw: [minLng - lngPad, minLat - latPad] as [number, number] };
-      })(),
+      // The polygon is an internal camera footprint. It is intentionally a
+      // little wider than the saved points so a regional plan remains useful.
+      bounds: boundsFromPolygon(group.map((place) => [place.longitude, place.latitude] as [number, number]), 0.18),
     }))
     .filter((area) => Boolean(area.label))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
@@ -216,9 +245,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [pendingDay, setPendingDay] = useState(1);
   const [pendingTime, setPendingTime] = useState('9am');
   const [transportModalIndex, setTransportModalIndex] = useState<number | null>(null);
-  const [areaPickerVisible, setAreaPickerVisible] = useState(false);
   const [recommendedPlaces, setRecommendedPlaces] = useState<DraftPlace[]>(initialCandidates ?? []);
-  const [buildingPlan, setBuildingPlan] = useState(false);
   const popupScale = useRef(new Animated.Value(0.92)).current;
   const popupOpacity = useRef(new Animated.Value(0)).current;
   const searchAppear = useRef(new Animated.Value(0)).current;
@@ -230,6 +257,15 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useEffect(() => {
     if (started && initialCandidates) setRecommendedPlaces(initialCandidates);
   }, [initialCandidates, started]);
+
+  useEffect(() => {
+    if (!started) return;
+    if (initialCenter) setMapCenter(initialCenter);
+    if (initialBounds) {
+      setMapBounds(initialBounds);
+      setMapZoom(zoomForBounds(initialBounds));
+    }
+  }, [initialBounds, initialCenter, started]);
 
   useEffect(() => {
     setTabBarVisible(false);
@@ -322,9 +358,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
   }, [popupOpacity, popupScale]);
 
-  const discoverDeepSeekPlaces = useCallback(async (city: string, count: number) => {
-    const result = await discoverAtlasPlaces(`推荐${city}${count}个出名地点，只需返回地名、坐标和每个地点不超过4个英文单词的描述。`);
-    return result.locations.slice(0, count).map((place, index) => ({
+  const discoverDeepSeekPlaces = useCallback(async (city: string, count: number): Promise<DraftPlace[]> => {
+    const result = await discoverAtlasPlaces(`推荐${city}${count}个出名地点。只需返回地名、坐标，以及一个description字段。description必须是每个地点专属的车牌式英文slogan，最多4个英文单词；不要返回地点分类，不要截取一句话的前4个词，也不要写完整句子。风格参考：The Emerald Needle、Where Fish Fly、Glass Without Limits、Rock Meets Tech、Art By The Sound、Skyline Capital、Rainforest Not Rain、Wisdom Under Cherry、Where Water Works、Wheel Over Waves。`);
+    return result.locations.slice(0, count).map((place, index): DraftPlace => ({
       id: `deepseek-${city}-${place.external_id ?? index}`,
       name: place.name,
       subtitle: place.full_address,
@@ -336,57 +372,50 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       country: place.country ?? 'United States',
       category: place.category ?? 'Tourist Attractions',
       source: 'recommended',
-      aiDescription: place.description?.split(/\s+/).slice(0, 4).join(' ') || place.category?.split(/\s+/).slice(0, 4).join(' ') || null,
+      // The prompt asks DeepSeek to generate this field within four words;
+      // preserve that authored phrase instead of truncating a sentence.
+      aiDescription: acceptAiDescription(place.description),
     }));
   }, []);
 
-  const showBuildPlanMap = useCallback((place: DraftPlace, center: [number, number], bounds?: FocusArea['bounds']) => {
-    setFocused(place);
-    setMapCenter(center);
-    setMapBounds(bounds);
-    setMapZoom(bounds ? CONTINENTAL_US_ZOOM : 12);
-    setPopupVisible(true);
-    popupScale.setValue(0.92);
-    popupOpacity.setValue(0);
-    Animated.parallel([
-      Animated.spring(popupScale, { toValue: 1, damping: 15, stiffness: 220, useNativeDriver: true }),
-      Animated.timing(popupOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
-    ]).start();
-  }, [popupOpacity, popupScale]);
+  const discoverFocusPolygon = useCallback(async (area: string) => {
+    const result = await discoverAtlasPlaces(`我要用10个点做一个多边形框住${area}，给我这10个点的坐标。只返回10个边界坐标点，不要返回景点。`);
+    const polygon = result.locations
+      .slice(0, 10)
+      .filter((point) => Number.isFinite(point.longitude) && Number.isFinite(point.latitude))
+      .map((point) => [point.longitude, point.latitude] as [number, number]);
+    return polygon.length >= 3 ? boundsFromPolygon(polygon, 0.12) : undefined;
+  }, []);
 
   const handoffToPlan = useCallback((location: string, candidates: DraftPlace[], center?: [number, number], bounds?: FocusArea['bounds']) => {
-    requestAnimationFrame(() => onBuildPlan?.(location, candidates, center, bounds));
+    onBuildPlan?.(location, candidates, center, bounds);
   }, [onBuildPlan]);
 
   const focusArea = useCallback(async (area: FocusArea) => {
     const initial = area.places.map((item) => toDraft(item));
-    const place = initial[Math.floor(Math.random() * initial.length)];
-    if (!place) return;
-    setBuildingPlan(true);
-    setAreaPickerVisible(false);
-    showBuildPlanMap(place, area.coordinate, area.bounds);
+    if (!initial.length) return;
     handoffToPlan(area.label, initial, area.coordinate, area.bounds);
-    setBuildingPlan(false);
-    if (area.places.length < 5) {
-      try {
-        const recommendations = await discoverDeepSeekPlaces(area.label, 5);
-        setRecommendedPlaces(recommendations);
-        handoffToPlan(area.label, [...initial, ...recommendations], area.coordinate, area.bounds);
-      } catch (error) {
-        console.warn('[AtlasBuilder] plan recommendations failed', error);
-      }
+    try {
+      const [recommendations, polygonBounds] = await Promise.all([
+        discoverDeepSeekPlaces(area.label, 10),
+        discoverFocusPolygon(area.label),
+      ]);
+      setRecommendedPlaces(recommendations);
+      handoffToPlan(area.label, [...initial, ...recommendations], area.coordinate, polygonBounds ?? area.bounds);
+    } catch (error) {
+      console.warn('[AtlasBuilder] plan discovery failed', error);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, showBuildPlanMap]);
+  }, [discoverDeepSeekPlaces, discoverFocusPolygon, handoffToPlan]);
 
   const simpleStart = useCallback(async () => {
-    setBuildingPlan(true);
     const nearbySaved = savedPlaces.filter((place) => isNearCoordinate(place, userLocation)).map((place) => toDraft(place));
-    const localPick = nearbySaved[Math.floor(Math.random() * nearbySaved.length)];
-    if (localPick) showBuildPlanMap(localPick, userLocation);
+    const localBounds = Math.abs(userLocation[0] + 122.4) < 1.1 && Math.abs(userLocation[1] - 37.7) < 0.9
+      ? BAY_AREA_BOUNDS
+      : boundsFromPolygon(polygonAroundCoordinate(userLocation, 1.1, 0.8), 0.08);
     // Enter the Builder immediately. Reverse geocoding and AI discovery should
     // improve the map after it opens, never block the transition.
-    handoffToPlan('your area', nearbySaved, userLocation);
-    setBuildingPlan(false);
+    const initialCity = nearbySaved.find((place) => place.city)?.city ?? 'San Francisco';
+    handoffToPlan(initialCity, nearbySaved, userLocation, localBounds);
 
     let city = 'your area';
     try {
@@ -396,17 +425,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
     try {
-      const recommendations = await discoverDeepSeekPlaces(city, 10);
+      const [recommendations, polygonBounds] = await Promise.all([
+        discoverDeepSeekPlaces(city, 10),
+        discoverFocusPolygon(city),
+      ]);
       setRecommendedPlaces(recommendations);
-      handoffToPlan(city, [...nearbySaved, ...recommendations], userLocation);
+      handoffToPlan(city, [...nearbySaved, ...recommendations], userLocation, polygonBounds ?? localBounds);
     } catch (error) {
       // Recommendations are optional; search and saved places remain usable.
       console.warn('[AtlasBuilder] simple start recommendations failed', error);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, savedPlaces, showBuildPlanMap, userLocation]);
+  }, [discoverDeepSeekPlaces, discoverFocusPolygon, handoffToPlan, savedPlaces, userLocation]);
 
   useEffect(() => {
-    if (atlasId || initialPlaceSelected.current) return;
+    if (!started || atlasId || initialPlaceSelected.current) return;
     const candidates = started && initialCandidates ? initialCandidates : savedPlaces.map((place) => toDraft(place));
     const place = candidates[Math.floor(Math.random() * candidates.length)];
     if (!place) return;
@@ -452,6 +484,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setQuery('');
     setResults([]);
   }, [items, onFirstPlaceAdded, onItemsChange]);
+
+  const commitItems = useCallback((next: DraftPlace[]) => {
+    setItems(next);
+    onItemsChange?.(next);
+  }, [onItemsChange]);
 
   const handleResultFocus = useCallback(async (result: SearchResult) => {
     try {
@@ -499,24 +536,29 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [mapCenter, query, savedPlaces, searchSession]);
 
   const removePlace = useCallback((place: DraftPlace) => {
-    setItems((current) => current.filter((item) => item.id !== place.id));
+    const nextItems = items.filter((item) => item.id !== place.id);
+    commitItems(nextItems);
     setFocused((current) => current?.id === place.id ? null : current);
     setPopupVisible(false);
     if (place.joinId) removePlaceFromAtlas(place.joinId).catch((error) => console.warn('[AtlasBuilder] remove failed', error));
-  }, []);
+  }, [commitItems, items]);
 
   const movePlace = useCallback((from: number, delta: number) => {
-    setItems((current) => {
-      const to = Math.max(0, Math.min(current.length - 1, from + delta));
-      if (from === to) return current;
-      const next = [...current];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      const persisted = next.filter((item) => item.joinId).map((item, index) => ({ id: item.joinId!, sort_order: index }));
-      if (persisted.length) reorderAtlasPlaces(persisted).catch((error) => console.warn('[AtlasBuilder] reorder failed', error));
-      return next;
+    const to = Math.max(0, Math.min(items.length - 1, from + delta));
+    if (from === to) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    LayoutAnimation.configureNext({
+      duration: 240,
+      update: { type: LayoutAnimation.Types.easeInEaseOut },
+      create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+      delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
     });
-  }, []);
+    const persisted = next.filter((item) => item.joinId).map((item, index) => ({ id: item.joinId!, sort_order: index }));
+    if (persisted.length) reorderAtlasPlaces(persisted).catch((error) => console.warn('[AtlasBuilder] reorder failed', error));
+    commitItems(next);
+  }, [commitItems, items]);
 
   const openTimePicker = useCallback((index: number) => {
     const existing = items[index];
@@ -538,11 +580,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       showDialog({ title: 'Time is out of order', message: 'Choose a time before the next divider.', tone: 'warning' });
       return;
     }
-    setItems((current) => current.map((item, index) => index === timeModalIndex ? { ...item, timeline_day: pendingDay, timeline_time: pendingTime } : item));
+    commitItems(items.map((item, index) => index === timeModalIndex ? { ...item, timeline_day: pendingDay, timeline_time: pendingTime } : item));
     const persisted = items[timeModalIndex];
     if (persisted?.joinId) updateAtlasPlace(persisted.joinId, { timeline_day: pendingDay, timeline_time: pendingTime }).catch(console.warn);
     setTimeModalIndex(null);
-  }, [items, pendingDay, pendingTime, showDialog, timeModalIndex]);
+  }, [commitItems, items, pendingDay, pendingTime, showDialog, timeModalIndex]);
 
   const generateRoute = useCallback(async () => {
     if (route) {
@@ -601,8 +643,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   const mapMarkers = useMemo<MapMarker[]>(() => {
     const selected = new Set(items.map((item) => item.id));
-    const visibleSavedIds = started && initialCandidates ? new Set(initialCandidates.map((place) => place.id)) : null;
-    const saved = savedPlaces.filter((place) => !visibleSavedIds || visibleSavedIds.has(place.id)).map((place) => ({
+    const saved = savedPlaces.map((place) => ({
       id: place.id,
       latitude: place.latitude,
       longitude: place.longitude,
@@ -642,9 +683,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useEffect(() => {
     setAtlasMapState({
       markers: mapMarkers,
-      centerCoordinate: mapBounds ? CONTINENTAL_US_CENTER : mapCenter,
-      zoomLevel: mapBounds ? CONTINENTAL_US_ZOOM : mapZoom,
-      bounds: mapBounds,
+      centerCoordinate: mapCenter,
+      zoomLevel: mapZoom,
+      // Polygon bounds are used to derive mapZoom above. Passing bounds to
+      // Mapbox as well creates a competing camera update on some devices.
+      bounds: undefined,
       cameraKey,
       selectedMarkerId: focused?.id ?? null,
       routeGeoJSON: route?.route,
@@ -652,10 +695,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         const atlasItem = items.find((item) => item.id === marker.id);
         const recommended = recommendedPlaces.find((item) => item.id === marker.id);
         if (atlasItem) focus(atlasItem, true);
-        else if (recommended) focus(recommended, true, mapBounds);
+        else if (recommended) focus(recommended, true);
         else {
           const saved = savedPlaces.find((item) => item.id === marker.id);
-          if (saved) focus(toDraft(saved), true, mapBounds);
+          if (saved) focus(toDraft(saved), true);
         }
       },
       onMapPress: hideTransientUI,
@@ -677,43 +720,128 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           <Text style={styles.heading}>{atlasId || started ? 'Edit atlas' : 'Create an atlas'}</Text>
           {items.length === 0 && !started && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
-        <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
+        <View style={styles.headerRight}><TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity></View>
       </View>
 
-      {items.length === 0 && !started ? <View style={styles.emptyList}>
-        <FocusAreas areas={focusAreas} onFocus={focusArea} onSimpleStart={simpleStart} disabled={buildingPlan} />
-      </View> : <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+      {!atlasId && items.length === 0 && !started ? <View style={styles.createLanding}>
+        <View style={styles.simpleStartHero}><TouchableOpacity onPress={simpleStart} style={styles.simpleStartHeroButton}><View style={styles.simpleStartHeroTop}><View style={styles.simpleStartHeroIcon}><Ionicons name="map-outline" size={26} color="#0F766E" /></View><Ionicons name="arrow-forward" size={21} color="#0F766E" /></View><View style={styles.simpleStartHeroCopy}><Text style={styles.simpleStartHeroTitle}>Simple Start</Text><Text style={styles.simpleStartHeroSubtitle}>Build an atlas from scratch</Text></View></TouchableOpacity></View>
+        <View style={styles.planListSection}><FocusAreas areas={focusAreas} onFocus={focusArea} /></View>
+      </View> : items.length === 0 ? <AtlasEmptySkeleton /> : <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
         {items.map((item, index) => <View key={item.id}>
           <View style={styles.itemActionsRow}>
             {!item.timeline_day || !item.timeline_time ? <TimeInsert onPress={() => openTimePicker(index)} /> : <View style={styles.timeTagInline}><Text style={styles.timeTagText}>Day {item.timeline_day} · {item.timeline_time}</Text></View>}
             <TransportInsert mode={item.transport ?? null} onPress={() => setTransportModalIndex(index)} />
           </View>
-          <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNote={(note) => { setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note }).catch(console.warn); }} />
+          {item.transport ? <TransportConnector mode={item.transport} first={index === 0} /> : null}
+          <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNote={(note) => { commitItems(items.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note }).catch(console.warn); }} />
         </View>)}
       </ScrollView>}
 
-      {items.length > 0 || started ? <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#1F3938" /> : <><Ionicons name="bookmark-outline" size={16} color="#1F3938" /><Text style={styles.secondarySaveText}>Save</Text></>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View> : null}
+      {items.length > 0 ? <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#1F3938" /> : <><Ionicons name="bookmark-outline" size={16} color="#1F3938" /><Text style={styles.secondarySaveText}>Save</Text></>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View> : null}
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => setTimeModalIndex(null)} onSave={saveTimeDivider} />
-      <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={(mode) => { if (transportModalIndex !== null) setItems((current) => current.map((entry, index) => index === transportModalIndex ? { ...entry, transport: mode } : entry)); setTransportModalIndex(null); }} onClose={() => setTransportModalIndex(null)} />
-      <AreaPickerModal visible={areaPickerVisible} areas={focusAreas} onClose={() => setAreaPickerVisible(false)} onFocus={focusArea} />
+      <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={(mode) => { if (transportModalIndex !== null) commitItems(items.map((entry, index) => index === transportModalIndex ? { ...entry, transport: mode } : entry)); setTransportModalIndex(null); }} onClose={() => setTransportModalIndex(null)} />
       <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => setFullResults(null)} style={styles.headerIcon}><Ionicons name="chevron-back" size={20} color="#26262A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>Search results</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={addingResult === key} onPress={() => { setFullResults(null); handleResultAdd(result); }} style={styles.addResultButton}>{addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="add" size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
     </View>
   );
 }
 
-function FocusAreas({ areas, onFocus, onSimpleStart, disabled }: { areas: FocusArea[]; onFocus: (area: FocusArea) => void; onSimpleStart: () => void; disabled?: boolean }) {
-  return <ScrollView style={styles.focusList} contentContainerStyle={styles.focusListContent} showsVerticalScrollIndicator={false} nestedScrollEnabled>
-    <TouchableOpacity disabled={disabled} onPress={onSimpleStart} style={[styles.simpleStartRow, disabled && styles.planningBarDisabled]}>
-      <View style={styles.simpleStartIcon}><Ionicons name="sparkles" size={18} color="#FFFFFF" /></View>
-      <View style={styles.focusRowCopy}><Text style={styles.simpleStartTitle}>Simple Start</Text><Text numberOfLines={1} style={styles.focusMeta}>Add places to an atlas from scratch</Text></View>
-      <Ionicons name="arrow-forward" size={17} color="#7A5CE6" />
-    </TouchableOpacity>
-    {areas.map((area) => <TouchableOpacity disabled={disabled} key={area.label} onPress={() => onFocus(area)} style={styles.focusRow}><View style={styles.focusImageWrap}>{area.photoUrl ? <Image source={{ uri: area.photoUrl }} style={styles.focusImage} /> : <View style={styles.focusImageFallback}><Ionicons name="image-outline" size={17} color="#4F6B68" /></View>}</View><View style={styles.focusRowCopy}><Text numberOfLines={1} style={styles.focusText}>Plan {area.label}</Text><Text numberOfLines={1} style={styles.focusMeta}>{area.count} saved place{area.count === 1 ? '' : 's'}</Text></View><Ionicons name="arrow-forward" size={17} color="#6B807E" /></TouchableOpacity>)}
+function FocusAreas({ areas, onFocus, disabled, autoScroll = true }: { areas: FocusArea[]; onFocus: (area: FocusArea) => void; disabled?: boolean; autoScroll?: boolean }) {
+  const scrollRef = useRef<ScrollView>(null);
+  const stoppedRef = useRef(false);
+  const offsetRef = useRef(0);
+  const contentHeightRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const loopAreas = areas.length > 1 ? [...areas, ...areas] : areas;
+  const stopAutoScroll = useCallback(() => {
+    stoppedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    stoppedRef.current = false;
+    offsetRef.current = 0;
+    if (!autoScroll) {
+      stoppedRef.current = true;
+      return;
+    }
+    const timer = setInterval(() => {
+      if (stoppedRef.current) return;
+      const cycleHeight = areas.length > 1 ? contentHeightRef.current / 2 : contentHeightRef.current - viewportHeightRef.current;
+      if (cycleHeight <= 8) return;
+      const nextOffset = offsetRef.current + 0.72;
+      offsetRef.current = nextOffset >= cycleHeight ? 0 : nextOffset;
+      scrollRef.current?.scrollTo({ y: offsetRef.current, animated: false });
+    }, 70);
+    return () => clearInterval(timer);
+  }, [areas.length, autoScroll]);
+
+  return <ScrollView
+    ref={scrollRef}
+    style={styles.focusList}
+    contentContainerStyle={styles.focusListContent}
+    showsVerticalScrollIndicator={false}
+    nestedScrollEnabled
+    onLayout={(event) => { viewportHeightRef.current = event.nativeEvent.layout.height; }}
+    onContentSizeChange={(_, height) => { contentHeightRef.current = height; }}
+    onTouchStart={stopAutoScroll}
+    onScrollBeginDrag={stopAutoScroll}
+  >
+    {loopAreas.map((area, index) => <TouchableOpacity disabled={disabled} key={`${area.label}-${index}`} onPress={() => { stopAutoScroll(); onFocus(area); }} style={styles.focusRow}><View style={styles.focusImageWrap}>{area.photoUrl ? <Image source={{ uri: area.photoUrl }} style={styles.focusImage} /> : <View style={styles.focusImageFallback}><Ionicons name="image-outline" size={17} color="#4F6B68" /></View>}</View><View style={styles.focusRowCopy}><Text numberOfLines={1} style={styles.focusText}>Plan {area.label}</Text><Text numberOfLines={1} style={styles.focusMeta}>{area.count} saved place{area.count === 1 ? '' : 's'}</Text></View><Ionicons name="arrow-forward" size={17} color="#6B807E" /></TouchableOpacity>)}
   </ScrollView>;
 }
 
-function AreaPickerModal({ visible, areas, onClose, onFocus }: { visible: boolean; areas: FocusArea[]; onClose: () => void; onFocus: (area: FocusArea) => void }) {
-  return <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}><Pressable style={styles.modalBackdrop} onPress={onClose}><Pressable style={styles.areaPickerSheet} onPress={(event) => event.stopPropagation()}><View style={styles.areaPickerHeader}><View><Text style={styles.sectionLabel}>EXPLORE</Text><Text style={styles.modalTitle}>Choose an area</Text></View><TouchableOpacity onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={18} color="#26262A" /></TouchableOpacity></View><ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.areaPickerList}>{areas.map((area) => <TouchableOpacity key={area.label} onPress={() => onFocus(area)} style={styles.focusRow}><View style={styles.focusImageWrap}>{area.photoUrl ? <Image source={{ uri: area.photoUrl }} style={styles.focusImage} /> : <View style={styles.focusImageFallback}><Ionicons name="image-outline" size={17} color="#4F6B68" /></View>}</View><View style={styles.focusRowCopy}><Text style={styles.focusText}>Plan {area.label}</Text><Text style={styles.focusMeta}>{area.count} saved place{area.count === 1 ? '' : 's'}</Text></View><Ionicons name="arrow-forward" size={17} color="#6B807E" /></TouchableOpacity>)}</ScrollView></Pressable></Pressable></Modal>;
+function AtlasEmptySkeleton() {
+  const pulse = useRef(new Animated.Value(0.58)).current;
+  const [typedHint, setTypedHint] = useState('');
+  const hint = '现在，加入第一个点进入 Atlas';
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.8, duration: 1800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.58, duration: 1800, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [pulse]);
+
+  useEffect(() => {
+    let index = 0;
+    const timer = setInterval(() => {
+      index += 1;
+      setTypedHint(hint.slice(0, index));
+      if (index >= hint.length) clearInterval(timer);
+    }, 115);
+    return () => clearInterval(timer);
+  }, [hint]);
+
+  return <Animated.View style={[styles.emptyAtlas, { opacity: pulse }]}>
+    <View style={styles.emptyAtlasIntro}>
+      <View style={styles.emptyAtlasKicker} />
+      <View style={styles.emptyAtlasTitle} />
+    </View>
+    {[0, 1, 2].map((index) => <View key={index} style={styles.emptyAtlasGroup}>
+      <View style={styles.emptyAtlasActions}>
+        <View style={styles.emptyAtlasAction} />
+        <View style={[styles.emptyAtlasAction, styles.emptyAtlasActionShort]} />
+      </View>
+      <View style={styles.emptyAtlasRow}>
+        <View style={styles.emptyAtlasOrder} />
+        <View style={styles.emptyAtlasImage} />
+        <View style={styles.emptyAtlasCopy}>
+          {index === 0 ? <>
+            <Text style={styles.emptyAtlasHint}>{typedHint}</Text>
+            <Text style={styles.emptyAtlasHintSub}>点击上方地点标签的 + 添加点</Text>
+          </> : <>
+            <View style={styles.emptyAtlasLine} />
+            <View style={[styles.emptyAtlasLine, styles.emptyAtlasLineShort]} />
+          </>}
+        </View>
+        <View style={styles.emptyAtlasHandle} />
+      </View>
+      {index < 2 ? <View style={styles.emptyAtlasConnector} /> : null}
+    </View>)}
+  </Animated.View>;
 }
 
 function MapPinPopup({ place, added, onAdd }: { place: DraftPlace; added: boolean; onAdd: () => void }) {
@@ -721,15 +849,25 @@ function MapPinPopup({ place, added, onAdd }: { place: DraftPlace; added: boolea
 }
 
 function TimeInsert({ onPress }: { onPress: () => void }) {
-  return <TouchableOpacity accessibilityLabel="Add a time divider" onPress={onPress} style={styles.dividerAdd}><Ionicons name="time-outline" size={13} color="#64748B" /><Text style={styles.dividerAddText}>Add time</Text></TouchableOpacity>;
+  return <TouchableOpacity accessibilityLabel="Add a time divider" onPress={onPress} style={styles.transportInsertButton}><Ionicons name="time-outline" size={13} color="#64748B" /><Text style={styles.dividerAddText}>Add time</Text></TouchableOpacity>;
 }
 
 function TransportInsert({ mode, onPress }: { mode: TransportMode | null; onPress: () => void }) {
   const option = TRANSPORT_OPTIONS.find((entry) => entry.mode === mode);
-  return <TouchableOpacity accessibilityLabel="Add transport" onPress={onPress} style={styles.dividerAdd}>
+  return <TouchableOpacity accessibilityLabel="Add transport" onPress={onPress} style={styles.transportInsertButton}>
     <Ionicons name={option?.icon ?? 'swap-horizontal-outline'} size={13} color="#64748B" />
     <Text style={styles.dividerAddText}>{option?.label ?? 'Add transport'}</Text>
   </TouchableOpacity>;
+}
+
+function TransportConnector({ mode, first }: { mode: TransportMode; first: boolean }) {
+  const option = TRANSPORT_OPTIONS.find((entry) => entry.mode === mode);
+  if (!option) return null;
+  return <View style={[styles.transportConnector, first && styles.transportConnectorFirst]} pointerEvents="none">
+    <View style={styles.transportConnectorLine} />
+    <View style={styles.transportConnectorIcon}><Ionicons name={option.icon} size={15} color="#64748B" /></View>
+    <View style={styles.transportConnectorLine} />
+  </View>;
 }
 
 function TransportPickerModal({ visible, selected, onSelect, onClose }: { visible: boolean; selected: TransportMode | null; onSelect: (mode: TransportMode) => void; onClose: () => void }) {
@@ -789,18 +927,42 @@ const styles = StyleSheet.create({
   focusImage: { width: '100%', height: '100%' },
   focusImageFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   simpleStartRow: { minHeight: 68, padding: 9, borderRadius: 14, backgroundColor: '#F4F0FF', borderWidth: 1, borderColor: '#E1D7FF', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  simpleStartButton: { minHeight: 68, marginTop: 12, padding: 9, borderRadius: 14, backgroundColor: '#F4F0FF', borderWidth: 1, borderColor: '#E1D7FF', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  createLanding: { flex: 1, paddingHorizontal: 16, paddingBottom: 10 },
+  simpleStartHero: { flex: 0.4, justifyContent: 'center' },
+  simpleStartHeroButton: { width: '88%', minHeight: 132, alignSelf: 'center', padding: 16, borderRadius: 24, backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DCE7E4', justifyContent: 'space-between', shadowColor: '#0F766E', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 3 },
+  simpleStartHeroTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  simpleStartHeroIcon: { width: 54, height: 54, borderRadius: 17, backgroundColor: '#E8F9EF', alignItems: 'center', justifyContent: 'center' },
+  simpleStartHeroCopy: { minWidth: 0 },
+  simpleStartHeroTitle: { color: '#183431', fontSize: 19, fontWeight: '800' },
+  simpleStartHeroSubtitle: { color: '#6B807E', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  planListSection: { flex: 0.6, minHeight: 0 },
   simpleStartIcon: { width: 48, height: 48, borderRadius: 12, backgroundColor: '#885CF6', alignItems: 'center', justifyContent: 'center', shadowColor: '#885CF6', shadowOpacity: 0.22, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   simpleStartTitle: { color: '#5137A1', fontSize: 14, fontWeight: '800' },
-  emptyFallback: { alignItems: 'flex-start', paddingTop: 18 },
-  emptyFallbackIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: '#E3F1EE', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  areaPickerSheet: { maxHeight: '68%', borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFFFFF', paddingBottom: 24 },
-  areaPickerHeader: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E2EBE9' },
-  areaPickerList: { padding: 16, gap: 8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '55%' },
+  emptyAtlas: { flex: 1, paddingHorizontal: 15, paddingTop: 14, paddingBottom: 14, backgroundColor: '#FFFFFF' },
+  emptyAtlasIntro: { paddingHorizontal: 4, paddingBottom: 15, gap: 8 },
+  emptyAtlasKicker: { width: 76, height: 8, borderRadius: 4, backgroundColor: '#D9E1E4' },
+  emptyAtlasTitle: { width: '58%', height: 15, borderRadius: 7, backgroundColor: '#CBD5D9' },
+  emptyAtlasGroup: { marginBottom: 8 },
+  emptyAtlasActions: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4 },
+  emptyAtlasAction: { width: 74, height: 20, borderRadius: 10, backgroundColor: '#E2E8EB' },
+  emptyAtlasActionShort: { width: 92 },
+  emptyAtlasRow: { minHeight: 74, padding: 10, borderRadius: 14, backgroundColor: '#F4F6F7', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  emptyAtlasOrder: { width: 27, height: 27, borderRadius: 14, backgroundColor: '#D7DEE1' },
+  emptyAtlasImage: { width: 52, height: 52, borderRadius: 12, backgroundColor: '#DCE3E6' },
+  emptyAtlasCopy: { flex: 1, gap: 9 },
+  emptyAtlasHint: { color: '#64727A', fontSize: 13, lineHeight: 18, fontWeight: '700', minHeight: 18 },
+  emptyAtlasHintSub: { color: '#98A4AA', fontSize: 10, lineHeight: 14, minHeight: 14 },
+  emptyAtlasLine: { width: '78%', height: 11, borderRadius: 6, backgroundColor: '#D3DBDE' },
+  emptyAtlasLineShort: { width: '48%', height: 9, backgroundColor: '#DEE4E7' },
+  emptyAtlasHandle: { width: 25, height: 34, borderRadius: 8, backgroundColor: '#E0E6E8' },
+  emptyAtlasConnector: { width: 2, height: 16, borderRadius: 1, alignSelf: 'center', backgroundColor: '#DDE4E7' },
   mapSearchLayer: { position: 'absolute', top: 62, left: 16, right: 16, zIndex: 20 },
   mapSearchBox: { minHeight: 46, borderRadius: 18, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8, shadowColor: '#111827', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 7 },
   searchSubmit: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   addResultButtonPending: { backgroundColor: '#94A3B8' },
-  mapCandidateLayer: { position: 'absolute', left: 16, right: 16, bottom: '56%', alignItems: 'center', zIndex: 18 },
+  mapCandidateLayer: { position: 'absolute', left: 16, right: 16, bottom: '60%', alignItems: 'center', zIndex: 30 },
   mapPopup: { width: 312, minHeight: 76, borderRadius: 14, backgroundColor: '#FFFFFF', paddingHorizontal: 15, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', shadowColor: '#111827', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
   mapPopupArrow: { position: 'absolute', top: -7, left: '50%', marginLeft: -7, width: 14, height: 14, backgroundColor: '#FFFFFF', transform: [{ rotate: '45deg' }] },
   mapPinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
@@ -812,6 +974,11 @@ const styles = StyleSheet.create({
   fullResultRow: { minHeight: 62, paddingHorizontal: 13, paddingVertical: 9, borderRadius: 14, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', gap: 8 },
   dividerAddText: { color: '#64748B', fontSize: 10, fontWeight: '700' },
   itemActionsRow: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  transportInsertButton: { minHeight: 26, paddingHorizontal: 9, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 4, backgroundColor: '#F1F5F9' },
+  transportConnector: { height: 28, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7 },
+  transportConnectorFirst: { marginTop: 1 },
+  transportConnectorLine: { width: 1, height: 11, backgroundColor: '#CBD5E1' },
+  transportConnectorIcon: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
   timeTagInline: { borderRadius: 12, backgroundColor: '#EAF4FF', paddingHorizontal: 9, paddingVertical: 5 },
   transportOptions: { paddingHorizontal: 18, paddingBottom: 28, gap: 8 },
   transportOption: { minHeight: 48, borderRadius: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#F8FAFC' },

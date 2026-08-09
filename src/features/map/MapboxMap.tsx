@@ -100,7 +100,7 @@ function expandRect(rect: ScreenRect, padding: number): ScreenRect {
 function labelWidthForTitle(title: string): number {
   // Keep long place names readable without letting one label consume an
   // entire city view. The text still ellipsizes inside this stable width.
-  return Math.min(176, Math.max(72, title.length * 7.1 + 20));
+  return Math.min(230, Math.max(96, title.length * 7.4 + 24));
 }
 
 function viewportIsLocal(viewport: MapViewport): boolean {
@@ -240,7 +240,7 @@ function MarkerLabel({
       <View style={styles.markerLabelContent}>
         {ai ? <Ionicons name="sparkles" size={12} color="#885CF6" style={styles.markerAiIcon} /> : null}
         <View style={styles.markerLabelCopy}>
-          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
+          <Text numberOfLines={2} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
           {hint ? <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelHint}>{hint}</Text> : null}
         </View>
       </View>
