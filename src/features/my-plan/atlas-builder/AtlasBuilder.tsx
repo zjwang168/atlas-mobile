@@ -37,7 +37,13 @@ type SearchResult =
   | { kind: 'saved'; place: SavedPlace }
   | { kind: 'remote'; externalId: string; name: string; subtitle: string; featureType?: string };
 
-type FocusArea = { label: string; coordinate: [number, number]; count: number; bounds: { ne: [number, number]; sw: [number, number] } };
+type FocusArea = {
+  label: string;
+  coordinate: [number, number];
+  count: number;
+  photoUrl?: string | null;
+  bounds: { ne: [number, number]; sw: [number, number] };
+};
 
 type AtlasBuilderProps = {
   onClose: () => void;
@@ -113,15 +119,21 @@ function deriveFocusAreas(places: SavedPlace[]): FocusArea[] {
   return [...areas.values()]
     .map((group) => ({
       label: group[0].city || group[0].region || group[0].country || '',
+      photoUrl: group.find((place) => Boolean(place.photo_url))?.photo_url,
       coordinate: [
         group.reduce((sum, place) => sum + place.longitude, 0) / group.length,
         group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
       ] as [number, number],
       count: group.length,
-      bounds: {
-        ne: [Math.max(...group.map((place) => place.longitude)), Math.max(...group.map((place) => place.latitude))] as [number, number],
-        sw: [Math.min(...group.map((place) => place.longitude)), Math.min(...group.map((place) => place.latitude))] as [number, number],
-      },
+      bounds: (() => {
+        const minLng = Math.min(...group.map((place) => place.longitude));
+        const maxLng = Math.max(...group.map((place) => place.longitude));
+        const minLat = Math.min(...group.map((place) => place.latitude));
+        const maxLat = Math.max(...group.map((place) => place.latitude));
+        const lngPad = Math.max(0.04, (maxLng - minLng) * 0.22);
+        const latPad = Math.max(0.04, (maxLat - minLat) * 0.22);
+        return { ne: [maxLng + lngPad, maxLat + latPad] as [number, number], sw: [minLng - lngPad, minLat - latPad] as [number, number] };
+      })(),
     }))
     .filter((area) => Boolean(area.label))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
@@ -157,15 +169,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
   const [timeModalIndex, setTimeModalIndex] = useState<number | null>(null);
   const [pendingDay, setPendingDay] = useState(1);
   const [pendingTime, setPendingTime] = useState('9am');
-  const [focusPage, setFocusPage] = useState(0);
-  const [focusPaused, setFocusPaused] = useState(false);
   const popupScale = useRef(new Animated.Value(0.92)).current;
   const popupOpacity = useRef(new Animated.Value(0)).current;
   const searchAppear = useRef(new Animated.Value(0)).current;
 
   const existingAtlas = useMemo(() => atlases.find((atlas) => atlas.id === atlasId), [atlasId, atlases]);
   const focusAreas = useMemo(() => deriveFocusAreas(savedPlaces), [savedPlaces]);
-  const visibleFocusAreas = useMemo(() => focusAreas.slice(focusPage * 3, focusPage * 3 + 3), [focusAreas, focusPage]);
   useEffect(() => {
     setTabBarVisible(false);
     return () => setTabBarVisible(true);
@@ -194,13 +203,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
   }, [atlasId, atlasPlaces, existingAtlas?.route_geojson, existingAtlas?.route_visible, savedPlaces]);
 
   useEffect(() => () => queryAbortRef.current?.abort(), []);
-
-  useEffect(() => {
-    if (focusPaused || focusAreas.length <= 3) return;
-    const maxPage = Math.ceil(focusAreas.length / 3);
-    const timer = setInterval(() => setFocusPage((page) => (page + 1) % maxPage), 5200);
-    return () => clearInterval(timer);
-  }, [focusAreas.length, focusPaused]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -283,7 +285,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
     setItems((current) => current.some((item) => item.id === place.id) ? current : [...current, place]);
     setFocused(place);
     setPopupVisible(false);
-    setFocusPage(0);
     setQuery('');
     setResults([]);
   }, []);
@@ -436,20 +437,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
 
   const mapMarkers = useMemo<MapMarker[]>(() => {
     const selected = new Set(items.map((item) => item.id));
-    const saved: MapMarker[] = savedPlaces.map((place) => ({
-      id: place.id,
-      latitude: place.latitude,
-      longitude: place.longitude,
-      title: place.name,
-      description: place.subtitle,
-      tone: selected.has(place.id) ? 'atlas' as const : 'saved' as const,
-    }));
-    const searched = items.filter((item) => !savedPlaces.some((place) => place.id === item.id)).map((item) => ({ id: item.id, latitude: item.latitude, longitude: item.longitude, title: item.name, description: item.subtitle, tone: 'atlas' as const }));
-    const focusedSearch = focused && !selected.has(focused.id) && !savedPlaces.some((place) => place.id === focused.id)
-      ? [{ id: focused.id, latitude: focused.latitude, longitude: focused.longitude, title: focused.name, description: focused.subtitle, tone: 'focused' as const }]
+    // A new Atlas starts as a clean planning surface. Saved places still power
+    // area suggestions and search, but do not leak their old map pins here.
+    const atlasItems = items.map((item) => ({ id: item.id, latitude: item.latitude, longitude: item.longitude, title: item.name, description: item.subtitle, tone: 'atlas' as const }));
+    const focusedSearch = focused && !selected.has(focused.id)
+      ? [{ id: focused.id, latitude: focused.latitude, longitude: focused.longitude, title: focused.name, description: focused.subtitle, tone: 'atlas' as const }]
       : [];
-    return [...saved, ...searched, ...focusedSearch];
-  }, [focused, items, savedPlaces]);
+    return [...atlasItems, ...focusedSearch];
+  }, [focused, items]);
 
   const mapSearchOverlay = useMemo(() => <Animated.View pointerEvents="box-none" style={[styles.mapSearchLayer, { opacity: searchAppear, transform: [{ translateX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) }, { scaleX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }) }] }]}>
     <View pointerEvents="auto" style={styles.mapSearchBox}>
@@ -472,10 +467,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
       selectedMarkerId: focused?.id ?? null,
       routeGeoJSON: route?.route,
       onMarkerPress: (marker) => {
-        const saved = savedPlaces.find((place) => place.id === marker.id);
         const atlasItem = items.find((item) => item.id === marker.id);
         if (atlasItem) focus(atlasItem, true);
-        else if (saved) focus(toDraft(saved, atlasPlaces.find((row) => row.atlas_id === atlasId && row.place_id === saved.id)), true);
       },
       onMapPress: hideTransientUI,
       overlay: mapSearchOverlay,
@@ -493,18 +486,22 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
     <View style={styles.root}>
       <View style={styles.header}>
         <View>
+          <Text style={styles.eyebrow}>NEW ATLAS</Text>
           <Text style={styles.heading}>{atlasId ? 'Edit atlas' : 'Create an atlas'}</Text>
         </View>
         <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
       </View>
 
-      <View style={styles.listHeader}><View /><TouchableOpacity onPress={generateRoute} disabled={generatingRoute} style={[styles.routeButton, route && styles.routeButtonActive]}>{generatingRoute ? <ActivityIndicator size="small" color={route ? '#FFF' : '#2563EB'} /> : <Ionicons name={route ? 'close' : 'navigate-outline'} size={16} color={route ? '#FFF' : '#2563EB'} />}<Text style={[styles.routeButtonText, route && styles.routeButtonTextActive]}>{route ? 'Route on' : 'Generate'}</Text></TouchableOpacity></View>
+      <View style={styles.planningBar}>
+        <View style={styles.planningIcon}><Ionicons name="map-outline" size={18} color="#0F766E" /></View>
+        <View style={styles.planningCopy}><Text style={styles.planningTitle}>{items.length ? `${items.length} place${items.length === 1 ? '' : 's'} in this atlas` : 'Start with a place or an area'}</Text><Text style={styles.planningSubtitle}>{items.length ? 'Build your route when you are ready.' : 'Search the map or browse your saved areas.'}</Text></View>
+        <TouchableOpacity accessibilityLabel={route ? 'Remove route' : 'Generate route'} onPress={generateRoute} disabled={generatingRoute} style={[styles.routeButton, route && styles.routeButtonActive]}>{generatingRoute ? <ActivityIndicator size="small" color={route ? '#FFF' : '#0F766E'} /> : <Ionicons name={route ? 'close' : 'navigate-outline'} size={16} color={route ? '#FFF' : '#0F766E'} />}<Text style={[styles.routeButtonText, route && styles.routeButtonTextActive]}>{route ? 'Hide' : 'Route'}</Text></TouchableOpacity>
+      </View>
 
       {route && timeTags.length > 0 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.timeTags}>{timeTags.map((tag) => <TouchableOpacity key={tag.id} onPress={() => focus(tag.item)} style={styles.routeTimeTag}><Text style={styles.routeTimeTagText}>{tag.label}</Text></TouchableOpacity>)}</ScrollView> : null}
 
       {items.length === 0 ? <View style={styles.emptyList}>
-        <Text style={styles.emptyText}>Select a point, or focus an area to begin planning.</Text>
-        {focusAreas.length ? <FocusAreas areas={focusPaused ? focusAreas : visibleFocusAreas} paused={focusPaused} onPause={() => setFocusPaused((value) => !value)} onFocus={(area) => { setFocusPaused(true); setMapCenter(area.coordinate); setMapBounds(area.bounds); }} /> : null}
+        {focusAreas.length ? <><View style={styles.focusIntro}><View><Text style={styles.sectionLabel}>SAVED AREAS</Text><Text style={styles.focusHeading}>Pick a place to explore</Text></View><Text style={styles.focusCount}>{focusAreas.length} areas</Text></View><FocusAreas areas={focusAreas} onFocus={(area) => { setMapCenter(area.coordinate); setMapBounds(area.bounds); }} /></> : <View style={styles.emptyFallback}><View style={styles.emptyFallbackIcon}><Ionicons name="compass-outline" size={23} color="#0F766E" /></View><Text style={styles.focusHeading}>Find your first place</Text><Text style={styles.emptyText}>Use the search bar above the map to start building this atlas.</Text></View>}
       </View> : <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
         {items.map((item, index) => <View key={item.id}>
           {!item.timeline_day || !item.timeline_time ? <TimeInsert onPress={() => openTimePicker(index)} /> : null}
@@ -513,23 +510,15 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId }: AtlasBuilder
         </View>)}
       </ScrollView>}
 
-      <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#29292C" /> : <Text style={styles.secondarySaveText}>Save Atlas</Text>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={15} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View>
+      <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#1F3938" /> : <><Ionicons name="bookmark-outline" size={16} color="#1F3938" /><Text style={styles.secondarySaveText}>Save</Text></>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View>
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => setTimeModalIndex(null)} onSave={saveTimeDivider} />
       <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => setFullResults(null)} style={styles.headerIcon}><Ionicons name="chevron-back" size={20} color="#26262A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>Search results</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={addingResult === key} onPress={() => { setFullResults(null); handleResultAdd(result); }} style={styles.addResultButton}>{addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="add" size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
     </View>
   );
 }
 
-function FocusAreas({ areas, paused, onPause, onFocus }: { areas: FocusArea[]; paused: boolean; onPause: () => void; onFocus: (area: FocusArea) => void }) {
-  const opacity = useRef(new Animated.Value(1)).current;
-  const [displayed, setDisplayed] = useState(areas);
-  useEffect(() => {
-    Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
-      setDisplayed(areas);
-      Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: true }).start();
-    });
-  }, [areas, opacity]);
-  return <View style={styles.focusSection}><ScrollView style={styles.focusList} contentContainerStyle={styles.focusListContent} showsVerticalScrollIndicator={paused} nestedScrollEnabled onScrollBeginDrag={() => { if (!paused) onPause(); }}><Animated.View style={{ opacity }}>{displayed.map((area) => <TouchableOpacity key={area.label} onPress={() => onFocus(area)} style={styles.focusRow}><Ionicons name="locate-outline" size={14} color="#64748B" /><Text style={styles.focusText}>Focus on planning {area.label}</Text></TouchableOpacity>)}</Animated.View></ScrollView><TouchableOpacity onPress={onPause} accessibilityLabel={paused ? 'Resume rotating areas' : 'Browse all areas'} style={[styles.focusRail, paused && styles.focusRailPaused]}><View style={styles.focusRailThumb} /><Ionicons name={paused ? 'chevron-up-outline' : 'pause'} size={12} color="#64748B" /></TouchableOpacity></View>;
+function FocusAreas({ areas, onFocus }: { areas: FocusArea[]; onFocus: (area: FocusArea) => void }) {
+  return <ScrollView style={styles.focusList} contentContainerStyle={styles.focusListContent} showsVerticalScrollIndicator={false} nestedScrollEnabled>{areas.map((area) => <TouchableOpacity key={area.label} onPress={() => onFocus(area)} style={styles.focusRow}><View style={styles.focusImageWrap}>{area.photoUrl ? <Image source={{ uri: area.photoUrl }} style={styles.focusImage} /> : <View style={styles.focusImageFallback}><Ionicons name="image-outline" size={17} color="#4F6B68" /></View>}</View><View style={styles.focusRowCopy}><Text numberOfLines={1} style={styles.focusText}>Plan {area.label}</Text><Text numberOfLines={1} style={styles.focusMeta}>{area.count} saved place{area.count === 1 ? '' : 's'}</Text></View><Ionicons name="arrow-forward" size={17} color="#6B807E" /></TouchableOpacity>)}</ScrollView>;
 }
 
 function MapPinPopup({ place, added, onAdd }: { place: DraftPlace; added: boolean; onAdd: () => void }) {
@@ -564,6 +553,25 @@ function TimePickerModal({ visible, day, time, onChangeDay, onChangeTime, onClos
 }
 
 const styles = StyleSheet.create({
+  // Atlas landing page: a quieter, editorial hierarchy that keeps the list
+  // dense enough to browse without turning it into a stack of blue controls.
+  eyebrow: { color: '#0F766E', fontSize: 10, fontWeight: '800', letterSpacing: 1.1, marginBottom: 3 },
+  planningBar: { marginHorizontal: 16, marginBottom: 4, padding: 12, borderRadius: 16, backgroundColor: '#F1F7F6', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  planningIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#D7ECE8', alignItems: 'center', justifyContent: 'center' },
+  planningCopy: { flex: 1, minWidth: 0 },
+  planningTitle: { color: '#173D3A', fontSize: 13, fontWeight: '700' },
+  planningSubtitle: { color: '#62817E', fontSize: 11, lineHeight: 15, marginTop: 2 },
+  sectionLabel: { color: '#0F766E', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  focusIntro: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 10 },
+  focusHeading: { color: '#193432', fontSize: 18, fontWeight: '700', marginTop: 3 },
+  focusCount: { color: '#6B807E', fontSize: 12, fontWeight: '600', marginBottom: 2 },
+  focusMeta: { color: '#71827F', fontSize: 11, marginTop: 3 },
+  focusRowCopy: { flex: 1, minWidth: 0 },
+  focusImageWrap: { width: 48, height: 48, borderRadius: 12, overflow: 'hidden', backgroundColor: '#DFEBE8' },
+  focusImage: { width: '100%', height: '100%' },
+  focusImageFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  emptyFallback: { alignItems: 'flex-start', paddingTop: 18 },
+  emptyFallbackIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: '#E3F1EE', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   mapSearchLayer: { position: 'absolute', top: 62, left: 16, right: 16, zIndex: 20 },
   mapSearchBox: { minHeight: 46, borderRadius: 18, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8, shadowColor: '#111827', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 7 },
   searchSubmit: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
@@ -577,5 +585,5 @@ const styles = StyleSheet.create({
   fullSearchTitle: { color: '#18181B', fontSize: 17, fontWeight: '700' },
   fullResults: { padding: 16, gap: 8 },
   fullResultRow: { minHeight: 62, paddingHorizontal: 13, paddingVertical: 9, borderRadius: 14, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', gap: 8 },
-  root: { flex: 1, backgroundColor: '#FFFFFF' }, header: { paddingHorizontal: 18, paddingTop: 9, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, heading: { fontSize: 22, fontWeight: '700', color: '#18181B' }, subheading: { fontSize: 12, color: '#74747B', marginTop: 2 }, headerIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, searchLayer: { paddingHorizontal: 16, zIndex: 4 }, searchBox: { minHeight: 46, borderRadius: 14, backgroundColor: '#F4F5F6', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8 }, searchInput: { flex: 1, fontSize: 16, color: '#1D1D21', paddingVertical: 9 }, results: { marginTop: 6, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, resultRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 10, gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E7E8EA' }, resultCopy: { flex: 1 }, resultTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, resultName: { color: '#1B1B1D', fontSize: 14, fontWeight: '600', flexShrink: 1 }, resultAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, savedTag: { backgroundColor: '#E9F3FF', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }, savedTagText: { color: '#2F78B4', fontSize: 10, fontWeight: '700' }, addResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF' }, pinPopup: { marginHorizontal: 16, marginTop: 10, borderRadius: 14, backgroundColor: '#FFFFFF', padding: 12, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, pinName: { color: '#19191B', fontSize: 14, fontWeight: '700' }, pinAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, pinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }, addedPill: { flexDirection: 'row', gap: 3, alignItems: 'center', backgroundColor: '#FFF0E6', borderRadius: 13, paddingHorizontal: 9, paddingVertical: 6 }, addedPillText: { color: '#B5551B', fontSize: 11, fontWeight: '700' }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 7 }, listHeading: { color: '#1A1A1C', fontSize: 18, fontWeight: '700' }, routeButton: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 32, paddingHorizontal: 11, borderWidth: 1, borderColor: '#B7D9FC', borderRadius: 16, backgroundColor: '#F3F9FF' }, routeButtonActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' }, routeButtonText: { color: '#007AFF', fontSize: 12, fontWeight: '700' }, routeButtonTextActive: { color: '#FFF' }, timeTags: { paddingHorizontal: 16, paddingBottom: 5, gap: 6 }, routeTimeTag: { borderRadius: 12, backgroundColor: '#F2F5F7', paddingHorizontal: 9, paddingVertical: 5 }, routeTimeTagText: { color: '#53616B', fontSize: 11, fontWeight: '600' }, emptyList: { flex: 1, paddingHorizontal: 18, paddingTop: 20 }, emptyText: { color: '#6F737A', fontSize: 15, lineHeight: 21, maxWidth: 260 }, focusSection: { marginTop: 18, flexDirection: 'row', gap: 10, height: 122 }, focusList: { flex: 1 }, focusListContent: { gap: 7 }, focusRow: { minHeight: 36, paddingHorizontal: 11, borderRadius: 12, backgroundColor: '#F3F8FC', flexDirection: 'row', alignItems: 'center', gap: 8 }, focusText: { color: '#33566E', fontSize: 13, fontWeight: '600', flexShrink: 1 }, focusRail: { width: 23, borderRadius: 12, backgroundColor: '#EFF1F2', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 6 }, focusRailPaused: { backgroundColor: '#E0EDF7' }, focusRailThumb: { width: 4, height: 30, borderRadius: 2, backgroundColor: '#94B1C5' }, list: { flex: 1, paddingHorizontal: 15 }, listContent: { paddingBottom: 10 }, timeTag: { alignSelf: 'flex-start', borderRadius: 10, backgroundColor: '#EAF4FF', paddingHorizontal: 9, paddingVertical: 4, marginBottom: 5 }, timeTagText: { color: '#3179B7', fontSize: 11, fontWeight: '700' }, dividerAdd: { height: 19, alignItems: 'center', justifyContent: 'center' }, swipeShell: { marginBottom: 1, overflow: 'hidden', borderRadius: 14 }, deleteReveal: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 63, backgroundColor: '#E05252', borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, deleteHidden: { opacity: 0 }, item: { minHeight: 70, padding: 9, borderRadius: 14, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, itemImage: { width: 50, height: 50, borderRadius: 11, backgroundColor: '#E9EEF2' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, itemCopy: { flex: 1, minWidth: 0 }, itemName: { fontSize: 14, fontWeight: '700', color: '#212124' }, itemAddress: { fontSize: 12, color: '#85858C', marginTop: 2 }, itemNote: { color: '#48708C', fontSize: 11, lineHeight: 15, marginTop: 4, fontStyle: 'italic' }, noteButton: { width: 40, height: 30, borderRadius: 9, backgroundColor: '#EEF6FD' }, dragHandle: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, footer: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E4E4E8' }, secondarySave: { flex: 1, height: 46, borderRadius: 14, backgroundColor: '#F0F1F3', alignItems: 'center', justifyContent: 'center' }, secondarySaveText: { color: '#29292C', fontSize: 14, fontWeight: '700' }, primarySave: { flex: 1.25, height: 46, borderRadius: 14, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, primarySaveText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.28)' }, modalSheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFF', paddingBottom: 28 }, modalHeader: { minHeight: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5E8' }, modalCancel: { color: '#6D6D73', fontSize: 16 }, modalTitle: { color: '#1D1D20', fontSize: 16, fontWeight: '700', textAlign: 'center' }, modalSubtitle: { color: '#85858C', fontSize: 11, textAlign: 'center', marginTop: 2 }, modalSave: { color: '#007AFF', fontSize: 16, fontWeight: '700' }, wheels: { height: 236, flexDirection: 'row', paddingHorizontal: 30 }, wheelContent: { paddingVertical: 72, flexGrow: 1 }, wheelDivider: { width: StyleSheet.hairlineWidth, backgroundColor: '#E8E8EC', marginVertical: 25 }, wheelOption: { minHeight: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 10 }, wheelOptionSelected: { backgroundColor: '#EAF4FF' }, wheelText: { color: '#6A6A70', fontSize: 16 }, wheelTextSelected: { color: '#1874B8', fontWeight: '700' },
+  root: { flex: 1, backgroundColor: '#FFFFFF' }, header: { paddingHorizontal: 18, paddingTop: 8, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, heading: { fontSize: 24, fontWeight: '700', color: '#183431' }, subheading: { fontSize: 12, color: '#74747B', marginTop: 2 }, headerIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F0F4F3', alignItems: 'center', justifyContent: 'center' }, searchLayer: { paddingHorizontal: 16, zIndex: 4 }, searchBox: { minHeight: 46, borderRadius: 14, backgroundColor: '#F4F5F6', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8 }, searchInput: { flex: 1, fontSize: 16, color: '#1D1D21', paddingVertical: 9 }, results: { marginTop: 6, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, resultRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 10, gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E7E8EA' }, resultCopy: { flex: 1 }, resultTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, resultName: { color: '#1B1B1D', fontSize: 14, fontWeight: '600', flexShrink: 1 }, resultAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, savedTag: { backgroundColor: '#E9F3FF', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }, savedTagText: { color: '#2F78B4', fontSize: 10, fontWeight: '700' }, addResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF' }, pinPopup: { marginHorizontal: 16, marginTop: 10, borderRadius: 14, backgroundColor: '#FFFFFF', padding: 12, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, pinName: { color: '#19191B', fontSize: 14, fontWeight: '700' }, pinAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, pinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }, addedPill: { flexDirection: 'row', gap: 3, alignItems: 'center', backgroundColor: '#FFF0E6', borderRadius: 13, paddingHorizontal: 9, paddingVertical: 6 }, addedPillText: { color: '#B5551B', fontSize: 11, fontWeight: '700' }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 7 }, listHeading: { color: '#1A1A1C', fontSize: 18, fontWeight: '700' }, routeButton: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 34, paddingHorizontal: 10, borderWidth: 1, borderColor: '#B7D8D2', borderRadius: 10, backgroundColor: '#FFFFFF' }, routeButtonActive: { backgroundColor: '#0F766E', borderColor: '#0F766E' }, routeButtonText: { color: '#0F766E', fontSize: 12, fontWeight: '700' }, routeButtonTextActive: { color: '#FFF' }, timeTags: { paddingHorizontal: 16, paddingBottom: 5, gap: 6 }, routeTimeTag: { borderRadius: 12, backgroundColor: '#F2F5F7', paddingHorizontal: 9, paddingVertical: 5 }, routeTimeTagText: { color: '#53616B', fontSize: 11, fontWeight: '600' }, emptyList: { flex: 1, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 8 }, emptyText: { color: '#71827F', fontSize: 14, lineHeight: 20, maxWidth: 260 }, focusSection: { marginTop: 18, flexDirection: 'row', gap: 10, height: 122 }, focusList: { flex: 1 }, focusListContent: { gap: 8, paddingBottom: 4 }, focusRow: { minHeight: 64, padding: 8, borderRadius: 14, backgroundColor: '#F6F8F7', flexDirection: 'row', alignItems: 'center', gap: 10 }, focusText: { color: '#274845', fontSize: 14, fontWeight: '700', flexShrink: 1 }, focusRail: { width: 23, borderRadius: 12, backgroundColor: '#EFF1F2', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 6 }, focusRailPaused: { backgroundColor: '#E0EDF7' }, focusRailThumb: { width: 4, height: 30, borderRadius: 2, backgroundColor: '#94B1C5' }, list: { flex: 1, paddingHorizontal: 15 }, listContent: { paddingBottom: 10 }, timeTag: { alignSelf: 'flex-start', borderRadius: 10, backgroundColor: '#EAF4FF', paddingHorizontal: 9, paddingVertical: 4, marginBottom: 5 }, timeTagText: { color: '#3179B7', fontSize: 11, fontWeight: '700' }, dividerAdd: { height: 19, alignItems: 'center', justifyContent: 'center' }, swipeShell: { marginBottom: 1, overflow: 'hidden', borderRadius: 14 }, deleteReveal: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 63, backgroundColor: '#E05252', borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, deleteHidden: { opacity: 0 }, item: { minHeight: 70, padding: 9, borderRadius: 14, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, itemImage: { width: 50, height: 50, borderRadius: 11, backgroundColor: '#E9EEF2' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, itemCopy: { flex: 1, minWidth: 0 }, itemName: { fontSize: 14, fontWeight: '700', color: '#212124' }, itemAddress: { fontSize: 12, color: '#85858C', marginTop: 2 }, itemNote: { color: '#48708C', fontSize: 11, lineHeight: 15, marginTop: 4, fontStyle: 'italic' }, noteButton: { width: 40, height: 30, borderRadius: 9, backgroundColor: '#EEF6FD' }, dragHandle: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, footer: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#DDE7E5', backgroundColor: '#FFFFFF' }, secondarySave: { flex: 0.82, height: 48, borderRadius: 12, backgroundColor: '#EDF2F1', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, secondarySaveText: { color: '#1F3938', fontSize: 14, fontWeight: '700' }, primarySave: { flex: 1.45, height: 48, borderRadius: 12, backgroundColor: '#0F766E', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, primarySaveText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.28)' }, modalSheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFF', paddingBottom: 28 }, modalHeader: { minHeight: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5E8' }, modalCancel: { color: '#6D6D73', fontSize: 16 }, modalTitle: { color: '#1D1D20', fontSize: 16, fontWeight: '700', textAlign: 'center' }, modalSubtitle: { color: '#85858C', fontSize: 11, textAlign: 'center', marginTop: 2 }, modalSave: { color: '#007AFF', fontSize: 16, fontWeight: '700' }, wheels: { height: 236, flexDirection: 'row', paddingHorizontal: 30 }, wheelContent: { paddingVertical: 72, flexGrow: 1 }, wheelDivider: { width: StyleSheet.hairlineWidth, backgroundColor: '#E8E8EC', marginVertical: 25 }, wheelOption: { minHeight: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 10 }, wheelOptionSelected: { backgroundColor: '#EAF4FF' }, wheelText: { color: '#6A6A70', fontSize: 16 }, wheelTextSelected: { color: '#1874B8', fontWeight: '700' },
 });

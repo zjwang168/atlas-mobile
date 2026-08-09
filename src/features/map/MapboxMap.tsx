@@ -1,7 +1,7 @@
 import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Animated, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Reanimated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -52,9 +52,11 @@ interface MapboxMapProps {
 // Small ease applied to every live padding update so the map visibly trails
 // the panel edge by a beat instead of snapping to it 1:1 every frame.
 const PADDING_FOLLOW_DURATION_MS = 300;
-// Labels become useful at a city or compact-state scale. This is based on the
-// visible geographic footprint, not an arbitrary Mapbox zoom number.
-const LABEL_MAX_VIEWPORT_KM = 360;
+// Labels remain useful across a compact country or a large US state. This is
+// based on the visible geographic footprint, not an arbitrary Mapbox zoom.
+const LABEL_MAX_VIEWPORT_KM = 1900;
+const MARKER_COLLISION_PADDING = 2;
+const LABEL_POINT_CLEARANCE = 4;
 
 type MapViewport = {
   center: [number, number];
@@ -62,6 +64,15 @@ type MapViewport = {
   bounds?: { ne: [number, number]; sw: [number, number] };
 };
 type ScreenRect = { left: number; top: number; right: number; bottom: number };
+type ScreenMarker = { marker: MapMarker; x: number; y: number; dotRect: ScreenRect };
+type LabelOwnerGroups = Map<string, ScreenMarker[]>;
+type CameraState = {
+  properties: {
+    center: GeoJSON.Position;
+    zoom: number;
+    bounds: { ne: GeoJSON.Position; sw: GeoJSON.Position };
+  };
+};
 
 function projectToWorld([longitude, latitude]: [number, number], zoom: number): [number, number] {
   const worldSize = 512 * 2 ** zoom;
@@ -77,8 +88,14 @@ function overlaps(a: ScreenRect, b: ScreenRect): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
+function expandRect(rect: ScreenRect, padding: number): ScreenRect {
+  return { left: rect.left - padding, top: rect.top - padding, right: rect.right + padding, bottom: rect.bottom + padding };
+}
+
 function labelWidthForTitle(title: string): number {
-  return Math.min(196, Math.max(72, title.length * 7.4 + 20));
+  // Keep long place names readable without letting one label consume an
+  // entire city view. The text still ellipsizes inside this stable width.
+  return Math.min(176, Math.max(72, title.length * 7.1 + 20));
 }
 
 function viewportIsLocal(viewport: MapViewport): boolean {
@@ -91,49 +108,172 @@ function viewportIsLocal(viewport: MapViewport): boolean {
   return Math.max(latitudeSpanKm, longitudeSpanKm) <= LABEL_MAX_VIEWPORT_KM;
 }
 
-/**
- * Labels are emitted only if their estimated screen rectangle clears every
- * visible marker and every label accepted earlier in this pass. This keeps a
- * dense area quiet until the user has zoomed far enough into it.
- */
-function visibleLabelIds(markers: MapMarker[], viewport: MapViewport, width: number, height: number, selectedMarkerId?: string | null, popupMarkerId?: string | null): Set<string> {
-  if (!viewportIsLocal(viewport)) return new Set();
+function viewportFromCamera(state: CameraState): MapViewport {
+  const [longitude, latitude] = state.properties.center;
+  return {
+    center: [longitude, latitude],
+    zoom: state.properties.zoom,
+    bounds: {
+      ne: [state.properties.bounds.ne[0], state.properties.bounds.ne[1]],
+      sw: [state.properties.bounds.sw[0], state.properties.bounds.sw[1]],
+    },
+  };
+}
+
+function screenMarkers(markers: MapMarker[], viewport: MapViewport, width: number, height: number): ScreenMarker[] {
+  if (!viewport.bounds) return [];
   const center = projectToWorld(viewport.center, viewport.zoom);
-  const pointRects = markers.map((marker) => {
+  return markers.map((marker) => {
     const point = projectToWorld([marker.longitude, marker.latitude], viewport.zoom);
     const x = point[0] - center[0] + width / 2;
     const y = point[1] - center[1] + height / 2;
-    return { id: marker.id, x, y, rect: { left: x - 18, top: y - 18, right: x + 18, bottom: y + 18 } };
-  }).filter((point) => point.x >= -24 && point.x <= width + 24 && point.y >= -24 && point.y <= height + 24);
-  const accepted: ScreenRect[] = [];
-  const visible = new Set<string>();
-  const priority = [...pointRects].sort((a, b) => Number(b.id === selectedMarkerId) - Number(a.id === selectedMarkerId));
-  for (const point of priority) {
-    const marker = markers.find((entry) => entry.id === point.id);
-    if (!marker?.title || marker.id === popupMarkerId) continue;
-    const labelWidth = labelWidthForTitle(marker.title);
-    const label: ScreenRect = { left: point.x - labelWidth / 2, right: point.x + labelWidth / 2, top: point.y - 43, bottom: point.y - 21 };
-    if (label.left < 8 || label.right > width - 8 || label.top < 8) continue;
-    if (pointRects.some((other) => other.id !== point.id && overlaps(label, other.rect))) continue;
-    if (accepted.some((other) => overlaps(label, other))) continue;
-    accepted.push(label);
-    visible.add(marker.id);
+    return { marker, x, y, dotRect: { left: x - 10, top: y - 10, right: x + 10, bottom: y + 10 } };
+  }).filter((point) => point.x >= -12 && point.x <= width + 12 && point.y >= -12 && point.y <= height + 12);
+}
+
+/** Pick one label owner for each connected visual dot collision group. */
+function labelOwnerPoints(points: ScreenMarker[], width: number, height: number, selectedMarkerId?: string | null, deletingMarkerId?: string | null, popupMarkerId?: string | null): LabelOwnerGroups {
+  const candidates = [...points].sort((a, b) => {
+    const score = (point: ScreenMarker) =>
+      (point.marker.id === popupMarkerId ? 3000 : 0) +
+      (point.marker.id === selectedMarkerId ? 2000 : 0) +
+      (point.marker.id === deletingMarkerId ? 1000 : 0) +
+      (point.marker.tone === 'focused' ? 800 : 0) +
+      (point.marker.tone === 'atlas' ? 700 : 0);
+    return score(b) - score(a) ||
+      Math.abs(a.x - width / 2) + Math.abs(a.y - height / 2) - (Math.abs(b.x - width / 2) + Math.abs(b.y - height / 2)) ||
+      a.y - b.y || a.x - b.x || a.marker.id.localeCompare(b.marker.id);
+  });
+  const groups: ScreenMarker[][] = [];
+  for (const candidate of candidates) {
+    const matchingGroups = groups.filter((group) => group.some((member) =>
+      overlaps(expandRect(candidate.dotRect, MARKER_COLLISION_PADDING), expandRect(member.dotRect, MARKER_COLLISION_PADDING)),
+    ));
+    if (matchingGroups.length === 0) {
+      groups.push([candidate]);
+      continue;
+    }
+    const primaryGroup = matchingGroups[0];
+    primaryGroup.push(candidate);
+    for (const matchingGroup of matchingGroups.slice(1)) {
+      primaryGroup.push(...matchingGroup);
+      const index = groups.indexOf(matchingGroup);
+      if (index >= 0) groups.splice(index, 1);
+    }
   }
+  const visible: LabelOwnerGroups = new Map();
+  groups.forEach((group) => {
+    const representative = group[0];
+    visible.set(representative.marker.id, group);
+  });
   return visible;
 }
 
-function MarkerDot({ selected, deleting, tone = 'saved', order }: { selected: boolean; deleting: boolean; tone?: MapMarker['tone']; order?: number }) {
+/** Labels stay above their marker; label-to-label overlap remains permitted. */
+function visibleLabelIds(
+  labelOwners: ReadonlyMap<string, ScreenMarker[]>,
+  viewport: MapViewport,
+  width: number,
+  height: number,
+  popupMarkerId?: string | null,
+  selectedMarkerId?: string | null,
+): Set<string> {
+  if (!viewportIsLocal(viewport)) return new Set();
+  const labels = new Set<string>();
+  const representatives = new Map(Array.from(labelOwners.entries()).map(([id, group]) => [id, group[0]]));
+  for (const [id, point] of representatives) {
+    const title = point.marker.title;
+    if (!title || id === popupMarkerId || point.x < 0 || point.x > width || point.y < 0 || point.y > height) continue;
+    const labelWidth = labelWidthForTitle(title);
+    const labelRect = { left: point.x - labelWidth / 2, right: point.x + labelWidth / 2, top: point.y - 47, bottom: point.y - 25 };
+    const group = labelOwners.get(id) ?? [];
+    if (labelRect.left < 0 || labelRect.right > width || labelRect.top < 0 || labelRect.bottom > height) continue;
+    if (Array.from(representatives.values()).some((other) => other.marker.id !== id && overlaps(labelRect, expandRect(other.dotRect, LABEL_POINT_CLEARANCE)))) continue;
+    group.forEach((member) => labels.add(member.marker.id));
+  }
+  // A point the user deliberately tapped must always retain its identifying
+  // label, even when its normal collision candidate would be rejected.
+  const selected = Array.from(labelOwners.values()).flat().find((point) => point.marker.id === selectedMarkerId);
+  if (selected?.marker.title && selected.marker.id !== popupMarkerId) labels.add(selected.marker.id);
+  return labels;
+}
+
+function MarkerLabel({
+  title,
+  visible,
+  selected,
+}: {
+  title: string;
+  visible: boolean;
+  selected: boolean;
+}) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const animationRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    animationRef.current?.stop();
+    animationRef.current = Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: visible ? 175 : 130, useNativeDriver: true });
+    animationRef.current.start();
+    return () => animationRef.current?.stop();
+  }, [opacity, visible]);
+
+  const width = labelWidthForTitle(title);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.markerLabel,
+        selected && styles.markerLabelSelected,
+        { width, marginLeft: -width / 2, opacity: selected ? 1 : opacity },
+      ]}
+    >
+      <View style={styles.markerLabelContent}>
+        <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+function MarkerDot({
+  selected,
+  deleting,
+  tone = 'saved',
+  order,
+  hasActiveSelection,
+}: {
+  selected: boolean;
+  deleting: boolean;
+  tone?: MapMarker['tone'];
+  order?: number;
+  hasActiveSelection: boolean;
+}) {
   const exit = useSharedValue(0);
+  const selectedProgress = useSharedValue(selected || tone === 'focused' ? 1 : 0);
   useEffect(() => {
     exit.value = deleting ? withTiming(1, { duration: 440 }) : withTiming(0, { duration: 160 });
   }, [deleting, exit]);
+  useEffect(() => {
+    const isFocused = selected || tone === 'focused';
+    // Switching directly from one point to another should never leave two
+    // green pins on screen. Only a true deselect animates the outgoing pin.
+    const duration = isFocused ? 140 : hasActiveSelection ? 0 : 220;
+    selectedProgress.value = withTiming(isFocused ? 1 : 0, { duration });
+  }, [hasActiveSelection, selected, selectedProgress, tone]);
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: 1 - exit.value,
-    backgroundColor: interpolateColor(exit.value, [0, 1], [tone === 'atlas' ? '#E77B32' : selected || tone === 'focused' ? '#12C170' : '#007AFF', '#DC2626']),
-    transform: [{ scale: 1 - exit.value * 0.76 }],
+    backgroundColor: interpolateColor(
+      exit.value,
+      [0, 1],
+      [
+        interpolateColor(selectedProgress.value, [0, 1], [tone === 'atlas' ? '#E77B32' : '#007AFF', tone === 'atlas' ? '#E77B32' : '#12C170']),
+        '#DC2626',
+      ],
+    ),
+    transform: [{ scale: (1 + selectedProgress.value * 0.5) * (1 - exit.value * 0.76) }],
   }));
   return (
-    <Reanimated.View style={[styles.marker, (selected || tone === 'focused') && styles.markerSelected, tone === 'atlas' && styles.markerAtlas, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
+    <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
       {order ? <Text style={styles.markerOrder}>{order}</Text> : null}
     </Reanimated.View>
   );
@@ -169,6 +309,12 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   markerPopup,
 }, ref) {
   const displayMarkers = routeMarkers ?? markers;
+  const renderedMarkers = useMemo(
+    () => selectedMarkerId
+      ? [...displayMarkers].sort((a, b) => Number(a.id === selectedMarkerId) - Number(b.id === selectedMarkerId))
+      : displayMarkers,
+    [displayMarkers, selectedMarkerId],
+  );
   const { width, height } = useWindowDimensions();
   const { top: safeTop } = useSafeAreaInsets();
   // Position compass just below the RightNav pill (safeTop + 8 offset + 92px pill height + 12px gap)
@@ -177,10 +323,53 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewport>({ center: centerCoordinate, zoom: zoomLevel });
-  const labelIds = useMemo(
-    () => visibleLabelIds(displayMarkers, viewport, width, height, selectedMarkerId, markerPopup?.markerId),
-    [displayMarkers, height, markerPopup?.markerId, selectedMarkerId, viewport, width],
+  const pendingViewportRef = useRef<MapViewport | null>(null);
+  const cameraFrameRef = useRef<number | null>(null);
+  const lastCameraStateKeyRef = useRef<string | null>(null);
+  const markerPressTimestampRef = useRef(0);
+  const screenMarkerPoints = useMemo(
+    () => screenMarkers(displayMarkers, viewport, width, height),
+    [displayMarkers, height, viewport, width],
   );
+  const labelOwnerMarkerPoints = useMemo(
+    () => labelOwnerPoints(screenMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
+    [deletingMarkerId, height, markerPopup?.markerId, screenMarkerPoints, selectedMarkerId, width],
+  );
+  const labelIds = useMemo(
+    () => visibleLabelIds(labelOwnerMarkerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
+    [height, labelOwnerMarkerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
+  );
+
+  const handleMapPress = () => {
+    if (Date.now() - markerPressTimestampRef.current < 180) return;
+    onMapPress?.();
+  };
+
+  const queueViewportUpdate = (state: CameraState) => {
+    const nextViewport = viewportFromCamera(state);
+    // Mapbox can send duplicate camera events after an idle render. Ignore
+    // them so the exact-coordinate cache cannot oscillate with its fallback.
+    const nextCameraStateKey = [
+      ...nextViewport.center.map((value) => value.toFixed(5)),
+      nextViewport.zoom.toFixed(3),
+      ...(nextViewport.bounds ? [...nextViewport.bounds.ne, ...nextViewport.bounds.sw].map((value) => value.toFixed(4)) : []),
+    ].join(':');
+    if (nextCameraStateKey === lastCameraStateKeyRef.current) return;
+    lastCameraStateKeyRef.current = nextCameraStateKey;
+    pendingViewportRef.current = nextViewport;
+    if (cameraFrameRef.current !== null) return;
+    cameraFrameRef.current = requestAnimationFrame(() => {
+      cameraFrameRef.current = null;
+      const next = pendingViewportRef.current;
+      if (!next) return;
+      pendingViewportRef.current = null;
+      setViewport(next);
+    });
+  };
+
+  useEffect(() => () => {
+    if (cameraFrameRef.current !== null) cancelAnimationFrame(cameraFrameRef.current);
+  }, []);
 
   useEffect(() => {
     try {
@@ -200,11 +389,22 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const prevPaddingRef = useRef(padding);
   const previousBoundsRef = useRef<string | null>(null);
   useEffect(() => {
-    const nextBounds = bounds ? `${bounds.ne.join(',')}:${bounds.sw.join(',')}` : null;
-    if (!nextBounds || nextBounds === previousBoundsRef.current) return;
+    if (!bounds) {
+      previousBoundsRef.current = null;
+      return;
+    }
+    if (!isReady) return;
+    const nextBounds = `${bounds.ne.join(',')}:${bounds.sw.join(',')}:padding-${padding?.paddingTop ?? 0},${padding?.paddingRight ?? 0},${padding?.paddingBottom ?? 0},${padding?.paddingLeft ?? 0}`;
+    if (nextBounds === previousBoundsRef.current) return;
     previousBoundsRef.current = nextBounds;
-    cameraRef.current?.fitBounds(bounds!.ne, bounds!.sw, [48, 24, 330, 24], cameraAnimationDurationMs);
-  }, [bounds, cameraAnimationDurationMs, isReady]);
+    const fitPadding: [number, number, number, number] = [
+      Math.max(48, padding?.paddingTop ?? 0),
+      Math.max(24, padding?.paddingRight ?? 0),
+      Math.max(24, padding?.paddingBottom ?? 0),
+      Math.max(24, padding?.paddingLeft ?? 0),
+    ];
+    cameraRef.current?.fitBounds(bounds.ne, bounds.sw, fitPadding, cameraAnimationDurationMs);
+  }, [bounds, cameraAnimationDurationMs, isReady, padding]);
   useEffect(() => {
     const [lng, lat] = centerCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;
@@ -282,18 +482,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         logoEnabled={false}
         attributionEnabled={false}
         scaleBarEnabled={false}
-        onPress={onMapPress}
-        onMapIdle={(state) => {
-          const [longitude, latitude] = state.properties.center;
-          setViewport({
-            center: [longitude, latitude],
-            zoom: state.properties.zoom,
-            bounds: {
-              ne: [state.properties.bounds.ne[0], state.properties.bounds.ne[1]],
-              sw: [state.properties.bounds.sw[0], state.properties.bounds.sw[1]],
-            },
-          });
-        }}
+        onPress={handleMapPress}
+        onCameraChanged={queueViewportUpdate}
+        onMapIdle={queueViewportUpdate}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -315,14 +506,41 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
           </MapboxGL.ShapeSource>
         )}
 
-        {displayMarkers.map((marker) => (
+        {renderedMarkers.map((marker) => (
           <MapboxGL.MarkerView
-            key={marker.id}
+            // MarkerView does not reliably re-evaluate native collision after
+            // allowOverlap changes. Remount only the marker whose focused
+            // state changed so a deselected green pin immediately returns to
+            // the normal blue-pin collision set without requiring a pan/zoom.
+            key={`${marker.id}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
+            style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected]}
+            // A focused point is an explicit user choice. Let its annotation
+            // render above nearby markers so its mandatory label cannot be
+            // discarded by native collision handling.
+            allowOverlap={selectedMarkerId === marker.id}
           >
-            <View style={styles.markerContainer} onTouchEnd={() => onMarkerPress?.(marker)}>
-              <MarkerDot selected={selectedMarkerId === marker.id} deleting={deletingMarkerId === marker.id} tone={marker.tone} order={marker.order} />
-              {labelIds.has(marker.id) && marker.title ? <View pointerEvents="none" style={[styles.markerLabel, { width: labelWidthForTitle(marker.title), marginLeft: -labelWidthForTitle(marker.title) / 2 }]}><Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{marker.title}</Text></View> : null}
+            <View
+              style={styles.markerContainer}
+              onTouchEnd={() => {
+                markerPressTimestampRef.current = Date.now();
+                onMarkerPress?.(marker);
+              }}
+            >
+              <MarkerDot
+                selected={selectedMarkerId === marker.id}
+                deleting={deletingMarkerId === marker.id}
+                tone={marker.tone}
+                order={marker.order}
+                hasActiveSelection={Boolean(selectedMarkerId)}
+              />
+              {marker.title ? (
+                <MarkerLabel
+                  title={marker.title}
+                  visible={selectedMarkerId === marker.id || labelIds.has(marker.id)}
+                  selected={selectedMarkerId === marker.id}
+                />
+              ) : null}
               {markerPopup?.markerId === marker.id ? <View style={styles.markerPopup}>{markerPopup.content}</View> : null}
             </View>
           </MapboxGL.MarkerView>
@@ -345,6 +563,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  markerAnnotation: {
+    width: 20,
+    height: 20,
+  },
+  markerAnnotationSelected: {
+    zIndex: 100,
+    elevation: 100,
+  },
   markerPopup: {
     position: 'absolute',
     top: 29,
@@ -354,26 +580,39 @@ const styles = StyleSheet.create({
   },
   markerLabel: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 28,
     left: '50%',
+    borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.94)',
+    backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(15,23,42,0.12)',
+    borderColor: 'rgba(15,23,42,0.24)',
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.13,
-    shadowRadius: 4,
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
     elevation: 3,
   },
+  markerLabelSelected: {
+    bottom: 33,
+    zIndex: 100,
+    elevation: 100,
+  },
+  markerLabelContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+  },
   markerLabelText: {
+    flex: 1,
     color: '#1F2937',
     fontSize: 12,
     lineHeight: 14,
     fontWeight: '600',
     letterSpacing: 0,
+    textAlign: 'center',
   },
   marker: {
     width: 20,
@@ -389,6 +628,10 @@ const styles = StyleSheet.create({
     elevation: 5,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  markerSelectedLayer: {
+    zIndex: 100,
+    elevation: 100,
   },
   markerSelected: {
     width: 30,

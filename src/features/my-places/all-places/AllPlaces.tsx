@@ -7,10 +7,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, View, type ViewToken } from 'react-native';
 import Reanimated, { FadeInDown, FadeOutUp } from 'react-native-reanimated';
-import { PlaceCard } from './PlaceCard';
+import { PlaceCard, PLACE_CARD_ROW_HEIGHT } from './PlaceCard';
 
-/** Rows rendered per page — keeps the FlatList light as saved places grow. */
-const PAGE_SIZE = 20;
+const PLACE_CARD_SEPARATOR_HEIGHT = 25;
 
 type SortMode = 'recent' | 'location';
 
@@ -24,7 +23,7 @@ type AllPlacesProps = {
 
 function ItemSeparator() {
   return (
-    <View style={{ height: 1, backgroundColor: 'rgba(60,60,67,0.07)', marginHorizontal: 16, marginVertical: 12 }} />
+    <View style={styles.itemSeparator} />
   );
 }
 
@@ -95,11 +94,10 @@ function contextForPlace(place: SavedPlace | undefined, sortMode: SortMode): str
 
 function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated }: AllPlacesProps) {
   const [refreshing, setRefreshing] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [activeContext, setActiveContext] = useState('Recently added');
-  const { deleteSavedPlace, refreshSavedPlaces, savedPlaces, selectedPlaceId, userLocation } = useHome();
+  const { deleteSavedPlace, refreshSavedPlaces, savedPlaces, savedPlacesLoaded, selectedPlaceId, userLocation } = useHome();
   const listRef = useRef<FlatList<SavedPlace>>(null);
   const contextByIdRef = useRef(new Map<string, string>());
 
@@ -120,31 +118,23 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
   }, [sortedRows, sortMode]);
 
   useEffect(() => {
-    if (!selectedPlaceId) return;
+    if (!savedPlacesLoaded || !selectedPlaceId) return;
     const index = sortedRows.findIndex((place) => place.id === selectedPlaceId);
     if (index < 0) return;
-    setVisibleCount((current) => Math.max(current, index + 1));
-    const frame = requestAnimationFrame(() => {
+    const timeout = setTimeout(() => {
       listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.38 });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [selectedPlaceId, sortedRows]);
-
-  const visibleData = useMemo(() => sortedRows.slice(0, visibleCount), [sortedRows, visibleCount]);
+    }, 40);
+    return () => clearTimeout(timeout);
+  }, [savedPlacesLoaded, selectedPlaceId, sortedRows]);
 
   const handleDelete = useCallback((id: string) => {
     deleteSavedPlace(id);
   }, [deleteSavedPlace]);
 
-  const handleEndReached = useCallback(() => {
-    setVisibleCount((previous) => Math.min(previous + PAGE_SIZE, sortedRows.length));
-  }, [sortedRows.length]);
-
   const handleSortChange = useCallback((nextSortMode: SortMode) => {
     setSortMenuOpen(false);
     if (nextSortMode === sortMode) return;
     setSortMode(nextSortMode);
-    setVisibleCount(PAGE_SIZE);
     requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: true }));
   }, [sortMode]);
 
@@ -174,6 +164,14 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
 
   const keyExtractor = useCallback((item: SavedPlace) => item.id, []);
 
+  if (!savedPlacesLoaded) {
+    return (
+      <View style={styles.initializingState}>
+        <ActivityIndicator size="small" color="#16845B" />
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1 }}>
       <View style={styles.listToolbar}>
@@ -197,7 +195,7 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
 
       <FlatList
         ref={listRef}
-        data={visibleData}
+        data={sortedRows}
         keyExtractor={keyExtractor}
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: bottomInset + 20 }}
@@ -206,23 +204,15 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
         refreshing={refreshing}
         onRefresh={() => {
           setRefreshing(true);
-          setVisibleCount(PAGE_SIZE);
           refreshSavedPlaces().finally(() => setRefreshing(false));
         }}
-        onEndReached={handleEndReached}
-        onEndReachedThreshold={0.5}
         onViewableItemsChanged={handleViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
-        onScrollToIndexFailed={({ index }) => {
-          listRef.current?.scrollToOffset({ offset: Math.max(0, index * 118), animated: true });
-        }}
-        ListFooterComponent={
-          visibleData.length < sortedRows.length ? (
-            <View style={{ paddingVertical: 16 }}>
-              <ActivityIndicator />
-            </View>
-          ) : null
-        }
+        getItemLayout={(_, index) => ({
+          length: PLACE_CARD_ROW_HEIGHT + PLACE_CARD_SEPARATOR_HEIGHT,
+          offset: (PLACE_CARD_ROW_HEIGHT + PLACE_CARD_SEPARATOR_HEIGHT) * index,
+          index,
+        })}
         ListEmptyComponent={
           <View style={{ alignItems: 'center', paddingTop: 48, paddingHorizontal: 32 }}>
             <Text className="text-text-secondary" style={typography.bodySmall}>
@@ -230,9 +220,9 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
             </Text>
           </View>
         }
-        initialNumToRender={PAGE_SIZE}
-        maxToRenderPerBatch={PAGE_SIZE}
-        windowSize={7}
+        initialNumToRender={32}
+        maxToRenderPerBatch={32}
+        windowSize={17}
         ItemSeparatorComponent={ItemSeparator}
         renderItem={renderItem}
         showsVerticalScrollIndicator
@@ -261,6 +251,17 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
 }
 
 const styles = StyleSheet.create({
+  initializingState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemSeparator: {
+    height: PLACE_CARD_SEPARATOR_HEIGHT,
+    marginHorizontal: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(60,60,67,0.07)',
+  },
   listToolbar: {
     paddingHorizontal: 16,
     paddingBottom: 12,
