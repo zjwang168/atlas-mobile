@@ -6,6 +6,7 @@ import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import { discoverAtlasPlaces, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
 import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
+import { decodeAtlasPlaceMetadata, encodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
 import { createSearchSession, isAbortError, resolvePlace, suggestPlaces } from '@/services/place/placeSearchService';
 import type { SavedPlace } from '@/services/place/placeService';
@@ -43,7 +44,7 @@ export type DraftPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude
   joinId?: string;
 };
 
-type TransportMode = 'walk' | 'bike' | 'drive' | 'taxi' | 'bus' | 'coach' | 'subway' | 'train' | 'ferry' | 'flight';
+type TransportMode = AtlasTransportMode;
 
 const TRANSPORT_OPTIONS: Array<{ mode: TransportMode; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
   { mode: 'walk', label: 'Walk', icon: 'walk-outline' },
@@ -138,6 +139,7 @@ const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\
 const timeRank = (day: number, time: string) => day * 24 + Math.max(0, PLANNING_HOURS.indexOf(time) + 7);
 
 function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
+  const metadata = decodeAtlasPlaceMetadata(row?.note);
   return {
     id: place.id,
     name: place.name,
@@ -150,9 +152,10 @@ function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
     country: place.country,
     category: place.category,
     source: 'saved',
-    note: row?.note,
+    note: metadata.note,
     timeline_day: row?.timeline_day,
     timeline_time: row?.timeline_time,
+    transport: metadata.transport,
     joinId: row?.id,
   };
 }
@@ -160,6 +163,7 @@ function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
 function toDraftFromRow(row: AtlasPlace, saved?: SavedPlace): DraftPlace | null {
   if (saved) return toDraft(saved, row);
   if (row.latitude == null || row.longitude == null || !row.place_name) return null;
+  const metadata = decodeAtlasPlaceMetadata(row.note);
   return {
     id: row.external_place_id ?? row.id,
     name: row.place_name,
@@ -172,9 +176,10 @@ function toDraftFromRow(row: AtlasPlace, saved?: SavedPlace): DraftPlace | null 
     country: row.country ?? null,
     category: null,
     source: 'search',
-    note: row.note,
+    note: metadata.note,
     timeline_day: row.timeline_day,
     timeline_time: row.timeline_time,
+    transport: metadata.transport,
     joinId: row.id,
   };
 }
@@ -743,6 +748,16 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setTimeModalIndex(null);
   }, [commitItems, items, pendingDay, pendingTime, showTimeConflict, timeModalIndex]);
 
+  const saveTransport = useCallback((transport: TransportMode | null) => {
+    if (transportModalIndex === null) return;
+    const current = items[transportModalIndex];
+    commitItems(items.map((item, index) => index === transportModalIndex ? { ...item, transport } : item));
+    if (current?.joinId) {
+      updateAtlasPlace(current.joinId, { note: encodeAtlasPlaceMetadata(current.note, transport) }).catch(console.warn);
+    }
+    setTransportModalIndex(null);
+  }, [commitItems, items, transportModalIndex]);
+
   const generateRoute = useCallback(async () => {
     if (route) {
       setRoute(null);
@@ -795,7 +810,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       const joins = new Map([...existingRows, ...savedRows, ...ownedRows].map((row) => [row.place_id ?? row.external_place_id, row]));
       await Promise.all(items.map((item, index) => {
         const join = item.joinId ? { id: item.joinId } : joins.get(item.id);
-        return join ? updateAtlasPlace(join.id, { sort_order: index, note: item.note ?? null, timeline_day: item.timeline_day ?? null, timeline_time: item.timeline_time ?? null }) : Promise.resolve();
+        return join ? updateAtlasPlace(join.id, { sort_order: index, note: encodeAtlasPlaceMetadata(item.note, item.transport), timeline_day: item.timeline_day ?? null, timeline_time: item.timeline_time ?? null }) : Promise.resolve();
       }));
       await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
       onSaved(atlas.id, askAI);
@@ -916,13 +931,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
             {!item.timeline_day || !item.timeline_time ? <TimeInsert onPress={() => openTimePicker(index)} /> : <TouchableOpacity accessibilityLabel="Edit scheduled time" onPress={() => openTimePicker(index)} style={styles.timeTagInline}><Text style={styles.timeTagText}>Day {item.timeline_day} · {item.timeline_time}</Text></TouchableOpacity>}
             <TransportInsert mode={item.transport ?? null} onPress={() => setTransportModalIndex(index)} />
           </View>
-          <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNote={(note) => { commitItems(items.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note }).catch(console.warn); }} />
+          <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNote={(note) => { commitItems(items.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note: encodeAtlasPlaceMetadata(note, item.transport) }).catch(console.warn); }} />
         </View>)}
       </ScrollView>}
 
       {items.length > 0 ? <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#1F3938" /> : <><Ionicons name="bookmark-outline" size={16} color="#1F3938" /><Text style={styles.secondarySaveText}>Save</Text></>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View> : null}
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} hasExisting={timeModalIndex !== null && Boolean(items[timeModalIndex]?.timeline_day && items[timeModalIndex]?.timeline_time)} validationMessage={timeConflictMessage} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => { setTimeConflictMessage(null); setTimeModalIndex(null); }} onRemove={() => { if (timeModalIndex === null) return; const existing = items[timeModalIndex]; commitItems(items.map((entry, index) => index === timeModalIndex ? { ...entry, timeline_day: null, timeline_time: null } : entry)); if (existing?.joinId) updateAtlasPlace(existing.joinId, { timeline_day: null, timeline_time: null }).catch(console.warn); setTimeModalIndex(null); }} onSave={saveTimeDivider} />
-      <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={(mode) => { if (transportModalIndex !== null) commitItems(items.map((entry, index) => index === transportModalIndex ? { ...entry, transport: mode } : entry)); setTransportModalIndex(null); }} onRemove={() => { if (transportModalIndex !== null) commitItems(items.map((entry, index) => index === transportModalIndex ? { ...entry, transport: null } : entry)); setTransportModalIndex(null); }} onClose={() => setTransportModalIndex(null)} />
+      <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={saveTransport} onRemove={() => saveTransport(null)} onClose={() => setTransportModalIndex(null)} />
       <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)} style={styles.headerIcon}><Ionicons name={focusSearchActive ? 'close' : 'chevron-back'} size={20} color="#26262A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>{focusSearchActive ? 'Choose an area' : 'Search results'}</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={!focusSearchActive && addingResult === key} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultAdd(result); }} style={focusSearchActive ? styles.focusResultButton : styles.addResultButton}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
     </View>
   );
@@ -950,12 +965,10 @@ function FocusAreas({ areas, onFocus, disabled, autoScroll = true }: { areas: Fo
       if (stoppedRef.current) return;
       const cycleHeight = areas.length > 1 ? contentHeightRef.current / 2 : contentHeightRef.current - viewportHeightRef.current;
       if (cycleHeight <= 8) return;
-      // Move enough on the first second to read as intentional motion. The
-      // previous 10px/s rate looked static until a full row had passed.
-      const nextOffset = offsetRef.current + 1.5;
+      const nextOffset = offsetRef.current + 0.72;
       offsetRef.current = nextOffset >= cycleHeight ? 0 : nextOffset;
       scrollRef.current?.scrollTo({ y: offsetRef.current, animated: false });
-    }, 45);
+    }, 70);
     return () => clearInterval(timer);
   }, [areas.length, autoScroll]);
 

@@ -5,6 +5,7 @@ import ContentPanel from '@/components/content-panel/ContentPanel';
 import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import AtlasBuilder from '@/features/my-plan/atlas-builder/AtlasBuilder';
+import { decodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
 import type { Atlas } from '@/types/atlas';
 import type { SavedPlace } from '@/services/place/placeService';
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
@@ -18,8 +19,21 @@ type AtlasDetailProps = {
 };
 
 type AtlasDisplayPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url'>;
-type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null };
+type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null; transport: AtlasTransportMode | null };
 type FocusBounds = { ne: [number, number]; sw: [number, number] };
+
+const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  walk: { label: 'Walk', icon: 'walk-outline' },
+  bike: { label: 'Bike', icon: 'bicycle-outline' },
+  drive: { label: 'Drive', icon: 'car-outline' },
+  taxi: { label: 'Taxi', icon: 'car-sport-outline' },
+  bus: { label: 'Bus', icon: 'bus-outline' },
+  coach: { label: 'Coach', icon: 'bus-outline' },
+  subway: { label: 'Subway', icon: 'train-outline' },
+  train: { label: 'Train', icon: 'train-outline' },
+  ferry: { label: 'Ferry', icon: 'boat-outline' },
+  flight: { label: 'Flight', icon: 'airplane-outline' },
+};
 
 function boundsFromFocusPolygon(items: ItineraryItem[]): FocusBounds | undefined {
   if (!items.length) return undefined;
@@ -72,7 +86,8 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
         longitude: row.longitude,
         photo_url: row.photo_url ?? null,
       } : null);
-      return place ? [{ place, rowId: row.id, note: row.note, day: row.timeline_day ?? null, time: row.timeline_time ?? null }] : [];
+      const metadata = decodeAtlasPlaceMetadata(row.note);
+      return place ? [{ place, rowId: row.id, note: metadata.note, day: row.timeline_day ?? null, time: row.timeline_time ?? null, transport: metadata.transport }] : [];
     });
   }, [atlasId, atlasPlaces, savedPlaces]);
 
@@ -109,8 +124,12 @@ function CompactAtlas({ atlas, onExpand, onDismiss }: { atlas: Atlas; onExpand: 
 }
 
 function ItineraryRow({ item, index, selected, onPress }: { item: ItineraryItem; index: number; selected: boolean; onPress: () => void }) {
+  const transport = item.transport ? TRANSPORT_PRESENTATION[item.transport] : null;
   return <View>
-    {item.day && item.time ? <View style={styles.dayMarker}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>Day {item.day} · {item.time}</Text></View> : null}
+    {item.day && item.time || transport ? <View style={styles.itineraryMetaRow}>
+      {item.day && item.time ? <View style={styles.dayMarker}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>Day {item.day} · {item.time}</Text></View> : null}
+      {transport ? <View style={styles.transportMarker}><Ionicons name={transport.icon} size={13} color="#64748B" /><Text style={styles.transportText}>{transport.label}</Text></View> : null}
+    </View> : null}
     <TouchableOpacity onPress={onPress} activeOpacity={0.76} style={[styles.row, selected && styles.rowSelected]}>
       <View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>
       {item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.image} /> : <View style={[styles.image, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}
@@ -120,5 +139,5 @@ function ItineraryRow({ item, index, selected, onPress }: { item: ItineraryItem;
 }
 
 const styles = StyleSheet.create({
-  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5, marginTop: 8, marginBottom: 4 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FFF4EC', borderWidth: 1, borderColor: '#F1B98E' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
+  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, itineraryMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, marginBottom: 4 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, transportMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F1F4F5', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, transportText: { color: '#53616B', fontSize: 11, fontWeight: '700' }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FFF4EC', borderWidth: 1, borderColor: '#F1B98E' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
 });

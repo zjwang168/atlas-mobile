@@ -49,7 +49,7 @@ export default function LeftNav({ onSearchPress, showScanButton = false }: LeftN
           style={buttonStyle}
         >
           <BlurView intensity={40} tint="light" style={blurStyle}>
-            <Ionicons name="qr-code-outline" size={23} color="#000" />
+            <Ionicons name="scan-outline" size={23} color="#000" />
           </BlurView>
         </TouchableOpacity>
       ) : null}
