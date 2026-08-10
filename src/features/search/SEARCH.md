@@ -36,5 +36,6 @@ type SearchPanelProps = {
 ## Related docs
 
 - [HOME.md](../home/HOME.md) — owns the `search` overlay kind that renders this panel
-- [SERVICES.md](../../services/SERVICES.md) — `placeSearchService` (session, filtering) and `placeService.savePlaces()`
+- [SERVICES.md](../../services/SERVICES.md) — `usePlaceSearch`, which owns everything on this page except the layout, plus the `placeSearchService` filtering rules behind it
+- [DISCOVER.md](../discover/DISCOVER.md) — the search row that opens this panel
 - [PLACE-SEARCH-SERVICE.md](../../../backend/services/place_search_service/PLACE-SEARCH-SERVICE.md) — the backend side

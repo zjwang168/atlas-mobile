@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -14,25 +14,13 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
-import {
-  createSearchSession,
-  isAbortError,
-  MIN_QUERY_LENGTH,
-  resolvePlace,
-  suggestPlaces,
-} from '@/services/place/placeSearchService';
-import { savePlaces } from '@/services/place/placeService';
+import { MIN_QUERY_LENGTH } from '@/services/place/placeSearchService';
+import { usePlaceSearch, type PlaceSaveOutcome } from '@/services/place/usePlaceSearch';
 import type { PlaceSuggestion } from '@/types/route';
 
 type SearchPanelProps = {
   onClose: () => void;
 };
-
-/** Long enough that a normal typing burst is one request, short enough that
-    the list still feels live. */
-const DEBOUNCE_MS = 300;
-
-type SearchStatus = 'idle' | 'searching' | 'ready' | 'error';
 
 function iconColor(scheme: ReturnType<typeof useColorScheme>): string {
   return scheme === 'dark' ? '#fafafa' : '#0a0a0a';
@@ -43,13 +31,9 @@ function formatDistance(metres: number | null | undefined): string | null {
   return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(1)} km`;
 }
 
-/** What a tap on a row turned out to do — `savePlaces()` can match an existing
-    place instead of creating one, and the row must not claim it saved something. */
-type RowOutcome = 'saved' | 'duplicate';
-
 type ResultRowProps = {
   suggestion: PlaceSuggestion;
-  outcome: RowOutcome | null;
+  outcome: PlaceSaveOutcome | null;
   saving: boolean;
   onPress: (suggestion: PlaceSuggestion) => void;
 };
@@ -114,81 +98,14 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
   const scheme = useColorScheme();
   const { userLocation, refreshSavedPlaces } = useHome();
 
-  const [query, setQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
-  const [status, setStatus] = useState<SearchStatus>('idle');
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [outcomes, setOutcomes] = useState<Record<string, RowOutcome>>({});
-
-  // One token for this panel's whole lifetime. Mapbox bills the search
-  // session, so every keystroke and the final retrieve must share it; opening
-  // the panel again is what starts a new session.
-  const sessionRef = useRef<string>(createSearchSession());
-  const inFlightRef = useRef<AbortController | null>(null);
+  // The session, debounce, cancellation, and save-outcome machinery all live in
+  // the hook — this component is the panel's presentation only.
+  const { query, setQuery, suggestions, status, savingId, outcomes, pick } = usePlaceSearch({
+    proximity: userLocation,
+    onSaved: refreshSavedPlaces,
+  });
 
   const trimmed = query.trim();
-
-  useEffect(() => {
-    if (trimmed.length < MIN_QUERY_LENGTH) {
-      inFlightRef.current?.abort();
-      setSuggestions([]);
-      setStatus('idle');
-      return;
-    }
-
-    setStatus('searching');
-    const timer = setTimeout(async () => {
-      // Cancel whatever the previous keystroke started: its results are stale
-      // and could otherwise land after these ones.
-      inFlightRef.current?.abort();
-      const controller = new AbortController();
-      inFlightRef.current = controller;
-
-      try {
-        const results = await suggestPlaces(
-          trimmed,
-          sessionRef.current,
-          { proximity: userLocation },
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        setSuggestions(results);
-        setStatus('ready');
-      } catch (error) {
-        if (isAbortError(error) || controller.signal.aborted) return;
-        console.warn('[SearchPanel] search failed:', error);
-        setSuggestions([]);
-        setStatus('error');
-      }
-    }, DEBOUNCE_MS);
-
-    return () => clearTimeout(timer);
-  }, [trimmed, userLocation]);
-
-  useEffect(() => () => inFlightRef.current?.abort(), []);
-
-  const handlePick = useCallback(
-    async (suggestion: PlaceSuggestion) => {
-      setSavingId(suggestion.external_id);
-      try {
-        const place = await resolvePlace(suggestion, sessionRef.current);
-        if (!place) throw new Error('Suggestion resolved to no place');
-        // An empty `inserted` means the dedup matched something already saved —
-        // the tap succeeded but created nothing, so don't claim it did.
-        const { inserted } = await savePlaces([place]);
-        await refreshSavedPlaces();
-        setOutcomes((current) => ({
-          ...current,
-          [suggestion.external_id]: inserted.length > 0 ? 'saved' : 'duplicate',
-        }));
-      } catch (error) {
-        console.warn('[SearchPanel] save failed:', error);
-      } finally {
-        setSavingId(null);
-      }
-    },
-    [refreshSavedPlaces],
-  );
 
   const renderItem = useCallback(
     ({ item }: { item: PlaceSuggestion }) => (
@@ -196,10 +113,10 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
         suggestion={item}
         outcome={outcomes[item.external_id] ?? null}
         saving={savingId === item.external_id}
-        onPress={handlePick}
+        onPress={pick}
       />
     ),
-    [handlePick, outcomes, savingId],
+    [pick, outcomes, savingId],
   );
 
   const keyExtractor = useCallback((item: PlaceSuggestion) => item.external_id, []);

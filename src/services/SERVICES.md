@@ -2,6 +2,8 @@
 
 All backend API calls and external integrations live here. Nothing in `src/features/` should call `fetch()` directly — go through a service.
 
+Every module here is a plain async API except one: `place/usePlaceSearch.ts` is a React hook. See that section for why the search session cannot be expressed as a stateless function.
+
 ## Active Services
 
 ### `api/apiService.ts`
@@ -91,6 +93,30 @@ export async function updatePlaceNote(id: string, note: string): Promise<void>  
 export function toPlaceDetail(row: SavedPlace): PlaceDetail
 export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string  // real photo if saved, else a generated Mapbox static-map pin for its coordinates; used by toPlaceDetail() and savePlan.ts's plan covers
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
+```
+
+### `place/usePlaceSearch.ts`
+
+A **React hook**, not a plain async API — the one such module here. It owns a search *session*: the functions in `placeSearchService` are stateless, but Mapbox bills a session rather than the keystrokes, so one token must span every request in a typing burst and be dropped when that burst ends. Only a component knows those boundaries, and more than one feature needs the same discipline — copying it is how one copy quietly starts billing per keystroke.
+
+Wraps `suggestPlaces` (debounced, each settled query cancelling whatever the previous one started) and, on pick, `resolvePlace` + `savePlaces()`, reporting whether the pick created a place or matched one already saved. Takes `proximity` and `onSaved` as arguments rather than reading `HomeContext` itself — a service importing a feature would invert the dependency the rest of `services/` keeps.
+
+```ts
+export type PlaceSearchStatus = 'idle' | 'searching' | 'ready' | 'error'
+export type PlaceSaveOutcome = 'saved' | 'duplicate'
+
+export function usePlaceSearch(options?: {
+  proximity?: [number, number];          // biases suggestions toward the user
+  onSaved?: () => void | Promise<void>;  // awaited after a save or dedup match, before the suggestion settles
+}): {
+  query: string;
+  setQuery: (query: string) => void;
+  suggestions: PlaceSuggestion[];
+  status: PlaceSearchStatus;
+  savingId: string | null;                     // external_id currently being resolved and saved
+  outcomes: Record<string, PlaceSaveOutcome>;  // keyed by external_id; absent until a pick settles
+  pick: (suggestion: PlaceSuggestion) => Promise<void>;
+}
 ```
 
 ### `atlas/atlasService.ts`
