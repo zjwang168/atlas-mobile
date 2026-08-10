@@ -1,5 +1,5 @@
 import type { SnapState } from '@/components/content-panel/ContentPanel';
-import { MapPinCover } from '@/components/map-pin-cover/MapPinCover';
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { SaveAffordance } from '@/components/save-affordance/SaveAffordance';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
@@ -113,7 +113,7 @@ const DiscoverPlaceCard = memo(function DiscoverPlaceCard({
             resizeMode="cover"
           />
         ) : (
-          <MapPinCover pinSize={22} />
+          <PlaceCover category={place.category} iconSize={22} />
         )}
       </View>
 
@@ -167,7 +167,7 @@ const SuggestionCard = memo(function SuggestionCard({
     >
       {/* A suggestion has no photo — one only exists once it is resolved. */}
       <View style={styles.cardThumbnail}>
-        <MapPinCover pinSize={22} />
+        <PlaceCover category={suggestion.category} iconSize={22} />
       </View>
 
       <View style={styles.cardContent}>

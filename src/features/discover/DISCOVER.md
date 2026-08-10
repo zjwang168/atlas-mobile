@@ -38,5 +38,6 @@ type DiscoverProps = {
 
 - [SERVICES.md](../../services/SERVICES.md) — `usePlaceSearch`, which owns the search behaviour described above
 - [SAVE-AFFORDANCE.md](../../components/save-affordance/SAVE-AFFORDANCE.md) — the trailing indicator on a suggestion card
+- [PLACE-COVER.md](../../components/place-cover/PLACE-COVER.md) — the category-coloured thumbnail a suggestion always gets, since suggestions carry no photo
 - [SEARCH.md](../search/SEARCH.md) — `SearchPanel`, the same search as a full-screen overlay
 - [HOME.md](../home/HOME.md) — passes `onSearchPress` down through `HomePanel`

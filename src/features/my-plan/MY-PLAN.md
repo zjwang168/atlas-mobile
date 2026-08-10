@@ -62,7 +62,7 @@ Grid cell for the `MyPlan` two-column `FlatList` — a normal plan card (thumbna
 type PlanCardProps = {
   title: string;
   placeCount: number;
-  imageUrl?: string;        // shown in the square thumbnail; falls back to MapPinCover (stylized map + pin) when absent
+  imageUrl?: string;        // shown in the square thumbnail; falls back to PlaceCover (neutral, since a plan has no category) when absent
   create?: boolean;         // renders the dashed-border "+" empty state instead
   deletionMode?: boolean;   // shows a close badge in the top-right corner
   onPress?: () => void;

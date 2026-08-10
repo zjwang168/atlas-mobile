@@ -1,4 +1,4 @@
-import { MapPinCover } from '@/components/map-pin-cover/MapPinCover';
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
@@ -231,7 +231,7 @@ const PlaceTile = memo(function PlaceTile({ place, onPress }: PlaceTileProps) {
               resizeMode="cover"
             />
           ) : (
-            <MapPinCover pinSize={28} />
+            <PlaceCover category={place.category} iconSize={28} />
           )}
           <View pointerEvents="none" style={styles.imageTint} />
           <CategoryChip category={place.category} />
@@ -287,7 +287,7 @@ const SavedPlaceListItem = memo(function SavedPlaceListItem({
               resizeMode="cover"
             />
           ) : (
-            <MapPinCover pinSize={22} />
+            <PlaceCover category={place.category} iconSize={22} />
           )}
         </View>
       </View>
