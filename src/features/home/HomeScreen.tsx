@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, Platform, StatusBar, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import TopNav from '../../components/top-nav/TopNav';
+import TopNav, { type TopMode } from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
@@ -25,7 +25,6 @@ import HomeTabBar, {
 } from './HomeTabBar';
 import SearchPanel from '../search/SearchPanel';
 import AccountModal from '../auth/AccountModal';
-import type { PlacesView } from '../my-places/MyPlaces';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
@@ -140,7 +139,7 @@ function HomeScreenContent({
   const pagerWidth = useMemo(() => Dimensions.get('window').width, []);
 
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
-  const [placesView, setPlacesView] = useState<PlacesView>('allPlaces');
+  const [topMode, setTopMode] = useState<TopMode>('saved');
   const [accountOpen, setAccountOpen] = useState(false);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
@@ -379,11 +378,10 @@ function HomeScreenContent({
 
       <TopBlurFade />
       <TopNav
-        onSearchPress={handleSearchPress}
         onNavigatePress={handleLocatePress}
-        placesView={placesView}
-        onPlacesViewChange={setPlacesView}
-        showPlacesMode={activeTab === TAB_PLACES}
+        topMode={topMode}
+        onTopModeChange={setTopMode}
+        showTopMode={activeTab === TAB_PLACES}
         onAvatarPress={handleAccountPress}
       />
 
@@ -402,7 +400,6 @@ function HomeScreenContent({
             {Platform.OS !== 'ios' ? (
               <HomePanel
                 activeTab={TAB_PLACES}
-                placesView={placesView}
                 snapGroup={HOME_PANEL_SNAP_GROUP}
                 visible={panelVisible && activeTab === TAB_PLACES}
                 onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
@@ -432,7 +429,7 @@ function HomeScreenContent({
       (activeTab === TAB_PLACES || activeTab === TAB_PLAN) ? (
         <HomePanel
           activeTab={activeTab}
-          placesView={placesView}
+          topMode={topMode}
           snapGroup={HOME_PANEL_SNAP_GROUP}
           visible={mainSheetVisible}
           onHeightChange={mainSheetVisible ? handlePanelHeightChange : undefined}

@@ -5,7 +5,7 @@ import {
 } from 'expo-glass-effect';
 import { BlurView } from 'expo-blur';
 import type { Icon } from 'phosphor-react-native';
-import { BookmarkSimpleIcon } from 'phosphor-react-native/src/icons/BookmarkSimple';
+import { MapPinLineIcon } from 'phosphor-react-native/src/icons/MapPinLine';
 import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
 import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
@@ -55,7 +55,7 @@ const TAB_ITEMS: TabItem[] = [
   {
     key: TAB_PLACES,
     label: 'My Places',
-    icon: BookmarkSimpleIcon,
+    icon: MapPinLineIcon,
   },
   {
     key: TAB_PLAN,
@@ -169,7 +169,13 @@ function HomeTabBar({
           <Animated.View
             pointerEvents="none"
             style={[styles.selector, selectorStyle]}
-          />
+          >
+            <BlurView
+              style={StyleSheet.absoluteFill}
+              tint="systemUltraThinMaterialLight"
+              intensity={40}
+            />
+          </Animated.View>
 
           {TAB_ITEMS.map((item) => {
             const selected = !item.action && item.key === activeTab;
@@ -245,7 +251,8 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 30,
     borderCurve: 'continuous',
-    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.08)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,

@@ -1,5 +1,6 @@
 import { memo, useCallback, type ReactNode } from 'react';
 import { Platform, View } from 'react-native';
+import type { TopMode } from '../../components/top-nav/TopNav';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place } from '../../types/place';
 import { type PlacesView } from '../my-places/MyPlaces';
@@ -12,6 +13,7 @@ const BOTTOM_BAR_CLEARANCE = 84;
 
 type HomePanelProps = {
   activeTab: string;
+  topMode?: TopMode;
   snapGroup?: string;
   visible: boolean;
   height?: number;
@@ -25,6 +27,7 @@ type HomePanelProps = {
 
 function HomePanel({
   activeTab,
+  topMode = 'saved',
   snapGroup,
   visible,
   height,
@@ -32,7 +35,7 @@ function HomePanel({
   maxHeight,
   onHeightChange,
   onDismissed,
-  placesView = 'allPlaces',
+  placesView = 'all',
   bottomBar,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
@@ -46,6 +49,7 @@ function HomePanel({
       <PlacesBottomSheet
         visible={visible}
         activeTab={activeTab}
+        topMode={topMode}
         snapGroup={snapGroup}
         activeView={placesView}
         onPlacePress={handlePlacePress}
@@ -61,6 +65,7 @@ function HomePanel({
       <PlacesBottomSheet
         visible={visible}
         activeTab={activeTab}
+        topMode={topMode}
         snapGroup={snapGroup}
         activeView={placesView}
         onPlacePress={handlePlacePress}
