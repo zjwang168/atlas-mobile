@@ -52,7 +52,7 @@ from pydantic import BaseModel
 from backend.services import progress
 from backend.services.conversation_manager import conversation_manager
 from backend.services.gemini_computer_use import extract_web_text
-from backend.services.place_image_service.place_image_service import enrich_response_with_photos, get_or_build_response
+from backend.services.place_image_service.place_image_service import enrich_locations_with_photos, enrich_response_with_photos, get_or_build_response
 from backend.services import place_search_service
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
@@ -721,6 +721,16 @@ async def places_retrieve(
 
     if not locations:
         raise HTTPException(status_code=404, detail="No place found for that id")
+
+    # Photo enrichment entry point 3: place search. Mapbox carries no imagery,
+    # so without this a place saved from search is the only one that lands with
+    # a null photo_url — every parse path already enriches before returning.
+    # Best-effort like the others: a photo failure must not fail the retrieve
+    # the user is waiting on to save.
+    try:
+        await enrich_locations_with_photos(locations)
+    except Exception as e:
+        print(f"[places_retrieve] photo enrichment failed, returning without photos: {e}")
 
     return PlaceRetrieveResponse(
         locations=[LocationItem(**item) for item in locations],

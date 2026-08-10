@@ -72,7 +72,7 @@ export function createSearchSession(): string   // hold one per typing session, 
 export function isAbortError(error: unknown): boolean
 
 export async function suggestPlaces(query: string, sessionToken: string, options?: { proximity?: [number, number]; language?: string; country?: string }, signal?: AbortSignal): Promise<PlaceSuggestion[]>
-export async function resolvePlace(suggestion: PlaceSuggestion, sessionToken: string, signal?: AbortSignal): Promise<ParsedPlace | null>  // ready for savePlaces()
+export async function resolvePlace(suggestion: PlaceSuggestion, sessionToken: string, signal?: AbortSignal): Promise<ParsedPlace | null>  // ready for savePlaces(); `imageUri` carries the backend's photo backfill, so a place saved from search keeps its photo like an imported one
 ```
 
 ### `place/placeService.ts`
