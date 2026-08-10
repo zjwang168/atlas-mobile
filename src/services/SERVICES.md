@@ -78,8 +78,13 @@ export async function resolvePlace(suggestion: PlaceSuggestion, sessionToken: st
 CRUD for the user's saved places, backed by Supabase and an offline-first local cache (see `local/`).
 Parsed place photos are saved from the backend response; this service does not call third-party photo APIs from the device.
 
+`savePlaces()` skips places `isSamePlace()` matches against something already saved, so a caller must read `inserted` rather than assume the call created anything. Identity prefers the provider id both sides carry; without one it needs the names to contain each other *and* the coordinates to be within ~100m, which is deliberately strict — a duplicate row is recoverable, a place silently dropped on save is not.
+
 ```ts
-export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>  // per-place: externalId/externalSource/city/country when set. `region` is batch-level — it comes from `source`, not from any one place, so callers passing no source (place search) leave it null
+export type SavePlacesResult = { inserted: SavedPlace[]; duplicates: SavedPlace[] }  // `inserted` is what this call created (optimistic local rows when queued offline); `duplicates` is the existing row each skipped place matched
+
+export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavePlacesResult>  // per-place: externalId/externalSource/city/country when set. `region` is batch-level — it comes from `source`, not from any one place, so callers passing no source (place search) leave it null
+export function isSamePlace(a: PlaceIdentity, b: PlaceIdentity): boolean  // place identity, shared by the save dedup and the "Saved" badges; accepts either a ParsedPlace or a SavedPlace on each side
 export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline

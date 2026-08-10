@@ -43,16 +43,20 @@ function formatDistance(metres: number | null | undefined): string | null {
   return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(1)} km`;
 }
 
+/** What a tap on a row turned out to do — `savePlaces()` can match an existing
+    place instead of creating one, and the row must not claim it saved something. */
+type RowOutcome = 'saved' | 'duplicate';
+
 type ResultRowProps = {
   suggestion: PlaceSuggestion;
-  saved: boolean;
+  outcome: RowOutcome | null;
   saving: boolean;
   onPress: (suggestion: PlaceSuggestion) => void;
 };
 
 /** Memoized: the list swaps its whole dataset on every settled keystroke, and
     rows that survive that swap shouldn't re-render with it. */
-const ResultRow = memo(function ResultRow({ suggestion, saved, saving, onPress }: ResultRowProps) {
+const ResultRow = memo(function ResultRow({ suggestion, outcome, saving, onPress }: ResultRowProps) {
   const scheme = useColorScheme();
   const handlePress = useCallback(() => onPress(suggestion), [onPress, suggestion]);
   const distance = formatDistance(suggestion.distance_m);
@@ -61,7 +65,7 @@ const ResultRow = memo(function ResultRow({ suggestion, saved, saving, onPress }
   return (
     <Pressable
       onPress={handlePress}
-      disabled={saved || saving}
+      disabled={outcome !== null || saving}
       className="flex-row items-center gap-3 border-b border-border px-4 py-3 active:bg-accent"
     >
       <View className="h-10 w-10 items-center justify-center rounded-full bg-muted">
@@ -87,12 +91,17 @@ const ResultRow = memo(function ResultRow({ suggestion, saved, saving, onPress }
             {distance ? <Text className="caption text-text-tertiary">{distance}</Text> : null}
           </View>
         ) : null}
+        {outcome === 'duplicate' ? (
+          <Text className="caption mt-1 text-text-tertiary">Already in My Places</Text>
+        ) : null}
       </View>
 
       {saving ? (
         <ActivityIndicator size="small" />
-      ) : saved ? (
+      ) : outcome === 'saved' ? (
         <Ionicons name="checkmark-circle" size={24} color="#12C170" />
+      ) : outcome === 'duplicate' ? (
+        <Ionicons name="checkmark-circle-outline" size={24} color={iconColor(scheme)} />
       ) : (
         <Ionicons name="add-circle-outline" size={24} color={iconColor(scheme)} />
       )}
@@ -109,7 +118,7 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [status, setStatus] = useState<SearchStatus>('idle');
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [outcomes, setOutcomes] = useState<Record<string, RowOutcome>>({});
 
   // One token for this panel's whole lifetime. Mapbox bills the search
   // session, so every keystroke and the final retrieve must share it; opening
@@ -164,9 +173,14 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
       try {
         const place = await resolvePlace(suggestion, sessionRef.current);
         if (!place) throw new Error('Suggestion resolved to no place');
-        await savePlaces([place]);
+        // An empty `inserted` means the dedup matched something already saved —
+        // the tap succeeded but created nothing, so don't claim it did.
+        const { inserted } = await savePlaces([place]);
         await refreshSavedPlaces();
-        setSavedIds((current) => [...current, suggestion.external_id]);
+        setOutcomes((current) => ({
+          ...current,
+          [suggestion.external_id]: inserted.length > 0 ? 'saved' : 'duplicate',
+        }));
       } catch (error) {
         console.warn('[SearchPanel] save failed:', error);
       } finally {
@@ -180,12 +194,12 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
     ({ item }: { item: PlaceSuggestion }) => (
       <ResultRow
         suggestion={item}
-        saved={savedIds.includes(item.external_id)}
+        outcome={outcomes[item.external_id] ?? null}
         saving={savingId === item.external_id}
         onPress={handlePick}
       />
     ),
-    [handlePick, savedIds, savingId],
+    [handlePick, outcomes, savingId],
   );
 
   const keyExtractor = useCallback((item: PlaceSuggestion) => item.external_id, []);

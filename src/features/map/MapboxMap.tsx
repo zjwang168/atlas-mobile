@@ -81,7 +81,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
   const { top: safeTop } = useSafeAreaInsets();
-  // Position compass just below the RightNav pill (safeTop + 8 offset + 92px pill height + 12px gap)
+  // Drop the compass below the top overlay row so the two don't collide
   const compassTop = safeTop + 48;
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);

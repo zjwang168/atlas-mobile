@@ -10,7 +10,9 @@ Typing is debounced, and each settled query cancels whatever the previous one st
 
 One search session token is created when the panel mounts and reused for every suggestion request and the final resolve, then discarded when the panel closes — Mapbox bills the session rather than the keystrokes, so reopening the panel is what starts a new one.
 
-Suggestions carry no coordinates. Picking a row resolves it into a full place, saves it through `savePlaces()`, and refreshes My Places; the row then shows as saved so several places can be added without leaving the panel. A failed save is logged and the row returns to its unsaved state rather than blocking the panel.
+Suggestions carry no coordinates. Picking a row resolves it into a full place, saves it through `savePlaces()`, and refreshes My Places; several places can be added without leaving the panel. A failed save is logged and the row returns to its unsaved state rather than blocking the panel.
+
+A picked row settles into one of two resting states, because a save that creates nothing is not the same as one that does: newly saved, or already in My Places when the place matched something already there. Both stop further taps on that row.
 
 Only `poi` results appear — see [SERVICES.md](../../services/SERVICES.md) for why brands are filtered out and why more results are requested than displayed.
 

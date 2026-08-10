@@ -472,7 +472,7 @@ function AppContent() {
           onSave={async (ids) => {
             try {
               const selected = parseResult.places.filter((p) => ids.includes(p.id));
-              const saved = await savePlaces(selected, {
+              const { inserted, duplicates } = await savePlaces(selected, {
                 region: parseResult.region,
                 url: importMeta?.sourceUrl || importText,
               });
@@ -493,7 +493,9 @@ function AppContent() {
                 setActiveSidekick('aiChat');
               }
               setSelectedPlaceCoordinate(parseResult.centerCoordinate);
-              console.log(`Saved ${saved.length} places to Supabase`);
+              console.log(
+                `Saved ${inserted.length} places to Supabase (${duplicates.length} already existed)`,
+              );
             } catch (e) {
               console.error('Save failed:', e);
             }

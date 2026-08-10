@@ -28,10 +28,21 @@ export type SavedPlace = {
   latitude: number;
   longitude: number;
   region: string | null;
+  external_place_id?: string | null;
+  external_source?: string | null;
   photo_url?: string | null;
   note?: string | null;
   created_at: string;
 };
+
+/**
+ * The columns every read of `places` selects. Kept as one constant because the
+ * provider ids below are only useful to isSamePlace() if *every* path that
+ * produces a SavedPlace carries them — a select that omits them yields rows
+ * that silently fall back to fuzzy matching.
+ */
+const PLACE_COLUMNS =
+  'id, name, subtitle, category, latitude, longitude, region, external_place_id, external_source, photo_url, created_at';
 
 type SavedPlacesListener = (places: SavedPlace[]) => void;
 
@@ -103,39 +114,84 @@ const normalizePlaceName = (s: string) =>
 const COORD_THRESHOLD = 0.001;
 
 /**
- * Whether two parsed/saved places refer to the same real-world place:
- * normalized names contain each other OR coordinates are within ~100m.
+ * Either shape a place identity arrives in: a `ParsedPlace` fresh from search
+ * or import (camelCase), or a `SavedPlace` read back from Supabase.
+ */
+type PlaceIdentity = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  externalId?: string | null;
+  externalSource?: string | null;
+  external_place_id?: string | null;
+  external_source?: string | null;
+};
+
+const providerId = (p: PlaceIdentity) => (p.externalId ?? p.external_place_id) || null;
+const providerSource = (p: PlaceIdentity) => (p.externalSource ?? p.external_source) || null;
+
+/**
+ * Whether two parsed/saved places refer to the same real-world place.
+ *
+ * A provider id decides it outright when both sides carry one from the same
+ * provider: equal ids are the same place, and different ids are places the
+ * provider itself distinguishes, so they must not be collapsed. Only when at
+ * least one side has no usable id does this fall back to fuzzy matching, which
+ * requires the names to contain each other AND the coordinates to be within
+ * ~100m.
+ *
+ * Fuzzy matching needs both halves because either alone is far too broad:
+ * "Georgetown" is a substring of "Georgetown University", and ~100m swallows
+ * every neighbouring shop. Requiring both trades a rare duplicate row for never
+ * silently discarding a place the user explicitly asked to save. (Exact
+ * stableKey matching is too brittle to use instead: a name variant or a geocode
+ * differing by >1e-5 degrees breaks it.)
  *
  * Single source of truth for place identity — used by the save dedup in
  * savePlaces() and by the "Saved" badges in SaveScreen / HistoryPlacesPanel.
- * (Exact stableKey matching is too brittle for this: a name variant or a
- * geocode differing by >1e-5 degrees breaks it.)
  */
-export function isSamePlace(
-  a: { name: string; latitude: number; longitude: number },
-  b: { name: string; latitude: number; longitude: number },
-): boolean {
+export function isSamePlace(a: PlaceIdentity, b: PlaceIdentity): boolean {
+  const idA = providerId(a);
+  const idB = providerId(b);
+  if (idA && idB) {
+    const sourceA = providerSource(a);
+    const sourceB = providerSource(b);
+    // Ids are only comparable within one provider. If the two sides came from
+    // different ones, fall through rather than declare them different places.
+    if (!sourceA || !sourceB || sourceA === sourceB) return idA === idB;
+  }
+
   const nameA = normalizePlaceName(a.name);
   const nameB = normalizePlaceName(b.name);
   const nameMatch = nameA.includes(nameB) || nameB.includes(nameA);
   const coordMatch =
     Math.abs(a.latitude - b.latitude) < COORD_THRESHOLD &&
     Math.abs(a.longitude - b.longitude) < COORD_THRESHOLD;
-  return nameMatch || coordMatch;
+  return nameMatch && coordMatch;
 }
 
+export type SavePlacesResult = {
+  /** Rows this call created — optimistic local rows when the write was queued offline. */
+  inserted: SavedPlace[];
+  /** Input places that already existed, mapped to the row they matched. */
+  duplicates: SavedPlace[];
+};
+
 /**
- * Persist the selected places from an import.
+ * Persist the selected places from an import or a search.
+ *
+ * Splitting inserted from duplicates is what lets a caller tell "saved" from
+ * "you already had this" — collapsing them into one list is how a dedup false
+ * positive reads as a successful save.
  *
  * @param places  The parsed places the user selected.
  * @param source  Where they came from (link + region), stored per place.
- * @returns       The inserted rows (with real DB ids).
  */
 export async function savePlaces(
   places: ParsedPlace[],
   source?: { url?: string; region?: string },
-): Promise<SavedPlace[]> {
-  if (places.length === 0) return [];
+): Promise<SavePlacesResult> {
+  if (places.length === 0) return { inserted: [], duplicates: [] };
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot save places before auth is ready');
 
@@ -144,9 +200,7 @@ export async function savePlaces(
   let existingRows = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces)) ?? [];
   try {
     const { data: existing, error: existingError } = await withTimeout(
-      supabase
-        .from('places')
-        .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+      supabase.from('places').select(PLACE_COLUMNS),
       'Checking existing places timed out',
     );
     if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
@@ -156,6 +210,11 @@ export async function savePlaces(
     if (!isRetryableError(error)) throw error;
     console.warn('[placeService] existing-place check failed; using local cache:', error);
   }
+
+  /** The existing row each input place matched, for the callers' duplicates list. */
+  const matchedExisting = () => places
+    .map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
+    .filter((place): place is SavedPlace => Boolean(place));
 
   // 过滤出真正的新地点（对库内已存 + 本批次内部都去重）
   const placesToInsert = places.filter((place, index) => {
@@ -168,9 +227,23 @@ export async function savePlaces(
   });
 
   if (placesToInsert.length === 0) {
-    // 全部重复，返回匹配的已存记录
-    return places.map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
-      .filter((place): place is SavedPlace => Boolean(place));
+    // 全部重复，返回匹配的已存记录。这条路径不写库也不报错，所以 dev 下留一条
+    // 日志——否则一次误判的去重和一次成功的保存在外部看起来完全一样。
+    if (__DEV__) {
+      console.info(
+        '[placeService] nothing inserted — every place matched an existing row:',
+        places.map((place) => {
+          const match = existingRows.find((saved) => isSamePlace(place, saved));
+          return {
+            input: place.name,
+            inputExternalId: place.externalId ?? null,
+            matched: match?.name ?? null,
+            matchedId: match?.id ?? null,
+          };
+        }),
+      );
+    }
+    return { inserted: [], duplicates: matchedExisting() };
   }
 
   const rows = placesToInsert.map((p) => ({
@@ -204,6 +277,10 @@ export async function savePlaces(
     latitude: row.latitude,
     longitude: row.longitude,
     region: row.region,
+    // Carried onto the optimistic row too: it goes straight into the cache the
+    // next dedup reads from, and a row without them falls back to fuzzy matching.
+    external_place_id: row.external_place_id,
+    external_source: row.external_source,
     photo_url: row.photo_url,
     created_at: new Date().toISOString(),
   }));
@@ -215,7 +292,7 @@ export async function savePlaces(
 
   try {
     const bulk = await withTimeout(
-      supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+      supabase.from('places').insert(rows).select(PLACE_COLUMNS),
       'Saving places timed out',
     );
     data = (bulk.data ?? null) as SavedPlace[] | null;
@@ -226,12 +303,7 @@ export async function savePlaces(
       throw writeError;
     }
     await enqueueWrite(userId, { kind: 'savePlaces', places: placesToInsert, localRows, source });
-    return [
-      ...places
-        .map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
-        .filter((place): place is SavedPlace => Boolean(place)),
-      ...localRows,
-    ];
+    return { inserted: localRows, duplicates: matchedExisting() };
   }
 
   if (error) {
@@ -243,7 +315,7 @@ export async function savePlaces(
     const insertedRows: SavedPlace[] = [];
     for (const row of rows) {
       const single = await withTimeout(
-        supabase.from('places').insert(row).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+        supabase.from('places').insert(row).select(PLACE_COLUMNS),
         'Saving place timed out',
       ).catch((singleError) => {
         if (!isRetryableError(singleError)) throw singleError;
@@ -264,12 +336,7 @@ export async function savePlaces(
     if (insertedRows.length === 0) {
       if (isRetryableError(new Error(error.message))) {
         await enqueueWrite(userId, { kind: 'savePlaces', places: placesToInsert, localRows, source });
-        return [
-          ...places
-            .map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
-            .filter((place): place is SavedPlace => Boolean(place)),
-          ...localRows,
-        ];
+        return { inserted: localRows, duplicates: matchedExisting() };
       }
       await updateSavedPlacesCache(userId, (current) => current.filter((row) => !localRows.some((local) => local.id === row.id)));
       throw new Error(`Failed to save places: ${error.message}`);
@@ -298,12 +365,7 @@ export async function savePlaces(
     if (srcError) console.warn('[placeService] place_sources insert failed:', srcError.message);
   }
 
-  return [
-    ...places
-      .map((place) => existingRows.find((saved) => isSamePlace(place, saved)))
-      .filter((place): place is SavedPlace => Boolean(place)),
-    ...savedRows,
-  ];
+  return { inserted: savedRows, duplicates: matchedExisting() };
 }
 
 /** Fetch saved places, newest first, for the My Places screens. */
@@ -316,7 +378,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before fetch failed:', error));
     const { data, error } = await supabase
       .from('places')
-      .select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at')
+      .select(PLACE_COLUMNS)
       .order('created_at', { ascending: false });
     if (error) throw new Error(`Failed to fetch places: ${error.message}`);
     const fresh = ((data ?? []) as SavedPlace[]).map(withStableKey);
