@@ -39,6 +39,8 @@ export default {
     plugins: [
       'expo-font',
       'expo-notifications',
+      ['expo-media-library', { photosPermission: 'Allow OurAtlas to save your shared atlas image.' }],
+      'expo-sharing',
       ['expo-audio', { microphonePermission: 'Allow OurAtlas to transcribe your voice notes.' }],
       [
         '@rnmapbox/maps',

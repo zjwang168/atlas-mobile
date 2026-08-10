@@ -10,6 +10,6 @@ export type Atlas = {
   updated_at: string;
   /** New map-first atlas format. Older collections are deliberately hidden. */
   format_version?: number;
-  route_geojson?: GeoJSON.Feature<GeoJSON.LineString> | null;
+  route_geojson?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString> | null;
   route_visible?: boolean;
 };

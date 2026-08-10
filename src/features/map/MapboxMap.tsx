@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Reanimated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Reanimated, { interpolate, interpolateColor, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 
 const MAPBOX_ACCESS_TOKEN: string =
   (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
@@ -22,6 +22,10 @@ export interface MapMarker {
   tone?: 'saved' | 'focused' | 'atlas' | 'recommended';
   /** Number shown inside a saved Atlas route pin. */
   order?: number;
+  /** Animates a marker when an Atlas item is added. */
+  entering?: boolean;
+  /** Shows the small save-progress pulse around an Atlas marker. */
+  pulsing?: boolean;
 }
 
 export type MapPadding = {
@@ -40,7 +44,9 @@ interface MapboxMapProps {
   cameraKey?: string;
   style?: ViewStyle;
   onMarkerPress?: (marker: MapMarker) => void;
-  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  /** Static-size labels projected onto the current map viewport. */
+  routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   routeMarkers?: MapMarker[];
   /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
   padding?: MapPadding;
@@ -254,18 +260,30 @@ function MarkerDot({
   tone = 'saved',
   order,
   hasActiveSelection,
+  entering = false,
+  pulsing = false,
 }: {
   selected: boolean;
   deleting: boolean;
   tone?: MapMarker['tone'];
   order?: number;
   hasActiveSelection: boolean;
+  entering?: boolean;
+  pulsing?: boolean;
 }) {
   const exit = useSharedValue(0);
+  const entry = useSharedValue(entering ? 0 : 1);
+  const pulse = useSharedValue(0);
   const selectedProgress = useSharedValue(selected || tone === 'focused' ? 1 : 0);
   useEffect(() => {
     exit.value = deleting ? withTiming(1, { duration: 440 }) : withTiming(0, { duration: 160 });
   }, [deleting, exit]);
+  useEffect(() => {
+    entry.value = entering ? withTiming(1, { duration: 420 }) : 1;
+  }, [entering, entry]);
+  useEffect(() => {
+    pulse.value = pulsing ? withRepeat(withTiming(1, { duration: 1900 }), -1, true) : withTiming(0, { duration: 220 });
+  }, [pulse, pulsing]);
   useEffect(() => {
     const isFocused = selected || tone === 'focused';
     // Switching directly from one point to another should never leave two
@@ -277,7 +295,7 @@ function MarkerDot({
     const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : '#007AFF';
     const selectedColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : '#12C170';
     return {
-    opacity: 1 - exit.value,
+    opacity: (1 - exit.value) * entry.value,
     backgroundColor: interpolateColor(
       exit.value,
       [0, 1],
@@ -286,13 +304,18 @@ function MarkerDot({
         '#DC2626',
       ],
     ),
-    transform: [{ scale: (1 + selectedProgress.value * 0.5) * (1 - exit.value * 0.76) }],
+    transform: [{ scale: (1 + selectedProgress.value * 0.5) * (1 - exit.value * 0.76) * (0.82 + entry.value * 0.18) }],
     };
   });
+  const pulseStyle = useAnimatedStyle(() => ({
+    borderWidth: pulsing ? interpolate(pulse.value, [0, 1], [3, 7]) : 3,
+  }));
   return (
-    <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
-      {order ? <Text style={styles.markerOrder}>{order}</Text> : null}
-    </Reanimated.View>
+    <View style={styles.markerDotWrap}>
+      <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle, pulseStyle]}>
+        {order ? <Text style={styles.markerOrder}>{order}</Text> : null}
+      </Reanimated.View>
+    </View>
   );
 }
 
@@ -317,6 +340,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   style,
   onMarkerPress,
   routeGeoJSON,
+  routeDistanceLabels,
   routeMarkers,
   padding,
   cameraAnimationDurationMs = 2000,
@@ -365,6 +389,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     () => visibleLabelIds(labelOwnerMarkerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
     [height, labelOwnerMarkerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
   );
+  const routeDistanceGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
+    type: 'FeatureCollection',
+    features: (routeDistanceLabels ?? []).map((label) => ({ type: 'Feature', properties: { label: label.text }, geometry: { type: 'Point', coordinates: label.coordinate } })),
+  }), [routeDistanceLabels]);
 
   const handleMapPress = () => {
     if (Date.now() - markerPressTimestampRef.current < 180) return;
@@ -528,17 +556,30 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         {routeGeoJSON && (
           <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
             <MapboxGL.LineLayer
+              id="routeCasing"
+              style={{
+                lineColor: '#C9693C',
+                lineWidth: 13,
+                lineOpacity: 0.12,
+                lineOffset: 2,
+                lineCap: 'round',
+                lineJoin: 'round',
+              }}
+            />
+            <MapboxGL.LineLayer
               id="routeLine"
               style={{
-                lineColor: '#007AFF',
-                lineWidth: 4,
-                lineOpacity: 0.8,
+                lineColor: '#F29A69',
+                lineWidth: 8,
+                lineOpacity: 0.9,
+                lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
               }}
             />
           </MapboxGL.ShapeSource>
         )}
+        {routeDistanceLabels?.length ? <MapboxGL.ShapeSource id="routeDistanceSource" shape={routeDistanceGeoJSON}><MapboxGL.SymbolLayer id="routeDistanceLabels" style={{ textField: ['get', 'label'], textSize: 10, textColor: '#B8673B', textHaloColor: 'rgba(255,251,247,0.94)', textHaloWidth: 2, textAllowOverlap: true, textIgnorePlacement: true, textAnchor: 'center' }} /></MapboxGL.ShapeSource> : null}
 
         {renderedMarkers.map((marker) => (
           <MapboxGL.MarkerView
@@ -548,14 +589,14 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             // the normal blue-pin collision set without requiring a pan/zoom.
             key={`${marker.id}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
-            style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected]}
+            style={[styles.markerAnnotation, marker.tone === 'atlas' && styles.markerAnnotationAtlas, selectedMarkerId === marker.id && styles.markerAnnotationSelected]}
             // A focused point is an explicit user choice. Let its annotation
             // render above nearby markers so its mandatory label cannot be
             // discarded by native collision handling.
             // AI recommendations must remain discoverable even when they sit
             // near a saved point; native MarkerView collision would otherwise
             // hide the purple pin before the user can select it.
-            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'recommended'}
+            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'recommended' || marker.tone === 'atlas'}
           >
             <View
               style={styles.markerContainer}
@@ -570,6 +611,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 tone={marker.tone}
                 order={marker.order}
                 hasActiveSelection={Boolean(selectedMarkerId)}
+                entering={marker.entering}
+                pulsing={marker.pulsing}
               />
               {marker.title ? (
                 <MarkerLabel
@@ -609,6 +652,10 @@ const styles = StyleSheet.create({
   markerAnnotationSelected: {
     zIndex: 100,
     elevation: 100,
+  },
+  markerAnnotationAtlas: {
+    zIndex: 80,
+    elevation: 80,
   },
   markerPopup: {
     position: 'absolute',
@@ -680,6 +727,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markerDotWrap: {
+    width: 20,
+    height: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },

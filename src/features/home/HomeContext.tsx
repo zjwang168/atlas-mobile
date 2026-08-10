@@ -69,7 +69,9 @@ export type AtlasMapState = {
   /** Optional override for the shared map camera transition. */
   cameraAnimationDurationMs?: number;
   selectedMarkerId?: string | null;
-  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString>;
+  deletingMarkerId?: string | null;
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   onMarkerPress?: (marker: MapMarker) => void;
   onMapPress?: () => void;
   /** Atlas-only controls live above the one shared map, never in its panel. */
@@ -78,6 +80,8 @@ export type AtlasMapState = {
   onPanelHeightChange?: (height: number) => void;
   markerPopup?: { markerId: string; content: ReactNode } | null;
   hideTopSearchButton?: boolean;
+  /** Briefly removes app chrome while an Atlas share image is captured. */
+  hideChrome?: boolean;
 } | null;
 
 type HomeContextValue = {

@@ -275,15 +275,17 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
+        routeDistanceLabels={atlasMapState?.routeDistanceLabels}
         selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}
+        deletingMarkerId={atlasMapState?.deletingMarkerId}
         onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
         onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
         compassEnabled={!atlasMapState}
         markerPopup={atlasMapState?.markerPopup}
       />
 
-      <TopBlurFade />
-      <TopNav onSearchPress={handleSearchPress} showScanButton={activeTab === TAB_PLACES && !atlasMapState} hideSearchButton={Boolean(atlasMapState?.hideTopSearchButton)} />
+      {!atlasMapState?.hideChrome ? <><TopBlurFade />
+      <TopNav onSearchPress={handleSearchPress} showScanButton={activeTab === TAB_PLACES && !atlasMapState} hideSearchButton={Boolean(atlasMapState?.hideTopSearchButton)} /></> : null}
 
       <View style={styles.pagerViewport} pointerEvents="box-none">
         <Animated.View
