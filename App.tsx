@@ -493,9 +493,11 @@ function AppContent() {
                 setActiveSidekick('aiChat');
               }
               setSelectedPlaceCoordinate(parseResult.centerCoordinate);
-              console.log(
-                `Saved ${inserted.length} places to Supabase (${duplicates.length} already existed)`,
-              );
+              if (__DEV__) {
+                console.log(
+                  `Saved ${inserted.length} places to Supabase (${duplicates.length} already existed)`,
+                );
+              }
             } catch (e) {
               console.error('Save failed:', e);
             }

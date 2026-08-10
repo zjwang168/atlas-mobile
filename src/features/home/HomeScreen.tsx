@@ -569,7 +569,9 @@ function HomeScreenContent({
       <PlaceDetail
         placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
         onDismiss={() => setOverlay(overlay.kind === 'placeDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
-        onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+        onEdit={(place) => {
+          if (__DEV__) console.log('[HomeScreen] Edit place:', place.name);
+        }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
       />
