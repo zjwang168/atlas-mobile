@@ -81,7 +81,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
   const { top: safeTop } = useSafeAreaInsets();
-  // Drop the compass below the top overlay row so the two don't collide
+  // Dormant — the compass is disabled below, so nothing renders at this
+  // position. Kept so re-enabling it drops the compass clear of the top
+  // overlay row instead of underneath it.
   const compassTop = safeTop + 48;
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
