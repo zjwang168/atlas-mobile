@@ -103,7 +103,7 @@ Wraps `suggestPlaces` (debounced, each settled query cancelling whatever the pre
 
 ```ts
 export type PlaceSearchStatus = 'idle' | 'searching' | 'ready' | 'error'
-export type PlaceSaveOutcome = 'saved' | 'duplicate'
+// PlaceSaveOutcome ('saved' | 'duplicate') is a shared type — see @/types/place
 
 export function usePlaceSearch(options?: {
   proximity?: [number, number];          // biases suggestions toward the user

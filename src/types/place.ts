@@ -25,6 +25,13 @@ export type DaySchedule = {
   slots: TimeSlot[];
 };
 
+/**
+ * What saving a place turned out to do. `savePlaces()` dedups, so a tap can
+ * match something already saved instead of creating a row — the two must stay
+ * distinguishable or a false dedup reads as a successful save.
+ */
+export type PlaceSaveOutcome = 'saved' | 'duplicate';
+
 export type PlaceTag = {
   id: string;
   label: string;

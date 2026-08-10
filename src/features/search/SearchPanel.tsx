@@ -14,8 +14,10 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
+import { SaveAffordance } from '@/components/save-affordance/SaveAffordance';
 import { MIN_QUERY_LENGTH } from '@/services/place/placeSearchService';
-import { usePlaceSearch, type PlaceSaveOutcome } from '@/services/place/usePlaceSearch';
+import { usePlaceSearch } from '@/services/place/usePlaceSearch';
+import type { PlaceSaveOutcome } from '@/types/place';
 import type { PlaceSuggestion } from '@/types/route';
 
 type SearchPanelProps = {
@@ -80,15 +82,7 @@ const ResultRow = memo(function ResultRow({ suggestion, outcome, saving, onPress
         ) : null}
       </View>
 
-      {saving ? (
-        <ActivityIndicator size="small" />
-      ) : outcome === 'saved' ? (
-        <Ionicons name="checkmark-circle" size={24} color="#12C170" />
-      ) : outcome === 'duplicate' ? (
-        <Ionicons name="checkmark-circle-outline" size={24} color={iconColor(scheme)} />
-      ) : (
-        <Ionicons name="add-circle-outline" size={24} color={iconColor(scheme)} />
-      )}
+      <SaveAffordance outcome={outcome} saving={saving} />
     </Pressable>
   );
 });

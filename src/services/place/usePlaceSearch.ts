@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { PlaceSaveOutcome } from '@/types/place';
 import type { PlaceSuggestion } from '@/types/route';
 
 import {
@@ -33,11 +34,6 @@ import { savePlaces } from './placeService';
 const DEBOUNCE_MS = 300;
 
 export type PlaceSearchStatus = 'idle' | 'searching' | 'ready' | 'error';
-
-/** What a tap on a suggestion turned out to do — `savePlaces()` can match an
-    existing place instead of creating one, and the UI must not claim it saved
-    something. */
-export type PlaceSaveOutcome = 'saved' | 'duplicate';
 
 export type UsePlaceSearchOptions = {
   /** Biases suggestions toward the user; pass `useHome().userLocation`. */
