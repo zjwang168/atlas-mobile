@@ -66,7 +66,12 @@ function toPlannedPlace(instanceId: string, placeId: string, lookup: Map<string,
     placeId,
     name: place?.name ?? 'Unknown place',
     subtitle: place?.subtitle ?? '',
-    imageUrl: place ? resolvePlaceThumbnail(place) || undefined : undefined,
+    // No static-map fallback here, unlike the plan cover below: a plan place is
+    // rendered by FlexiblePlaceCard, which draws a PlaceCover when there is no
+    // image. Leaving the fallback on would make the same place look different
+    // depending on whether it arrived through this path or PlanPlace's.
+    imageUrl: place ? resolvePlaceThumbnail(place, { fallback: 'none' }) || undefined : undefined,
+    category: place?.category ?? undefined,
   };
 }
 

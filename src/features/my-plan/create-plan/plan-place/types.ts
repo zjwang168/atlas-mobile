@@ -15,6 +15,8 @@ export type PlannedPlace = {
   name: string;
   subtitle: string;
   imageUrl?: string;
+  /** Drives the `PlaceCover` shown when there is no `imageUrl`. */
+  category?: string;
   timeSlot?: TimeSlot;
 };
 
@@ -36,12 +38,15 @@ function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function newPlannedPlace(place: { id: string; name: string; subtitle: string; imageUrl?: string }): PlannedPlace {
+export function newPlannedPlace(
+  place: { id: string; name: string; subtitle: string; imageUrl?: string; category?: string },
+): PlannedPlace {
   return {
     id: generateId(),
     placeId: place.id,
     name: place.name,
     subtitle: place.subtitle,
     imageUrl: place.imageUrl,
+    category: place.category,
   };
 }

@@ -93,7 +93,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline
 export function toPlaceDetail(row: SavedPlace): PlaceDetail  // `category` comes through both as a tag and on its own field, which is what PlaceCover buckets on
-export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string  // real photo if saved, else a generated Mapbox static-map pin for its coordinates; used by toPlaceDetail() and savePlan.ts's plan covers
+export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>, options?: { fallback?: 'staticMap' | 'none' }): string  // real photo if saved; `fallback` picks what stands in when there isn't one — default 'staticMap' generates a Mapbox pin, 'none' returns '' so the caller can render PlaceCover instead
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
 ```
 

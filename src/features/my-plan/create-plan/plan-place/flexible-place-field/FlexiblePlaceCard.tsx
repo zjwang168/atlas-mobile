@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Image, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { GestureDetector } from 'react-native-gesture-handler';
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import { useDragCard } from '../dnd/useDragCard';
@@ -24,7 +25,7 @@ type FlexiblePlaceCardProps = {
   isGhost?: boolean;
 };
 
-function CardImage({ imageUrl }: { imageUrl?: string }) {
+function CardImage({ imageUrl, category }: { imageUrl?: string; category?: string }) {
   return (
     // Shadow wrapper: no overflow so the shadow isn't clipped
     <View style={[{ width: 56, height: 56, borderRadius: 16 }, IMAGE_SHADOW]}>
@@ -33,9 +34,7 @@ function CardImage({ imageUrl }: { imageUrl?: string }) {
         {imageUrl ? (
           <Image source={{ uri: imageUrl }} style={{ width: 56, height: 56 }} resizeMode="cover" />
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }} className="bg-primary-light">
-            <Ionicons name="location" size={22} color="#12c170" />
-          </View>
+          <PlaceCover category={category} iconSize={22} />
         )}
       </View>
     </View>
@@ -48,7 +47,7 @@ function DraggableCard({ place, slotKey, onRemove }: { place: PlannedPlace; slot
   return (
     <GestureDetector gesture={gesture}>
       <View style={{ width: 64, alignItems: 'center' }}>
-        <CardImage imageUrl={place.imageUrl} />
+        <CardImage imageUrl={place.imageUrl} category={place.category} />
         <Text
           numberOfLines={1}
           className="text-text-secondary"
@@ -83,7 +82,7 @@ function FlexiblePlaceCard({ place, slotKey = { kind: 'free' }, onRemove, isGhos
   if (isGhost) {
     return (
       <View style={{ width: 64, alignItems: 'center', opacity: 0.9 }}>
-        <CardImage imageUrl={place.imageUrl} />
+        <CardImage imageUrl={place.imageUrl} category={place.category} />
         <Text
           numberOfLines={1}
           className="text-text-secondary"

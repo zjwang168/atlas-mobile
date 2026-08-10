@@ -38,7 +38,7 @@ type Place = {
 
 type PlaceDetail = Place & {
   address: string;
-  thumbnailUrl: string;
+  thumbnailUrl: string;   // the real saved photo, or '' — a photoless place renders PlaceCover instead
   schedule: DaySchedule[];
   tags: PlaceTag[];
   collections?: PlaceTag[];

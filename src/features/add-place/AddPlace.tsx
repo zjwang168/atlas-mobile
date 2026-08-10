@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import ContentPanel from '@/components/content-panel/ContentPanel';
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { useHome } from '@/features/home/HomeContext';
 import { toPlaceDetail } from '@/services/place/placeService';
 import type { PlaceDetail } from '@/types/place';
@@ -39,7 +40,9 @@ const ResultRow = memo(function ResultRow({ item, isSelected, onToggle }: Result
       <View style={{ width: 44, height: 44, borderRadius: 8, overflow: 'hidden', backgroundColor: '#f4f4f5' }}>
         {item.thumbnailUrl ? (
           <Image source={{ uri: item.thumbnailUrl }} style={{ width: 44, height: 44 }} resizeMode="cover" />
-        ) : null}
+        ) : (
+          <PlaceCover category={item.category} iconSize={20} />
+        )}
       </View>
       <View style={{ flex: 1, gap: 2 }}>
         <Text className="text-base text-text-primary" numberOfLines={1}>

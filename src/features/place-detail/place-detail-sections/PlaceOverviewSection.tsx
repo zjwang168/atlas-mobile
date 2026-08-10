@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { Image, useColorScheme, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { Button } from '@/components/ui/button';
 import { PlaceDetail } from '../../../types/place';
 import { getOpenStatus } from '../utils/placeHours';
@@ -47,7 +48,9 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
               style={{ width: '100%', height: '100%' }}
               resizeMode="cover"
             />
-          ) : null}
+          ) : (
+            <PlaceCover category={place.category} />
+          )}
         </View>
       </View>
     </View>

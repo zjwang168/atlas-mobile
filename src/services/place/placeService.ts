@@ -443,12 +443,23 @@ function staticMapThumb(lat: number, lng: number): string {
   );
 }
 
-/** Resolve a place's thumbnail: the real saved photo if there is one,
-    otherwise a generated Mapbox static-map pin for its coordinates. Shared
-    by `toPlaceDetail()` and any other caller that needs a place thumbnail
-    without the full `PlaceDetail` shape (e.g. `savePlan.ts`'s plan covers). */
-export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string {
-  return place.photo_url || staticMapThumb(place.latitude, place.longitude);
+/**
+ * Resolve a place's thumbnail: the real saved photo if there is one, otherwise
+ * whatever `fallback` asks for.
+ *
+ * `'staticMap'` (the default, and the long-standing behaviour) generates a
+ * Mapbox static-map pin, so the caller always gets a URL. `'none'` returns an
+ * empty string instead, leaving the caller free to render `PlaceCover` — a
+ * category-coloured block reads better than a near-identical grey map for
+ * every photoless place, but only a caller that has such a fallback can ask
+ * for it.
+ */
+export function resolvePlaceThumbnail(
+  place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>,
+  options: { fallback?: 'staticMap' | 'none' } = {},
+): string {
+  if (place.photo_url) return place.photo_url;
+  return options.fallback === 'none' ? '' : staticMapThumb(place.latitude, place.longitude);
 }
 
 /** Adapt a DB row to the PlaceDetail shape the detail screens expect.
@@ -461,7 +472,9 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     latitude: row.latitude,
     longitude: row.longitude,
     address: row.region ?? '',
-    thumbnailUrl: resolvePlaceThumbnail(row),
+    // No static-map fallback: every screen rendering a PlaceDetail thumbnail
+    // falls back to PlaceCover, which says more than a grey map tile.
+    thumbnailUrl: resolvePlaceThumbnail(row, { fallback: 'none' }),
     schedule: [],
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
     // Also carried through raw, not only as a tag: PlaceCover buckets on it.

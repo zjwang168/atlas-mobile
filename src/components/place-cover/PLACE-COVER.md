@@ -31,4 +31,7 @@ export function placeCategoryKey(category?: string | null): PlaceCategoryKey  //
 - [THEME.md](../../theme/THEME.md) — the `category-*` tokens
 - [../../features/my-places/all-places/ALL-PLACES.md](../../features/my-places/all-places/ALL-PLACES.md) — `PlaceCard` and the All Places tiles
 - [../../features/discover/DISCOVER.md](../../features/discover/DISCOVER.md) — search suggestion cards
+- [../../features/place-detail/PLACE.md](../../features/place-detail/PLACE.md) — the detail panel's hero thumbnail
+- [../../features/add-place/ADD-PLACE.md](../../features/add-place/ADD-PLACE.md) — the picker's row thumbnails
+- [../../features/my-plan/create-plan/CREATE-PLAN.md](../../features/my-plan/create-plan/CREATE-PLAN.md) — plan places, via `PlannedPlace.category`
 - [../../features/my-plan/MY-PLAN.md](../../features/my-plan/MY-PLAN.md) — `PlanCard`, which has no category and always renders neutral
