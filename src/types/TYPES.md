@@ -12,7 +12,7 @@ import type { Place, PlaceDetail, PlaceSaveOutcome, PlaceTag, PlaceLink, DaySche
 |---|---|
 | `Place` | Map markers, list rows — minimal identity + coordinates |
 | `PlaceSaveOutcome` | `'saved' \| 'duplicate'` — what a save turned out to do, since `savePlaces()` dedups and a matched place creates no row. Produced by `usePlaceSearch`, rendered by `SaveAffordance`, consumed by both search surfaces |
-| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. Also carries the rest of the `places` table columns (`category`, `description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) as optional fields — reserved for the DB row, not yet populated by `toPlaceDetail()` or consumed by any UI |
+| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. `category` is populated by `toPlaceDetail()` and read by `PlaceCover` to pick a thumbnail colour. The rest of the `places` table columns (`description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) are carried as optional fields but reserved — not yet populated or consumed by any UI |
 | `PlaceTag` | PlaceCard tags, PlaceInfoSection, Badge pills |
 | `PlaceLink` | PlaceInfoSection link rows |
 | `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |

@@ -464,6 +464,8 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     thumbnailUrl: resolvePlaceThumbnail(row),
     schedule: [],
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
+    // Also carried through raw, not only as a tag: PlaceCover buckets on it.
+    category: row.category ?? undefined,
     summary: row.subtitle ?? '',
     visitStrategy: '',
     note: undefined,
