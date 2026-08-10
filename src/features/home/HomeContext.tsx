@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Image, InteractionManager } from 'react-native';
 import * as Location from 'expo-location';
 import { useAppDialog } from '../../components/feedback/AppDialog';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
@@ -43,6 +43,12 @@ function hasRenderableCoordinates(place: SavedPlace): boolean {
     && place.longitude <= 180;
 }
 
+function prefetchPlacePhotos(places: SavedPlace[]) {
+  const urls = [...new Set(places.map((place) => place.photo_url).filter((url): url is string => Boolean(url)))];
+  if (!urls.length) return;
+  void Promise.all(urls.map((url) => Image.prefetch(url).catch(() => false)));
+}
+
 // --- Overlay ---
 
 export type Overlay =
@@ -74,6 +80,7 @@ export type AtlasMapState = {
   routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   onMarkerPress?: (marker: MapMarker) => void;
   onMapPress?: () => void;
+  onViewportChanged?: (center: [number, number], zoom: number) => void;
   /** Atlas-only controls live above the one shared map, never in its panel. */
   overlay?: ReactNode;
   /** Receives the live Edit atlas panel height so map overlays can follow it. */
@@ -333,6 +340,14 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     setSavedPlaces(places.filter(hasRenderableCoordinates));
     setSavedPlacesLoaded(true);
   }), []);
+
+  // Prepare the photos used by My Places and the Create an Atlas focus cards
+  // only after the first interactive work has completed.
+  useEffect(() => {
+    if (!savedPlacesLoaded || !savedPlaces.length) return;
+    const task = InteractionManager.runAfterInteractions(() => prefetchPlacePhotos(savedPlaces));
+    return () => task.cancel();
+  }, [savedPlaces, savedPlacesLoaded]);
   useEffect(() => subscribeAtlases(setAtlases), []);
   useEffect(() => subscribeAtlasPlaces(setAtlasPlaces), []);
 

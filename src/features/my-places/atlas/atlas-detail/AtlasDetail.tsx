@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import ContentPanel from '@/components/content-panel/ContentPanel';
+import ContentPanel, { SNAP_HEIGHTS } from '@/components/content-panel/ContentPanel';
 import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import AtlasBuilder from '@/features/my-plan/atlas-builder/AtlasBuilder';
@@ -12,6 +12,7 @@ import type { Atlas } from '@/types/atlas';
 import type { SavedPlace } from '@/services/place/placeService';
 import { Asset, requestPermissionsAsync } from 'expo-media-library';
 import { captureRef, captureScreen } from 'react-native-view-shot';
+import Share, { Social } from 'react-native-share';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, FlatList, Image, Linking, Modal, Platform, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
@@ -166,6 +167,9 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   const [capturingShare, setCapturingShare] = useState(false);
   const [shareImageUri, setShareImageUri] = useState<string | null>(null);
   const shareCanvasRef = useRef<View>(null);
+  // Place the map control above the default sheet immediately; live panel
+  // height updates replace this value as soon as the sheet reports itself.
+  const routeControlBottom = useRef(new Animated.Value(SNAP_HEIGHTS.default)).current;
   const optimizationPromptOpacity = useRef(new Animated.Value(0)).current;
   const routePlaybackRef = useRef(0);
   const hydratedRouteAtlasRef = useRef<string | null>(null);
@@ -226,6 +230,10 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     setHomeSelectedPlaceCoordinate(null);
     onDismiss();
   }, [onDismiss, setHomeSelectedPlaceCoordinate, setHomeSelectedPlaceId]);
+
+  const handleRoutePanelHeight = useCallback((height: number) => {
+    routeControlBottom.setValue(height);
+  }, [routeControlBottom]);
 
   const toggleRoute = useCallback(async () => {
     if (!atlas || routeBusy || items.length < 2) return;
@@ -314,18 +322,25 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   }, [captureShareCanvas]);
 
   const shareToApp = useCallback(async (app: 'messenger' | 'instagram') => {
+    const uri = await captureShareCanvas();
+    if (!uri) return;
     const appUrl = app === 'messenger' ? 'fb-messenger://' : 'instagram://app';
     const storeUrl = app === 'messenger' ? 'itms-apps://itunes.apple.com/app/id454638411' : 'itms-apps://itunes.apple.com/app/id389801252';
-    const targetUrl = await Linking.canOpenURL(appUrl).catch(() => false) ? appUrl : Platform.OS === 'ios' ? storeUrl : `market://details?id=${app === 'messenger' ? 'com.facebook.orca' : 'com.instagram.android'}`;
-    await Linking.openURL(targetUrl).catch((error) => console.warn(`[AtlasDetail] could not open ${app}:`, error));
-  }, []);
+    const installed = await Linking.canOpenURL(appUrl).catch(() => false);
+    if (!installed) {
+      const targetUrl = Platform.OS === 'ios' ? storeUrl : `market://details?id=${app === 'messenger' ? 'com.facebook.orca' : 'com.instagram.android'}`;
+      await Linking.openURL(targetUrl).catch((error) => console.warn(`[AtlasDetail] could not open ${app} store listing:`, error));
+      return;
+    }
+    await Share.shareSingle({ social: app === 'messenger' ? Social.Messenger : Social.Instagram, url: uri, type: 'image/png' }).catch((error) => console.warn(`[AtlasDetail] could not share to ${app}:`, error));
+  }, [captureShareCanvas]);
 
   useLayoutEffect(() => {
     if (!atlas || editing) return;
     setAtlasMapState({
       ...presentation,
       ...routeCamera,
-      cameraKey: routeCamera?.cameraKey ?? detailCameraKey,
+      cameraKey: routeCamera?.cameraKey ?? `${detailCameraKey}-${atlas.id}`,
       cameraAnimationDurationMs: 320,
       ...(routeCamera ? { cameraAnimationDurationMs: routeCamera.cameraAnimationDurationMs } : {}),
       routeGeoJSON: displayedRoute ?? undefined,
@@ -334,9 +349,11 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       selectedMarkerId: selectedPlaceId,
       onMarkerPress: (marker) => setSelectedPlaceId(marker.id),
       onMapPress: () => setSelectedPlaceId(null),
+      onPanelHeightChange: handleRoutePanelHeight,
+      overlay: !capturingShare ? <AtlasRouteControl bottom={routeControlBottom} visible={Boolean(displayedRoute)} busy={routeBusy} disabled={items.length < 2} onPress={toggleRoute} /> : null,
     });
     return () => setAtlasMapState(null);
-  }, [atlas, capturingShare, detailCameraKey, displayedRoute, editing, listItems, presentation, routeCamera, selectedPlaceId, setAtlasMapState]);
+  }, [atlas, capturingShare, detailCameraKey, displayedRoute, editing, handleRoutePanelHeight, items.length, listItems, presentation, routeBusy, routeCamera, routeControlBottom, selectedPlaceId, setAtlasMapState, toggleRoute]);
 
   useEffect(() => {
     if (!atlasId) setEditing(false);
@@ -349,9 +366,9 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
-    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={() => setEditing(false)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
-      <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View><TouchableOpacity disabled={routeBusy || items.length < 2} accessibilityLabel={displayedRoute ? 'Hide route' : 'Show route'} onPress={toggleRoute} style={[styles.showRouteButton, (routeBusy || items.length < 2) && styles.showRouteButtonDisabled]}>{routeBusy ? <ActivityIndicator size="small" color="#C55F20" /> : <Ionicons name={displayedRoute ? 'eye-off-outline' : 'navigate-outline'} size={14} color="#C55F20" />}<Text style={styles.showRouteText}>{displayedRoute ? 'Hide route' : 'Show route'}</Text></TouchableOpacity>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
-      <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} ListFooterComponent={listItems.length > 0 && !capturingShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={openSharePreview} style={styles.shareAtlasButton}><Ionicons name="share-social-outline" size={16} color="#FFF" /><Text style={styles.shareAtlasText}>Share OurAtlas<Text style={styles.registeredMark}>®</Text></Text></TouchableOpacity> : null} />
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => { if (mapView) setRouteCamera({ ...mapView, bounds: undefined, cameraAnimationDurationMs: 0, cameraKey: `${detailCameraKey}-saved-${Date.now()}` }); setEditing(false); }} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
+      <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
+      <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
     </>}
   </ContentPanel>;
@@ -359,6 +376,10 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
 
 function CompactAtlas({ atlas, onExpand, onDismiss }: { atlas: Atlas; onExpand: () => void; onDismiss: () => void }) {
   return <Pressable style={styles.compact} onPress={onExpand}><View style={styles.compactMark}><Ionicons name="map-outline" size={17} color="#B5551B" /></View><Text numberOfLines={1} style={styles.compactTitle}>{atlas.title}</Text><TouchableOpacity onPress={onDismiss} style={styles.compactClose}><Ionicons name="close" size={19} color="#303035" /></TouchableOpacity></Pressable>;
+}
+
+function AtlasRouteControl({ bottom, visible, busy, disabled, onPress }: { bottom: Animated.Value; visible: boolean; busy: boolean; disabled: boolean; onPress: () => void }) {
+  return <View pointerEvents="box-none" style={styles.routeMapOverlay}><Animated.View style={[styles.floatingRouteButton, { bottom: 12, transform: [{ translateY: Animated.multiply(bottom, -1) }] }]}><TouchableOpacity accessibilityLabel={visible ? 'Hide route' : 'Show route'} disabled={busy || disabled} onPress={onPress} style={styles.floatingRouteButtonInner}>{busy ? <ActivityIndicator size="small" color="#B9683C" /> : <Ionicons name={visible ? 'eye-off-outline' : 'git-branch-outline'} size={15} color="#B9683C" />}<Text style={styles.floatingRouteText}>{visible ? 'Hide route' : 'Show route'}</Text></TouchableOpacity></Animated.View></View>;
 }
 
 function ShareAction({ icon, label, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void }) {
@@ -370,14 +391,14 @@ function OptimizedRouteReview({ items, originalItems, bottomInset, onClose, onSa
   return <View style={styles.optimizedReview}><View style={styles.optimizedReviewHeader}><View><Text style={styles.optimizedReviewTitle}>Better route</Text><Text style={styles.optimizedReviewSubtitle}>Optimized stop order</Text></View><TouchableOpacity accessibilityLabel="Close optimized route" onPress={onClose} style={styles.optimizedReviewClose}><Ionicons name="close" size={20} color="#252528" /></TouchableOpacity></View><FlatList data={items} keyExtractor={(item) => item.rowId} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 92, gap: 8 }} renderItem={({ item, index }) => { const originalIndex = originalIndexByRowId.get(item.rowId) ?? index; const change = originalIndex - index; return <View style={styles.optimizedRow}><View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>{item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.optimizedImage} /> : <View style={[styles.optimizedImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}<View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text></View>{change ? <View style={[styles.orderChange, change > 0 ? styles.orderUp : styles.orderDown]}><Ionicons name={change > 0 ? 'arrow-up-outline' : 'arrow-down-outline'} size={11} color={change > 0 ? '#217558' : '#986033'} /><Text style={[styles.orderChangeText, change > 0 ? styles.orderUpText : styles.orderDownText]}>{Math.abs(change)}</Text></View> : <View style={styles.orderUnchanged}><Text style={styles.orderUnchangedText}>Same</Text></View>}</View>; }} /><View style={styles.optimizedReviewFooter}><TouchableOpacity onPress={onClose} style={styles.optimizedCancel}><Text style={styles.optimizedCancelText}>Cancel</Text></TouchableOpacity><TouchableOpacity onPress={onSave} style={styles.optimizedSave}><Text style={styles.optimizedSaveText}>Save new route</Text></TouchableOpacity></View></View>;
 }
 
-function ItineraryRow({ item, index, nextItem, selected, onPress, onNavigate }: { item: ItineraryItem; index: number; nextItem?: ItineraryItem; selected: boolean; onPress: () => void; onNavigate?: () => void }) {
+function ItineraryRow({ item, index, nextItem, selected, onPress, onShare, onNavigate }: { item: ItineraryItem; index: number; nextItem?: ItineraryItem; selected: boolean; onPress: () => void; onShare?: () => void; onNavigate?: () => void }) {
   const nextHasMetadata = Boolean(nextItem && (nextItem.time || nextItem.transport));
   const navigationButton = nextItem && onNavigate ? <TouchableOpacity accessibilityLabel={`Navigate from ${item.place.name} to ${nextItem.place.name} in Google Maps`} onPress={onNavigate} activeOpacity={0.7} style={[styles.navigationButton, nextHasMetadata && styles.connectorNavigationButton]}>
     <Ionicons name="logo-google" size={9} color="#4285F4" />
     <Ionicons name="navigate-outline" size={11} color="#3C4043" />
   </TouchableOpacity> : null;
   return <View style={styles.itineraryItem}>
-    {index === 0 ? <ItineraryMetadata item={item} /> : null}
+    {index === 0 ? <ItineraryMetadata item={item} onShare={onShare} /> : null}
     <TouchableOpacity onPress={onPress} activeOpacity={0.76} style={[styles.row, selected && styles.rowSelected]}>
       <View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>
       {item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.image} /> : <View style={[styles.image, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}
@@ -391,10 +412,10 @@ function ItineraryRow({ item, index, nextItem, selected, onPress, onNavigate }: 
   </View>;
 }
 
-function ItineraryMetadata({ item, connector = false }: { item: ItineraryItem; connector?: boolean }) {
+function ItineraryMetadata({ item, connector = false, onShare }: { item: ItineraryItem; connector?: boolean; onShare?: () => void }) {
   const transport = item.transport ? TRANSPORT_PRESENTATION[item.transport] : null;
   if (!item.time && !transport) {
-    return connector ? null : <View style={styles.atlasBeginsRow}><Text style={styles.atlasBeginsText}>Where your Atlas begins</Text></View>;
+    return connector ? null : <View style={styles.atlasBeginsRow}><Text style={styles.atlasBeginsText}>Where your Atlas begins</Text>{onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={styles.atlasBeginsShare}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas<Text style={styles.registeredMark}>®</Text></Text></TouchableOpacity> : null}</View>;
   }
   return <View style={[styles.itineraryMetaRow, connector && styles.connectorMetaRow]}>
     {item.time ? <View style={styles.dayMarker}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>{item.day ? `Day ${item.day} · ${item.time}` : item.time}</Text></View> : null}
@@ -403,6 +424,10 @@ function ItineraryMetadata({ item, connector = false }: { item: ItineraryItem; c
 }
 
 const styles = StyleSheet.create({
+  routeMapOverlay: { ...StyleSheet.absoluteFill },
+  floatingRouteButton: { position: 'absolute', right: 16, minHeight: 30, borderRadius: 12, backgroundColor: '#FFF8F3', borderWidth: StyleSheet.hairlineWidth, borderColor: '#F0CDB9', shadowColor: '#8B4E2A', shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4 },
+  floatingRouteButtonInner: { minHeight: 30, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  floatingRouteText: { color: '#B9683C', fontSize: 11, fontWeight: '800' },
   optimizationPrompt: { width: 188, minHeight: 34, marginTop: 5, marginRight: 5, paddingLeft: 8, paddingRight: 3, borderRadius: 10, backgroundColor: '#EDF8F1', flexDirection: 'row', alignItems: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: '#B9DFC9' },
   optimizationPromptMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 5 },
   optimizationPromptText: { flex: 1, color: '#2B654F', fontSize: 9, lineHeight: 12, fontWeight: '700' },
@@ -449,7 +474,9 @@ const styles = StyleSheet.create({
   showRouteButton: { minHeight: 28, marginTop: -4, marginRight: 5, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#FFF3EA', flexDirection: 'row', alignItems: 'center', gap: 4 },
   showRouteButtonDisabled: { opacity: 0.46 },
   showRouteText: { color: '#B85217', fontSize: 11, fontWeight: '700' },
-  atlasBeginsRow: { minHeight: 30, justifyContent: 'flex-end', marginTop: 8, marginBottom: 4 },
+  atlasBeginsRow: { minHeight: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 4 },
   atlasBeginsText: { color: '#242428', fontSize: 12, fontWeight: '600' },
-  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, itineraryItem: { position: 'relative' }, itineraryMetaRow: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, marginBottom: 4 }, connectorMetaRow: { width: '42%', minHeight: 48, flexWrap: 'wrap', alignContent: 'center', marginTop: 0, marginBottom: 0, paddingVertical: 7 }, metadataConnector: { position: 'relative', minHeight: 48 }, connectorLine: { position: 'absolute', top: 0, bottom: 0, left: '50%', width: StyleSheet.hairlineWidth, marginLeft: -StyleSheet.hairlineWidth / 2, backgroundColor: '#DDE2E7' }, navigationGap: { position: 'relative', height: 7 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, transportMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F1F4F5', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, transportText: { color: '#53616B', fontSize: 11, fontWeight: '700' }, connectorNavigation: { position: 'absolute', top: '50%', left: 0, right: 0, height: 18, marginTop: -9 }, navigationButton: { position: 'absolute', left: '50%', top: -8, marginLeft: -14, width: 28, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D4D9E0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 5 }, connectorNavigationButton: { top: 0 }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FFF4EC', borderWidth: 1, borderColor: '#F1B98E' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
+  atlasBeginsShare: { minHeight: 26, paddingHorizontal: 8, borderRadius: 12, backgroundColor: '#FFF8F3', borderWidth: StyleSheet.hairlineWidth, borderColor: '#F0CDB9', flexDirection: 'row', alignItems: 'center', gap: 4 },
+  atlasBeginsShareText: { color: '#B9683C', fontSize: 10, fontWeight: '800' },
+  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, itineraryItem: { position: 'relative' }, itineraryMetaRow: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, marginBottom: 4 }, connectorMetaRow: { width: '42%', minHeight: 48, flexWrap: 'wrap', alignContent: 'center', marginTop: 0, marginBottom: 0, paddingVertical: 7 }, metadataConnector: { position: 'relative', minHeight: 48 }, connectorLine: { position: 'absolute', top: 0, bottom: 0, left: '50%', width: StyleSheet.hairlineWidth, marginLeft: -StyleSheet.hairlineWidth / 2, backgroundColor: '#DDE2E7' }, navigationGap: { position: 'relative', height: 7 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, transportMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F1F4F5', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, transportText: { color: '#53616B', fontSize: 11, fontWeight: '700' }, connectorNavigation: { position: 'absolute', top: '50%', left: 0, right: 0, height: 18, marginTop: -9 }, navigationButton: { position: 'absolute', left: '50%', top: -8, marginLeft: -14, width: 28, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D4D9E0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 5 }, connectorNavigationButton: { top: 0 }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FCFCFD', borderWidth: 1, borderColor: '#E6E8EB' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
 });

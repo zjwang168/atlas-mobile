@@ -27,7 +27,9 @@ import SearchPanel from '../search/SearchPanel';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
-const ATLAS_PANEL_CAMERA_CLEARANCE = 64;
+// Atlas panels already occupy a large bottom area. A small additional camera
+// clearance keeps all stops visible without lifting the map focus too high.
+const ATLAS_PANEL_CAMERA_CLEARANCE = 7;
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
 // 200 / mass 0.9) — see below for why the map's padding recompute waits this long
 // after a group snap change instead of reacting immediately.
@@ -280,6 +282,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         deletingMarkerId={atlasMapState?.deletingMarkerId}
         onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
         onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
+        onViewportChanged={atlasMapState?.onViewportChanged}
         compassEnabled={!atlasMapState}
         markerPopup={atlasMapState?.markerPopup}
       />
