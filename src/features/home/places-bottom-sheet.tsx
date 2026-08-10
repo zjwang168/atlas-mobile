@@ -148,6 +148,10 @@ function PlacesBottomSheet({
     setGroupSnapState(SNAP_STATES[index]);
   }, [setGroupSnapState]);
 
+  const handleSnapTo = useCallback((state: SnapState) => {
+    setGroupSnapState(state);
+  }, [setGroupSnapState]);
+
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
@@ -207,6 +211,7 @@ function PlacesBottomSheet({
           <Discover
             active={topMode === 'discover'}
             bottomInset={BOTTOM_BAR_CLEARANCE}
+            snapTo={handleSnapTo}
             onSearchPress={onSearchPress}
           />
         </View>

@@ -185,7 +185,11 @@ function PlacesBottomSheet({
                   >
                     <Discover
                       active={topMode === 'discover'}
-                      bottomInset={BOTTOM_BAR_CLEARANCE}
+                      // The sheet does not resize for the keyboard, so the
+                      // list has to clear it itself or its last results sit
+                      // under it with no way to scroll them up.
+                      bottomInset={BOTTOM_BAR_CLEARANCE + keyboardHeight}
+                      snapTo={handleSnapTo}
                       onSearchPress={onSearchPress}
                       verticalScrollEnabled={
                         groupSnapState === 'tall' || groupSnapState === 'full'

@@ -1,3 +1,4 @@
+import type { SnapState } from '@/components/content-panel/ContentPanel';
 import { MapPinCover } from '@/components/map-pin-cover/MapPinCover';
 import { SaveAffordance } from '@/components/save-affordance/SaveAffordance';
 import { PressableScale } from '@/components/ui/pressable-scale';
@@ -237,6 +238,7 @@ type DiscoverProps = {
   onScroll?: (y: number) => void;
   verticalScrollEnabled?: boolean;
   active?: boolean;
+  snapTo?: (state: SnapState, animated?: boolean) => void;
   /**
    * Not rendered today — the search row searches inline. Kept plumbed so the
    * row can be flipped back to a button that opens `SearchPanel` if the inline
@@ -250,6 +252,7 @@ function Discover({
   onScroll,
   verticalScrollEnabled = true,
   active = true,
+  snapTo,
 }: DiscoverProps) {
   const [sortMode, setSortMode] = useState<DiscoverSortMode>('distance');
   const [category, setCategory] = useState<DiscoverCategory>('all');
@@ -280,6 +283,11 @@ function Discover({
   // thing to leave on screen underneath it.
   const trimmedQuery = query.trim();
   const searchMode = trimmedQuery.length > 0;
+
+  // Results are unusable at the shorter detents — a third of the screen, and
+  // the hosts disable this list's scrolling below `tall`. Focusing the field is
+  // the moment the user commits to searching, so take the height then.
+  const handleSearchFocus = useCallback(() => snapTo?.('tall'), [snapTo]);
 
   const visiblePlaces = useMemo(() => (
     FAKE_PLACES
@@ -365,6 +373,7 @@ function Discover({
               ref={searchInputRef}
               value={query}
               onChangeText={setQuery}
+              onFocus={handleSearchFocus}
               placeholder="Search places of interests..."
               placeholderTextColor="#8A8A8A"
               returnKeyType="search"
