@@ -343,9 +343,14 @@ function HomeScreenContent({
     animateToTab(activeTab);
   }, []);
   // --- Search & History handlers ---
+  // SearchPanel is a root-level RN overlay, so on iOS it would render beneath
+  // the native places sheet. Going through presentAboveMainSheet lets the sheet
+  // finish dismissing first instead of the two animating over each other.
   const handleSearchPress = useCallback(() => {
-    setOverlay({ kind: 'search' });
-  }, [setOverlay]);
+    presentAboveMainSheet(() => {
+      setOverlay({ kind: 'search' });
+    });
+  }, [presentAboveMainSheet, setOverlay]);
 
   /** Locate button: take a fresh fix, then recenter on whatever came back.
       A refused permission resolves to the default centre rather than failing,
@@ -403,6 +408,7 @@ function HomeScreenContent({
                 snapGroup={HOME_PANEL_SNAP_GROUP}
                 visible={panelVisible && activeTab === TAB_PLACES}
                 onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
+                onSearchPress={handleSearchPress}
               />
             ) : null}
           </View>
@@ -434,6 +440,7 @@ function HomeScreenContent({
           visible={mainSheetVisible}
           onHeightChange={mainSheetVisible ? handlePanelHeightChange : undefined}
           onDismissed={handleMainSheetDismissed}
+          onSearchPress={handleSearchPress}
           bottomBar={effectiveTabBarVisible ? (
             <HomeTabBar
               activeTab={activeTab}

@@ -11,14 +11,13 @@ import { ParkIcon } from 'phosphor-react-native/src/icons/Park';
 import { ShoppingBagIcon } from 'phosphor-react-native/src/icons/ShoppingBag';
 import { StarIcon } from 'phosphor-react-native/src/icons/Star';
 import { TreeIcon } from 'phosphor-react-native/src/icons/Tree';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Image,
   Keyboard,
   Pressable,
   StyleSheet,
-  TextInput,
   View,
   type ImageSourcePropType,
 } from 'react-native';
@@ -157,6 +156,7 @@ type DiscoverProps = {
   onScroll?: (y: number) => void;
   verticalScrollEnabled?: boolean;
   active?: boolean;
+  onSearchPress?: () => void;
 };
 
 function Discover({
@@ -164,36 +164,25 @@ function Discover({
   onScroll,
   verticalScrollEnabled = true,
   active = true,
+  onSearchPress,
 }: DiscoverProps) {
-  const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState<DiscoverSortMode>('distance');
   const [category, setCategory] = useState<DiscoverCategory>('all');
   const [trendingOnly, setTrendingOnly] = useState(false);
-  const searchInputRef = useRef<TextInput>(null);
   const onViewableItemsChanged = useRef(() => {}).current;
 
-  useEffect(() => {
-    if (active) return;
-    searchInputRef.current?.blur();
-    Keyboard.dismiss();
-  }, [active]);
-
-  const visiblePlaces = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    return FAKE_PLACES
+  const visiblePlaces = useMemo(() => (
+    FAKE_PLACES
       .filter((place) => (
-        (!normalizedQuery
-          || place.name.toLocaleLowerCase().includes(normalizedQuery)
-          || place.category.toLocaleLowerCase().includes(normalizedQuery))
-        && (category === 'all' || place.category === category)
+        (category === 'all' || place.category === category)
         && (!trendingOnly || place.trending)
       ))
       .sort((a, b) => (
         sortMode === 'distance'
           ? a.distanceKm - b.distanceKm
           : b.rating - a.rating
-      ));
-  }, [category, query, sortMode, trendingOnly]);
+      ))
+  ), [category, sortMode, trendingOnly]);
 
   const distanceActions = useMemo<MenuAction[]>(() => [
     { id: 'distance', title: 'Distance', state: sortMode === 'distance' ? 'on' : 'off' },
@@ -214,29 +203,19 @@ function Discover({
 
   return (
     <View style={styles.root}>
-      {/* Search bar */}
+      {/* Search bar — a button, not an input: it hands off to SearchPanel,
+          which is what actually reaches Mapbox. */}
       <View style={styles.searchRow}>
         <Pressable
-          accessibilityRole="search"
+          accessibilityRole="button"
+          accessibilityLabel="Search for a place"
           onPress={() => {
-            if (active) searchInputRef.current?.focus();
+            if (active) onSearchPress?.();
           }}
           style={styles.searchField}
         >
           <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
-          {active ? (
-            <TextInput
-              ref={searchInputRef}
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Search places of interests..."
-              placeholderTextColor="#8A8A8A"
-              returnKeyType="search"
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.searchInput}
-            />
-          ) : null}
+          <Text style={styles.searchPlaceholder}>Search places of interests...</Text>
         </Pressable>
       </View>
 
@@ -317,12 +296,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  searchInput: {
+  searchPlaceholder: {
     flex: 1,
-    height: 36,
-    paddingHorizontal: 0,
-    paddingVertical: 0,
-    color: '#1A1A1A',
+    color: '#8A8A8A',
     fontSize: 14,
     fontWeight: '400',
   },

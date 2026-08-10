@@ -2,7 +2,7 @@
 
 ## Overview
 
-`SearchPanel` is the full-screen overlay opened from the search icon in `TopNav`; it finds places by name and saves the ones the user picks straight into My Places.
+`SearchPanel` is the full-screen overlay opened from the search row in Discover; it finds places by name and saves the ones the user picks straight into My Places.
 
 ## Behaviour
 

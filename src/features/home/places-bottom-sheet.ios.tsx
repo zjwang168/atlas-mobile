@@ -52,6 +52,7 @@ type PlacesBottomSheetProps = {
   onPlacePress: (place: Place) => void;
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
+  onSearchPress?: () => void;
   bottomBar?: ReactNode;
 };
 
@@ -83,6 +84,7 @@ function PlacesBottomSheet({
   onPlacePress,
   onHeightChange,
   onDismissed,
+  onSearchPress,
   bottomBar,
 }: PlacesBottomSheetProps) {
   const { width, height } = useWindowDimensions();
@@ -184,6 +186,7 @@ function PlacesBottomSheet({
                     <Discover
                       active={topMode === 'discover'}
                       bottomInset={BOTTOM_BAR_CLEARANCE}
+                      onSearchPress={onSearchPress}
                       verticalScrollEnabled={
                         groupSnapState === 'tall' || groupSnapState === 'full'
                       }

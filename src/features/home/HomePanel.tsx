@@ -21,6 +21,7 @@ type HomePanelProps = {
   maxHeight?: number;
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
+  onSearchPress?: () => void;
   placesView?: PlacesView;
   bottomBar?: ReactNode;
 };
@@ -35,6 +36,7 @@ function HomePanel({
   maxHeight,
   onHeightChange,
   onDismissed,
+  onSearchPress,
   placesView = 'all',
   bottomBar,
 }: HomePanelProps) {
@@ -55,6 +57,7 @@ function HomePanel({
         onPlacePress={handlePlacePress}
         onHeightChange={onHeightChange}
         onDismissed={onDismissed}
+        onSearchPress={onSearchPress}
         bottomBar={bottomBar}
       />
     );
@@ -71,6 +74,7 @@ function HomePanel({
         onPlacePress={handlePlacePress}
         onHeightChange={onHeightChange}
         onDismissed={onDismissed}
+        onSearchPress={onSearchPress}
         bottomBar={bottomBar}
       />
     );

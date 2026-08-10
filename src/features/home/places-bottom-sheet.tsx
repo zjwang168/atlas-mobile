@@ -43,6 +43,7 @@ type PlacesBottomSheetProps = {
   onPlacePress: (place: Place) => void;
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
+  onSearchPress?: () => void;
   bottomBar?: ReactNode;
 };
 
@@ -73,6 +74,7 @@ function PlacesBottomSheet({
   activeView,
   onPlacePress,
   onHeightChange,
+  onSearchPress,
   bottomBar,
 }: PlacesBottomSheetProps) {
   const sheetRef = useRef<BottomSheet>(null);
@@ -205,6 +207,7 @@ function PlacesBottomSheet({
           <Discover
             active={topMode === 'discover'}
             bottomInset={BOTTOM_BAR_CLEARANCE}
+            onSearchPress={onSearchPress}
           />
         </View>
         {bottomBar}
