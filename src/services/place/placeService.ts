@@ -114,21 +114,61 @@ const normalizePlaceName = (s: string) =>
 const COORD_THRESHOLD = 0.001;
 
 /**
- * Either shape a place identity arrives in: a `ParsedPlace` fresh from search
- * or import (camelCase), or a `SavedPlace` read back from Supabase.
+ * The provider's own id for a place, in either shape it arrives in: camelCase
+ * on a `ParsedPlace`, snake_case on a `SavedPlace` read back from Supabase.
  */
-type PlaceIdentity = {
-  name: string;
-  latitude: number;
-  longitude: number;
+export type ProviderIdentity = {
   externalId?: string | null;
   externalSource?: string | null;
   external_place_id?: string | null;
   external_source?: string | null;
 };
 
-const providerId = (p: PlaceIdentity) => (p.externalId ?? p.external_place_id) || null;
-const providerSource = (p: PlaceIdentity) => (p.externalSource ?? p.external_source) || null;
+/**
+ * Either shape a place identity arrives in: a `ParsedPlace` fresh from search
+ * or import (camelCase), or a `SavedPlace` read back from Supabase.
+ */
+type PlaceIdentity = ProviderIdentity & {
+  name: string;
+  latitude: number;
+  longitude: number;
+};
+
+const providerId = (p: ProviderIdentity) => (p.externalId ?? p.external_place_id) || null;
+const providerSource = (p: ProviderIdentity) => (p.externalSource ?? p.external_source) || null;
+
+/**
+ * The provider-id half of place identity. `null` means the ids cannot decide —
+ * one side carries none, or the two come from providers that share no id space
+ * — and the caller should fall back to something else.
+ */
+function compareProviderIds(a: ProviderIdentity, b: ProviderIdentity): boolean | null {
+  const idA = providerId(a);
+  const idB = providerId(b);
+  if (!idA || !idB) return null;
+  const sourceA = providerSource(a);
+  const sourceB = providerSource(b);
+  // Ids are only comparable within one provider. If the two sides came from
+  // different ones, decline rather than declare them different places.
+  if (sourceA && sourceB && sourceA !== sourceB) return null;
+  return idA === idB;
+}
+
+/**
+ * Same place, decided on the provider id alone.
+ *
+ * This is the half of `isSamePlace()` that needs no coordinates, which is what
+ * makes it the only identity check a search suggestion can go through —
+ * suggestions carry no coordinates until they are resolved.
+ *
+ * The trade is coverage, not correctness: a saved place with no provider id
+ * never matches here, and imports don't set one (only place search does). So a
+ * false result means "not known to be the same", not "different" — treat it as
+ * a hint, and let `savePlaces()`'s full dedup be the authority.
+ */
+export function isSameProviderPlace(a: ProviderIdentity, b: ProviderIdentity): boolean {
+  return compareProviderIds(a, b) === true;
+}
 
 /**
  * Whether two parsed/saved places refer to the same real-world place.
@@ -151,15 +191,8 @@ const providerSource = (p: PlaceIdentity) => (p.externalSource ?? p.external_sou
  * savePlaces() and by the "Saved" badges in SaveScreen / HistoryPlacesPanel.
  */
 export function isSamePlace(a: PlaceIdentity, b: PlaceIdentity): boolean {
-  const idA = providerId(a);
-  const idB = providerId(b);
-  if (idA && idB) {
-    const sourceA = providerSource(a);
-    const sourceB = providerSource(b);
-    // Ids are only comparable within one provider. If the two sides came from
-    // different ones, fall through rather than declare them different places.
-    if (!sourceA || !sourceB || sourceA === sourceB) return idA === idB;
-  }
+  const byProviderId = compareProviderIds(a, b);
+  if (byProviderId !== null) return byProviderId;
 
   const nameA = normalizePlaceName(a.name);
   const nameB = normalizePlaceName(b.name);

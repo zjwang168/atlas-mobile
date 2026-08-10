@@ -2,7 +2,9 @@
 
 ## Overview
 
-`SearchPanel` is the full-screen overlay opened from the search row in Discover; it finds places by name and saves the ones the user picks straight into My Places.
+`SearchPanel` is the full-screen version of place search — it finds places by name and saves the ones the user picks straight into My Places.
+
+> Nothing opens it right now: Discover searches inline instead, and this panel is kept as the revert path if that has to be backed out. `HomeScreen` still renders the `search` overlay and still holds `handleSearchPress`; only the caller is missing.
 
 ## Behaviour
 
@@ -13,6 +15,8 @@ One search session token is created when the panel mounts and reused for every s
 Suggestions carry no coordinates. Picking a row resolves it into a full place, saves it through `savePlaces()`, and refreshes My Places; several places can be added without leaving the panel. A failed save is logged and the row returns to its unsaved state rather than blocking the panel.
 
 A picked row settles into one of two resting states, because a save that creates nothing is not the same as one that does: newly saved, or already in My Places when the place matched something already there. Both stop further taps on that row.
+
+A row can also start out in the already-saved state, before any tap, when the place is already in My Places. That check runs on the provider id alone — suggestions have no coordinates for the fuzzy half of place identity — so it misses saved places that carry no id, which is every place saved from a link import. It only ever adds the marking; the save path still decides on tap.
 
 Only `poi` results appear — see [SERVICES.md](../../services/SERVICES.md) for why brands are filtered out and why more results are requested than displayed.
 

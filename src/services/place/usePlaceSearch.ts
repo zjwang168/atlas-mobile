@@ -27,7 +27,7 @@ import {
   resolvePlace,
   suggestPlaces,
 } from './placeSearchService';
-import { savePlaces } from './placeService';
+import { isSameProviderPlace, savePlaces, type SavedPlace } from './placeService';
 
 /** Long enough that a normal typing burst is one request, short enough that
     the list still feels live. */
@@ -40,6 +40,8 @@ export type UsePlaceSearchOptions = {
   proximity?: [number, number];
   /** Awaited after a save or dedup match, before the suggestion settles. */
   onSaved?: () => void | Promise<void>;
+  /** Marks suggestions already in My Places before the user taps them. */
+  savedPlaces?: SavedPlace[];
 };
 
 export type UsePlaceSearchResult = {
@@ -49,14 +51,20 @@ export type UsePlaceSearchResult = {
   status: PlaceSearchStatus;
   /** `external_id` of the suggestion currently being resolved and saved. */
   savingId: string | null;
-  /** Settled outcomes, keyed by `external_id`; absent until a pick finishes. */
-  outcomes: Record<string, PlaceSaveOutcome>;
+  /** What this suggestion's row should show: what a tap did, or, before any
+      tap, `'duplicate'` if `savedPlaces` already contains it. */
+  outcomeFor: (suggestion: PlaceSuggestion) => PlaceSaveOutcome | null;
   pick: (suggestion: PlaceSuggestion) => Promise<void>;
+  /** Clears the query, results, and outcomes, and starts a new billing
+      session. Call it when the surface holding this hook stops being a live
+      typing session but stays mounted. */
+  reset: () => void;
 };
 
 export function usePlaceSearch({
   proximity,
   onSaved,
+  savedPlaces,
 }: UsePlaceSearchOptions = {}): UsePlaceSearchResult {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
@@ -134,5 +142,36 @@ export function usePlaceSearch({
     [onSaved],
   );
 
-  return { query, setQuery, suggestions, status, savingId, outcomes, pick };
+  const outcomeFor = useCallback(
+    (suggestion: PlaceSuggestion): PlaceSaveOutcome | null => {
+      const settled = outcomes[suggestion.external_id];
+      if (settled) return settled;
+      if (!savedPlaces?.length) return null;
+      // Suggestions have no coordinates, so the provider id is the only half of
+      // place identity available here. It misses saved places that carry no id
+      // — imports don't set one — which is why this only ever adds a
+      // 'duplicate' hint and never suppresses a save: savePlaces()'s full
+      // dedup still has the last word on tap.
+      const identity = {
+        externalId: suggestion.external_id,
+        externalSource: suggestion.source,
+      };
+      return savedPlaces.some((saved) => isSameProviderPlace(identity, saved))
+        ? 'duplicate'
+        : null;
+    },
+    [outcomes, savedPlaces],
+  );
+
+  const reset = useCallback(() => {
+    inFlightRef.current?.abort();
+    sessionRef.current = createSearchSession();
+    setQuery('');
+    setSuggestions([]);
+    setStatus('idle');
+    setSavingId(null);
+    setOutcomes({});
+  }, []);
+
+  return { query, setQuery, suggestions, status, savingId, outcomeFor, pick, reset };
 }

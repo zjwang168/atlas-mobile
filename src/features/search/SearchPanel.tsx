@@ -90,13 +90,14 @@ const ResultRow = memo(function ResultRow({ suggestion, outcome, saving, onPress
 export default function SearchPanel({ onClose }: SearchPanelProps) {
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
-  const { userLocation, refreshSavedPlaces } = useHome();
+  const { userLocation, refreshSavedPlaces, savedPlaces } = useHome();
 
   // The session, debounce, cancellation, and save-outcome machinery all live in
   // the hook — this component is the panel's presentation only.
-  const { query, setQuery, suggestions, status, savingId, outcomes, pick } = usePlaceSearch({
+  const { query, setQuery, suggestions, status, savingId, outcomeFor, pick } = usePlaceSearch({
     proximity: userLocation,
     onSaved: refreshSavedPlaces,
+    savedPlaces,
   });
 
   const trimmed = query.trim();
@@ -105,12 +106,12 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
     ({ item }: { item: PlaceSuggestion }) => (
       <ResultRow
         suggestion={item}
-        outcome={outcomes[item.external_id] ?? null}
+        outcome={outcomeFor(item)}
         saving={savingId === item.external_id}
         onPress={pick}
       />
     ),
-    [pick, outcomes, savingId],
+    [pick, outcomeFor, savingId],
   );
 
   const keyExtractor = useCallback((item: PlaceSuggestion) => item.external_id, []);
