@@ -1,5 +1,5 @@
 import { Badge } from '@/components/ui/badge';
-import { MapPinCover } from '@/components/map-pin-cover/MapPinCover';
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
@@ -104,7 +104,7 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
                   resizeMode="cover"
                 />
               ) : (
-                <MapPinCover pinSize={24} />
+                <PlaceCover category={item.category} iconSize={24} />
               )}
             </View>
           </View>

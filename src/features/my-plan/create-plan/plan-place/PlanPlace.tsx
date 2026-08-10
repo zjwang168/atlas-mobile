@@ -64,7 +64,7 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
       kind: 'addPlace',
       returnTo: addPlaceReturnTo,
       onSelect: (selectedPlaces) => {
-        const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl }));
+        const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl, category: p.category }));
         updatePlaces((prev) => ({ ...prev, free: [...prev.free, ...newPlaces] }));
       },
     });
@@ -75,7 +75,7 @@ export default function PlanPlace({ onBack, onConfirm, location, range, reportSc
       kind: 'addPlace',
       returnTo: addPlaceReturnTo,
       onSelect: (selectedPlaces) => {
-        const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl }));
+        const newPlaces = selectedPlaces.map((p) => newPlannedPlace({ ...p, imageUrl: p.thumbnailUrl, category: p.category }));
         updatePlaces((prev) => {
           const existing = prev.byDate[date] ?? [];
           const tagged = newPlaces.map((p) => ({ ...p, timeSlot }));

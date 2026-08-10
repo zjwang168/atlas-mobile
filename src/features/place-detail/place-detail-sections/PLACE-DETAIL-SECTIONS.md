@@ -21,7 +21,7 @@ type PlaceOverviewSectionProps = {
 };
 ```
 
-Shows: place name, address, open/closed status line (derived from `place.schedule` via `getOpenStatus`), four action icon buttons (navigate, share, heart, ellipsis), and a thumbnail image. The thumbnail currently uses a static placeholder image.
+Shows: place name, address, open/closed status line (derived from `place.schedule` via `getOpenStatus`), four action icon buttons (navigate, share, heart, ellipsis), and a thumbnail image. The thumbnail currently uses a static placeholder image. The address line is omitted entirely when the place has no address, so it contributes no spacing rather than rendering as a blank line.
 
 ## PlaceInfoSection
 

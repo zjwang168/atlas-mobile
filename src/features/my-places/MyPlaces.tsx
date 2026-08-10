@@ -1,186 +1,292 @@
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
-import { Place } from '@/types/place';
-import { SegmentedControl } from '@expo/ui/community/segmented-control';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { memo, useState } from 'react';
-import { View } from 'react-native';
-import AllPlaces from './all-places/AllPlaces';
-import Atlas from './atlas/Atlas';
+import type { Place } from '@/types/place';
+import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
+import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
+import { XIcon } from 'phosphor-react-native/src/icons/X';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Keyboard,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
+import AllPlaces, {
+  type CollectionFilter,
+} from './all-places/AllPlaces';
 
-type Tab = 'allPlaces' | 'atlas';
+export type PlacesView = CollectionFilter;
 
 type MyPlacesProps = {
   onPlacePress?: (place: Place) => void;
   onScroll?: (y: number) => void;
   bottomInset?: number;
-  avatarUri?: string;
-  avatarFallback?: string;
-  onAvatarPress?: () => void;
-  onSharePress?: () => void;
-  /** Renders a condensed header only — used when the panel is in compact snap state */
+  activeView?: PlacesView;
+  verticalScrollEnabled?: boolean;
+  active?: boolean;
+  /** Renders a condensed label only — used when the panel is compact. */
   compact?: boolean;
 };
+
+const FILTERS: Array<{
+  value: PlacesView;
+  label: string;
+  icon?: typeof MapPinIcon;
+}> = [
+  { value: 'all', label: 'All' },
+  { value: 'places', label: 'Places', icon: MapPinIcon },
+  { value: 'atlas', label: 'Atlas', icon: ListDashesIcon },
+];
 
 function MyPlaces({
   onPlacePress,
   onScroll,
   bottomInset = 0,
-  avatarUri,
-  avatarFallback = 'U',
-  onAvatarPress,
-  onSharePress,
+  activeView = 'all',
+  verticalScrollEnabled = true,
+  active = true,
   compact = false,
 }: MyPlacesProps) {
-  const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
-  const { refreshSavedPlaces } = useHome();
+  const [selectedView, setSelectedView] = useState<PlacesView>(activeView);
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchInputRef = useRef<TextInput>(null);
 
-  // Native iOS UISegmentedControl (via @expo/ui). Rendered inside the scroll
-  // content so it scrolls away rather than staying pinned.
-  const segment = (
-    <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-      <SegmentedControl
-        values={['All places', 'Atlas']}
-        selectedIndex={activeTab === 'allPlaces' ? 0 : 1}
-        onChange={(e) =>
-          setActiveTab(e.nativeEvent.selectedSegmentIndex === 0 ? 'allPlaces' : 'atlas')
-        }
-      />
-    </View>
-  );
+  const releaseSearchFocus = useCallback(() => {
+    searchInputRef.current?.blur();
+    const focusedInput = TextInput.State.currentlyFocusedInput();
+    if (focusedInput) TextInput.State.blurTextInput(focusedInput);
+    Keyboard.dismiss();
+  }, []);
+
+  useEffect(() => {
+    setSelectedView(activeView);
+  }, [activeView]);
+
+  useEffect(() => {
+    if (!searchExpanded || !active) return;
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [active, searchExpanded]);
+
+  useEffect(() => {
+    if (active) return;
+    releaseSearchFocus();
+  }, [active, releaseSearchFocus]);
 
   if (compact) {
     return (
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingHorizontal: 20,
-          paddingVertical: 8,
-        }}
-      >
-        <Text style={{ fontSize: 18, fontWeight: '600', color: '#09090b' }}>
-          My places
+      <View style={styles.compact}>
+        <Text style={styles.compactLabel}>
+          {selectedView === 'atlas' ? 'Atlas' : 'Places'}
         </Text>
-        <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-          <PressableScale
-            onPress={onSharePress}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 999,
-              backgroundColor: 'rgba(255,255,255,0.65)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.12,
-              shadowRadius: 20,
-              elevation: 4,
-            }}
-          >
-            <Ionicons name="share-outline" size={16} color="#000" />
-          </PressableScale>
-          <PressableScale onPress={onAvatarPress}>
-            <Avatar alt={avatarFallback} style={{ width: 32, height: 32 }}>
-              {avatarUri ? <AvatarImage source={{ uri: avatarUri }} /> : null}
-              <AvatarFallback>
-                <Text style={{ fontSize: 11, fontWeight: '500' }}>{avatarFallback}</Text>
-              </AvatarFallback>
-            </Avatar>
-          </PressableScale>
-        </View>
       </View>
     );
   }
 
-  // Title + share + avatar. Rendered at the top of the scroll content (in the
-  // list header) so @gorhom can treat the list as the sheet's scrollable.
-  const titleRow = (
-    <View
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        paddingTop: 4,
-        paddingBottom: 12,
-      }}
-    >
-      <Text style={[typography.display, { color: '#09090b' }]}>
-        My places
-      </Text>
-      <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-        <PressableScale
-          onPress={onSharePress}
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 33,
-            backgroundColor: 'rgba(255,255,255,0.65)',
-            alignItems: 'center',
-            justifyContent: 'center',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.12,
-            shadowRadius: 20,
-            elevation: 4,
-          }}
-        >
-          <Ionicons name="share-outline" size={20} color="#000" />
-        </PressableScale>
-        <PressableScale
-          onPress={onAvatarPress}
-          style={{
-            borderRadius: 999,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.12,
-            shadowRadius: 20,
-            elevation: 4,
-          }}
-        >
-          <Avatar alt={avatarFallback} style={{ width: 40, height: 40 }}>
-            {avatarUri ? <AvatarImage source={{ uri: avatarUri }} /> : null}
-            <AvatarFallback>
-              <Text className="text-sm font-medium">{avatarFallback}</Text>
-            </AvatarFallback>
-          </Avatar>
-        </PressableScale>
-      </View>
-    </View>
-  );
+  const handleFilterChange = (nextFilter: PlacesView) => {
+    Keyboard.dismiss();
+    setSelectedView(nextFilter);
+  };
 
-  // Title and segment are pinned above the tab body — kept in one stable tree
-  // position so the native SegmentedControl never unmounts/remounts when
-  // switching tabs (it used to live inside AllPlaces's FlatList header for one
-  // tab and as a plain sibling for the other, causing a remount + height jump).
-  //
-  // Both tab bodies stay mounted permanently (toggled via `display` rather than
-  // conditional rendering) so switching tabs never re-triggers AllPlaces's
-  // fetch/FlatList mount — that remount was showing up as a multi-second delay
-  // with no spinner (savedPlaces is already cached, so `loading` clears before
-  // the first frame paints; the delay was the remount itself, not a fetch).
   return (
-    <View style={{ flex: 1 }}>
-      {titleRow}
-      {segment}
-      <View style={{ flex: 1, display: activeTab === 'allPlaces' ? 'flex' : 'none' }}>
-        <AllPlaces
-          onScroll={onScroll}
-          onPlacePress={onPlacePress}
-          bottomInset={bottomInset}
-        />
-      </View>
-      <View style={{ flex: 1, display: activeTab === 'atlas' ? 'flex' : 'none' }}>
-        <Atlas />
-      </View>
+    <View style={styles.root}>
+      {searchExpanded ? (
+        <View style={styles.searchRow}>
+          <Pressable
+            accessibilityRole="search"
+            onPress={() => searchInputRef.current?.focus()}
+            style={styles.searchField}
+          >
+            <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
+            <TextInput
+              ref={searchInputRef}
+              editable={active}
+              showSoftInputOnFocus={active}
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search places of interests..."
+              placeholderTextColor="#8A8A8A"
+              returnKeyType="search"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.searchInput}
+            />
+          </Pressable>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Close search"
+            onPress={() => {
+              releaseSearchFocus();
+              setQuery('');
+              setSearchExpanded(false);
+            }}
+            scaleTo={0.9}
+            style={styles.closeButton}
+          >
+            <XIcon size={16} weight="bold" color="#717171" />
+          </PressableScale>
+        </View>
+      ) : (
+        <View style={styles.filterRow}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Search saved places and atlases"
+            onPress={() => setSearchExpanded(true)}
+            scaleTo={0.94}
+            style={styles.searchButton}
+          >
+            <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
+          </PressableScale>
+
+          {FILTERS.map(({ value, label, icon: Icon }) => {
+            const active = selectedView === value;
+            return (
+              <PressableScale
+                key={value}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`Show ${label.toLowerCase()}`}
+                onPress={() => handleFilterChange(value)}
+                scaleTo={0.96}
+                style={[
+                  styles.filterChip,
+                  value === 'all' && styles.allFilterChip,
+                  active && styles.filterChipActive,
+                ]}
+              >
+                {Icon ? (
+                  <Icon
+                    size={16}
+                    weight="fill"
+                    color={active ? '#FFFFFF' : '#A7A7A7'}
+                  />
+                ) : null}
+                <Text
+                  style={[
+                    typography.bodySmallEmphasis,
+                    styles.filterLabel,
+                    active && styles.filterLabelActive,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </PressableScale>
+            );
+          })}
+        </View>
+      )}
+
+      <AllPlaces
+        onScroll={onScroll}
+        onPlacePress={onPlacePress}
+        bottomInset={bottomInset}
+        verticalScrollEnabled={verticalScrollEnabled}
+        filter={selectedView}
+        query={query}
+        onFilterChange={setSelectedView}
+      />
     </View>
   );
 }
 
 export default memo(MyPlaces);
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+  compact: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  compactLabel: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#09090B',
+  },
+  filterRow: {
+    height: 52,
+    paddingTop: 4,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchButton: {
+    width: 48,
+    height: 36,
+    borderRadius: 30,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterChip: {
+    height: 36,
+    borderRadius: 30,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  allFilterChip: {
+    paddingHorizontal: 16,
+  },
+  filterChipActive: {
+    backgroundColor: '#12C170',
+  },
+  filterLabel: {
+    color: '#717171',
+    letterSpacing: -0.14,
+  },
+  filterLabelActive: {
+    color: '#FFFFFF',
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 12,
+    marginHorizontal: 16,
+    gap: 8,
+  },
+  searchField: {
+    flex: 1,
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 30,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchInput: {
+    flex: 1,
+    height: 36,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    color: '#1A1A1A',
+    fontSize: 14,
+    fontWeight: '400',
+    letterSpacing: -0.14,
+  },
+});

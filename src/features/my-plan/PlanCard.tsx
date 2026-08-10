@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo } from 'react';
 import { Image, TouchableOpacity, View } from 'react-native';
-import { MapPinCover } from '@/components/map-pin-cover/MapPinCover';
+import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 
@@ -56,7 +56,7 @@ function PlanCard({ title, placeCount, imageUrl, create = false, deletionMode = 
           ) : imageUrl ? (
             <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
           ) : (
-            <MapPinCover />
+            <PlaceCover />
           )}
         </View>
 

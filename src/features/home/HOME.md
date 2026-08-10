@@ -26,6 +26,7 @@ App.tsx (HomeProvider)
 - The tab bar drives a persistent 2-page pager (My Places / My Plan) rather than screen navigation — both pages stay mounted.
 - `AIChatBox` appears as a sidekick layered over the pager, not as its own tab or page.
 - Panels and overlays are mutually exclusive, gated by `overlay.kind` and `activeSidekick` — except `CreatePlan`, which `HomeScreen` also keeps mounted while `overlay` is `{ kind: 'addPlace', returnTo: { kind: 'createPlan' } }`, so the `addPlace` overlay can sit on top of it without unmounting the wizard (see `CREATE-PLAN.md`).
+- Location is requested once when `HomeProvider` mounts. A refusal is not retried automatically — iOS will not re-prompt anyway — so `userLocation` stays at the default centre and the map's puck stays hidden until the user taps the locate button, which is the deliberate retry.
 - `HomePanel` (both tabs), `PlaceDetail`, `AtlasDetail`, and `AddPlace` all use the same `ContentPanel` snap group (`home-main`), so a panel opened without an explicit snap state inherits the last settled height. The group memory is owned by `src/components/content-panel`, not `HomeContext`, and it is broadcast about a frame after a drag-release snap (not deferred to spring completion) so a panel becoming visible mid-spring doesn't briefly show a stale height. `HomeScreen` only forwards a `ContentPanel`'s `onHeightChange` into the map's camera padding for whichever one is actually the on-screen driver (active tab, `PlaceDetail` while its overlay is open, `AtlasDetail` while its overlay is open, or `AddPlace` while its overlay is open) — the other synced-but-off-screen instances still inherit state consistency, but don't fight over the camera. `AtlasDetail` and `AddPlace` both pass `minSnap="default"` since neither has a `compactContent` — without it, either could inherit `compact` from `HomePanel` (the group's most common resting state, since it's the always-visible member) with nothing sane to render there — see `CONTENT-PANEL.md` Snap Groups. `HomeScreen`'s own read of the group's settled state (used for the map's discrete padding recenter, not per-frame dragging) is deliberately delayed roughly one spring's settle time behind the group's raw value — firing that recenter mid-spring would compete with the panel's own height animation on the JS thread.
 
 ## API
@@ -59,7 +60,10 @@ function useHome(): {
   importNotification: { visible: boolean; title: string; places: ParsedPlace[] } | null;
   setImportNotification: (n) => void;                               // import completion toast payload
   activeSidekick: 'none' | 'aiChat' | 'places'; setActiveSidekick: (s) => void;  // 'aiChat' shows AIChatBox
-  userLocation: [number, number];                                   // default map center (Seattle) until GPS is wired up
+  userLocation: [number, number];                                   // device position, or DEFAULT_MAP_CENTER when permission is refused or the fix fails
+  locationStatus: 'undetermined' | 'granted' | 'denied';            // gates the map's location puck
+  isLocationFallback: boolean;                                      // true when userLocation is the default centre, not a real fix
+  refreshUserLocation: () => Promise<[number, number]>;             // re-reads position, prompting on first call; resolves to the fallback rather than rejecting
 };
 
 type Overlay =

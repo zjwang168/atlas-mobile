@@ -5,13 +5,14 @@ Shared TypeScript types used across features. Import from here — do not re-dec
 ## `place.ts` — canonical place types
 
 ```ts
-import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, DayOfWeek, AtlasPlace } from '@/types/place';
+import type { Place, PlaceDetail, PlaceSaveOutcome, PlaceTag, PlaceLink, DaySchedule, TimeSlot, DayOfWeek, AtlasPlace } from '@/types/place';
 ```
 
 | Type | Used by |
 |---|---|
 | `Place` | Map markers, list rows — minimal identity + coordinates |
-| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. Also carries the rest of the `places` table columns (`category`, `description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) as optional fields — reserved for the DB row, not yet populated by `toPlaceDetail()` or consumed by any UI |
+| `PlaceSaveOutcome` | `'saved' \| 'duplicate'` — what a save turned out to do, since `savePlaces()` dedups and a matched place creates no row. Produced by `usePlaceSearch`, rendered by `SaveAffordance`, consumed by both search surfaces |
+| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. `category` is populated by `toPlaceDetail()` and read by `PlaceCover` to pick a thumbnail colour. The rest of the `places` table columns (`description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) are carried as optional fields but reserved — not yet populated or consumed by any UI |
 | `PlaceTag` | PlaceCard tags, PlaceInfoSection, Badge pills |
 | `PlaceLink` | PlaceInfoSection link rows |
 | `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |
@@ -21,13 +22,14 @@ import type { Place, PlaceDetail, PlaceTag, PlaceLink, DaySchedule, TimeSlot, Da
 ## `route.ts` — parse/route API types
 
 ```ts
-import type { ParseResult, GeocodedLocation, RouteResult, RouteSegment, ChatMessage } from '@/types/route';
+import type { ParseResult, GeocodedLocation, PlaceSuggestion, RouteResult, RouteSegment, ChatMessage } from '@/types/route';
 ```
 
 | Type | Used by |
 |---|---|
 | `ParseResult` | `parseLink()` return, `HomeScreen` state; `locations[]` may include backend-filled `photo_url` |
-| `GeocodedLocation` | Map markers for route stops; carries optional `photo_url` from parse responses |
+| `GeocodedLocation` | Map markers for route stops, and `retrievePlace()` results; carries optional `photo_url` from parse responses, plus optional `external_id`/`source`/`city`/`region`/`country` that only place search populates |
+| `PlaceSuggestion` | One candidate from `searchPlaces()` — deliberately has no coordinates; resolve it via `retrievePlace()` to get a saveable place |
 | `RouteResult` | GeoJSON polyline construction |
 | `ChatMessage` | `HomeScreen` message thread (`role: 'user' \| 'assistant' \| 'system'`) |
 

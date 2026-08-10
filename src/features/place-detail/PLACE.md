@@ -38,7 +38,7 @@ type Place = {
 
 type PlaceDetail = Place & {
   address: string;
-  thumbnailUrl: string;
+  thumbnailUrl: string;   // the real saved photo, or '' — a photoless place renders PlaceCover instead
   schedule: DaySchedule[];
   tags: PlaceTag[];
   collections?: PlaceTag[];
@@ -77,6 +77,8 @@ PlaceDetail (ContentPanel)
 ## Behaviour
 
 In `PlaceInfoSection`, **Tags** and **Note** always render their section header regardless of content; every other section (Summary, Collection, Visit Strategy, Links) is hidden entirely when it has no content to show.
+
+The address line under the place name is dropped entirely — element and its spacing — when the place has no address, rather than rendering blank and holding its row height.
 
 **Note** is editable: tapping its pencil button swaps the static text for a multiline input (draft state, not yet saved); the header then shows cancel/save (✕/✓) instead of the pencil. Save calls `HomeContext.updateSavedPlaceNote(id, note)`, which writes through the local cache immediately (offline-safe) and syncs to Supabase in the background. Cancel discards the draft. Switching to a different place resets any in-progress edit.
 

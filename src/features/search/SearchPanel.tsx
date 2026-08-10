@@ -1,111 +1,178 @@
-import { useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { memo, useCallback, useMemo } from 'react';
 import {
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Keyboard,
+  Pressable,
+  useColorScheme,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Text } from '@/components/ui/text';
+import { useHome } from '@/features/home/HomeContext';
+import { SaveAffordance } from '@/components/save-affordance/SaveAffordance';
+import { MIN_QUERY_LENGTH } from '@/services/place/placeSearchService';
+import { usePlaceSearch } from '@/services/place/usePlaceSearch';
+import type { PlaceSaveOutcome } from '@/types/place';
+import type { PlaceSuggestion } from '@/types/route';
 
 type SearchPanelProps = {
   onClose: () => void;
 };
 
-export default function SearchPanel({ onClose }: SearchPanelProps) {
-  const { top } = useSafeAreaInsets();
-  const [query, setQuery] = useState('');
+function iconColor(scheme: ReturnType<typeof useColorScheme>): string {
+  return scheme === 'dark' ? '#fafafa' : '#0a0a0a';
+}
+
+function formatDistance(metres: number | null | undefined): string | null {
+  if (metres == null) return null;
+  return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(1)} km`;
+}
+
+type ResultRowProps = {
+  suggestion: PlaceSuggestion;
+  outcome: PlaceSaveOutcome | null;
+  saving: boolean;
+  onPress: (suggestion: PlaceSuggestion) => void;
+};
+
+/** Memoized: the list swaps its whole dataset on every settled keystroke, and
+    rows that survive that swap shouldn't re-render with it. */
+const ResultRow = memo(function ResultRow({ suggestion, outcome, saving, onPress }: ResultRowProps) {
+  const scheme = useColorScheme();
+  const handlePress = useCallback(() => onPress(suggestion), [onPress, suggestion]);
+  const distance = formatDistance(suggestion.distance_m);
+  const address = suggestion.full_address || suggestion.place_formatted || '';
 
   return (
-    <View style={[styles.container, { paddingTop: top + 60 }]}>
-      {/* 标题栏 */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>搜索</Text>
-        <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-          <Text style={styles.closeText}>取消</Text>
-        </TouchableOpacity>
+    <Pressable
+      onPress={handlePress}
+      disabled={outcome !== null || saving}
+      className="flex-row items-center gap-3 border-b border-border px-4 py-3 active:bg-accent"
+    >
+      <View className="h-10 w-10 items-center justify-center rounded-full bg-muted">
+        <Ionicons name="location-outline" size={20} color={iconColor(scheme)} />
       </View>
 
-      {/* 搜索输入框 */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="搜索已保存的地点..."
-          placeholderTextColor="#8E8E93"
-          value={query}
-          onChangeText={setQuery}
-          autoFocus
-          returnKeyType="search"
-          clearButtonMode="while-editing"
-        />
+      <View className="flex-1">
+        <Text className="bodyEmphasis text-text-primary" numberOfLines={1}>
+          {suggestion.name}
+        </Text>
+        {address ? (
+          <Text className="bodySmall text-text-secondary" numberOfLines={1}>
+            {address}
+          </Text>
+        ) : null}
+        {suggestion.category || distance ? (
+          <View className="mt-1 flex-row items-center gap-2">
+            {suggestion.category ? (
+              <Badge variant="secondary">
+                <Text>{suggestion.category}</Text>
+              </Badge>
+            ) : null}
+            {distance ? <Text className="caption text-text-tertiary">{distance}</Text> : null}
+          </View>
+        ) : null}
+        {outcome === 'duplicate' ? (
+          <Text className="caption mt-1 text-text-tertiary">Already in My Places</Text>
+        ) : null}
       </View>
 
-      {/* 搜索结果占位 */}
-      <View style={styles.centered}>
-        {query.length === 0 ? (
-          <Text style={styles.hintText}>输入关键词搜索已保存的地点</Text>
-        ) : (
-          <Text style={styles.hintText}>暂无搜索结果</Text>
-        )}
+      <SaveAffordance outcome={outcome} saving={saving} />
+    </Pressable>
+  );
+});
+
+export default function SearchPanel({ onClose }: SearchPanelProps) {
+  const insets = useSafeAreaInsets();
+  const scheme = useColorScheme();
+  const { userLocation, refreshSavedPlaces, savedPlaces } = useHome();
+
+  // The session, debounce, cancellation, and save-outcome machinery all live in
+  // the hook — this component is the panel's presentation only.
+  const { query, setQuery, suggestions, status, savingId, outcomeFor, pick } = usePlaceSearch({
+    proximity: userLocation,
+    onSaved: refreshSavedPlaces,
+    savedPlaces,
+  });
+
+  const trimmed = query.trim();
+
+  const renderItem = useCallback(
+    ({ item }: { item: PlaceSuggestion }) => (
+      <ResultRow
+        suggestion={item}
+        outcome={outcomeFor(item)}
+        saving={savingId === item.external_id}
+        onPress={pick}
+      />
+    ),
+    [pick, outcomeFor, savingId],
+  );
+
+  const keyExtractor = useCallback((item: PlaceSuggestion) => item.external_id, []);
+
+  const emptyState = useMemo(() => {
+    if (status === 'searching') return null;
+    if (status === 'error') return 'Search is unavailable right now. Try again in a moment.';
+    if (trimmed.length < MIN_QUERY_LENGTH) return 'Search for a place by name to add it to My Places.';
+    if (status === 'ready' && suggestions.length === 0) return `No places found for "${trimmed}".`;
+    return null;
+  }, [status, trimmed, suggestions.length]);
+
+  return (
+    <View className="absolute inset-0 z-40 bg-background" style={{ paddingTop: insets.top }}>
+      <View className="flex-row items-center gap-2 px-4 py-2">
+        <Pressable onPress={onClose} hitSlop={8} className="p-1">
+          <Ionicons name="arrow-back" size={24} color={iconColor(scheme)} />
+        </Pressable>
+        <View className="flex-1 flex-row items-center justify-center">
+          <Input
+            className="flex-1"
+            placeholder="Search places"
+            value={query}
+            onChangeText={setQuery}
+            autoFocus
+            autoCorrect={false}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+            onSubmitEditing={Keyboard.dismiss}
+          />
+          {status === 'searching' ? (
+            <View className="absolute right-3">
+              <ActivityIndicator size="small" />
+            </View>
+          ) : null}
+        </View>
       </View>
+
+      <FlatList
+        data={suggestions}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        ListEmptyComponent={
+          emptyState ? (
+            <View className="px-6 py-10">
+              <Text className="bodySmall text-center text-text-tertiary">{emptyState}</Text>
+            </View>
+          ) : null
+        }
+        ListFooterComponent={
+          suggestions.length > 0 ? (
+            <View className="px-4 py-3">
+              {/* Required wherever Mapbox search results are displayed. */}
+              <Text className="caption text-text-tertiary">© Mapbox © OpenStreetMap</Text>
+            </View>
+          ) : null
+        }
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    zIndex: 100,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#000',
-  },
-  closeButton: {
-    padding: 6,
-  },
-  closeText: {
-    fontSize: 16,
-    color: '#007AFF',
-    fontWeight: '600',
-  },
-  inputContainer: {
-    marginHorizontal: 20,
-    marginTop: 14,
-    marginBottom: 10,
-  },
-  input: {
-    backgroundColor: '#F2F2F7',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: '#000',
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  hintText: {
-    fontSize: 15,
-    color: '#8E8E93',
-    textAlign: 'center',
-  },
-});

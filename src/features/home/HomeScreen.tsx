@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, StatusBar, StyleSheet, View } from 'react-native';
+import { Animated, Dimensions, Platform, StatusBar, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import TopNav from '../../components/top-nav/TopNav';
+import TopNav, { type TopMode } from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
@@ -18,20 +18,27 @@ import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
 import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
-import HomeTabBar, { TAB_PLACES, TAB_PLAN } from './HomeTabBar';
+import HomeTabBar, {
+  TAB_PLACES,
+  TAB_PLAN,
+  TAB_PROFILE,
+} from './HomeTabBar';
 import SearchPanel from '../search/SearchPanel';
+import AccountModal from '../auth/AccountModal';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
 // 200 / mass 0.9) — see below for why the map's padding recompute waits this long
 // after a group snap change instead of reacting immediately.
 const PANEL_SPRING_SETTLE_DELAY = 380;
+const SHEET_OVERLAY_HANDOFF_DELAY = 360;
 
 // ---- Types ----
 
 interface HomeScreenProps {
   onOpenImport?: () => void;
   onOpenChatHistory?: () => void;
+  externalOverlayVisible?: boolean;
 }
 
 // ---- Helpers ----
@@ -67,18 +74,28 @@ const medianCenter = (places: ParsedPlace[]): [number, number] => {
 
 // ---- Root export — HomeProvider is now in App.tsx ----
 
-export default function HomeScreen({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
+export default function HomeScreen({
+  onOpenImport,
+  onOpenChatHistory,
+  externalOverlayVisible = false,
+}: HomeScreenProps) {
   return (
     <HomeScreenContent
       onOpenImport={onOpenImport}
       onOpenChatHistory={onOpenChatHistory}
+      externalOverlayVisible={externalOverlayVisible}
     />
   );
 }
 
 // ---- Inner component — consumes the context ----
 
-function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps) {
+function HomeScreenContent({
+  onOpenImport,
+  onOpenChatHistory,
+  externalOverlayVisible = false,
+}: HomeScreenProps) {
+  const { height: screenHeight } = useWindowDimensions();
   const {
     overlay,
     setOverlay,
@@ -97,6 +114,8 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     activeSidekick,
     setActiveSidekick,
     userLocation,
+    locationStatus,
+    refreshUserLocation,
     savedPlaces,
   } = useHome();
   const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
@@ -113,20 +132,21 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     const timeout = setTimeout(() => setSettledPanelSnapState(groupSnapState), PANEL_SPRING_SETTLE_DELAY);
     return () => clearTimeout(timeout);
   }, [groupSnapState, settledPanelSnapState]);
-  const tabBarOpacity = useRef(new Animated.Value(1)).current;
+  const tabBarOpacity = useRef(
+    new Animated.Value(Platform.OS === 'ios' ? 0 : 1),
+  ).current;
   const pagerTranslateX = useRef(new Animated.Value(0)).current;
   const pagerWidth = useMemo(() => Dimensions.get('window').width, []);
 
-  useEffect(() => {
-    Animated.timing(tabBarOpacity, {
-      toValue: tabBarVisible ? 1 : 0,
-      duration: 260,
-      useNativeDriver: true,
-    }).start();
-  }, [tabBarVisible]);
-
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
-  const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN], []);
+  const [topMode, setTopMode] = useState<TopMode>('saved');
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
+  const [standaloneChatKey, setStandaloneChatKey] = useState(0);
+  const [chatPresented, setChatPresented] = useState(false);
+  const [mainSheetPaused, setMainSheetPaused] = useState(false);
+  const pendingSheetActionRef = useRef<(() => void) | null>(null);
+  const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
   // Use parsedPlaces from HomeContext (set by App.tsx after parse)
   const hasParsedPlaces = parsedPlaces.length > 0;
@@ -166,14 +186,99 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   }, [selectedPlaceCoordinate, hasParsedPlaces]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
+  const historyChatVisible = activeSidekick === 'aiChat' && panelVisible;
+  const chatVisible = standaloneChatVisible || historyChatVisible;
+  const effectiveTabBarVisible = tabBarVisible && !chatVisible;
+  // On iOS the persistent native sheet owns the only visible tab bar.
+  // Keeping the React Native copy hidden prevents it flashing through while
+  // the sheet hands off to Add, Chat, or Account overlays.
+  const rootTabBarVisible = Platform.OS !== 'ios' && effectiveTabBarVisible;
+  const mainSheetVisible =
+    Platform.OS === 'ios' &&
+    overlay.kind === 'none' &&
+    !externalOverlayVisible &&
+    !chatVisible &&
+    !accountOpen &&
+    !mainSheetPaused &&
+    (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
+
+  useEffect(() => {
+    if (
+      !externalOverlayVisible &&
+      !chatVisible &&
+      !accountOpen &&
+      overlay.kind === 'none'
+    ) {
+      setMainSheetPaused(false);
+    }
+  }, [accountOpen, chatVisible, externalOverlayVisible, overlay.kind]);
+
+  const presentAboveMainSheet = useCallback((action: () => void) => {
+    if (Platform.OS !== 'ios' || !mainSheetVisible) {
+      action();
+      return;
+    }
+
+    pendingSheetActionRef.current = action;
+    setMainSheetPaused(true);
+  }, [mainSheetVisible]);
+
+  const handleMainSheetDismissed = useCallback(() => {
+    const pendingAction = pendingSheetActionRef.current;
+    pendingSheetActionRef.current = null;
+    pendingAction?.();
+  }, []);
+
+  useEffect(() => {
+    Animated.timing(tabBarOpacity, {
+      toValue: rootTabBarVisible ? 1 : 0,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [rootTabBarVisible, tabBarOpacity]);
+
+  useEffect(() => {
+    if (!chatVisible) {
+      setChatPresented(false);
+      return;
+    }
+
+    if (Platform.OS !== 'ios') {
+      setChatPresented(true);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setChatPresented(true);
+    }, SHEET_OVERLAY_HANDOFF_DELAY);
+    return () => clearTimeout(timeout);
+  }, [chatVisible]);
+
+  useEffect(() => {
+    if (activeHistoryItem) {
+      setStandaloneChatVisible(false);
+    }
+  }, [activeHistoryItem]);
+
   // Any bottom panel that should push the map center up — the main pager panel,
   // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
   // drives the same padding-tracking path.
-  const bottomPanelActive = panelVisible || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  const mainPanelActive = Platform.OS === 'ios' ? mainSheetVisible : panelVisible;
+  const bottomPanelActive = mainPanelActive || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  const nativeMainPanelActive =
+    Platform.OS === 'ios' &&
+    (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
+  const settledBottomPanelHeight = nativeMainPanelActive
+    ? settledPanelSnapState === 'short'
+      ? screenHeight * 0.40
+      : settledPanelSnapState === 'tall'
+        ? screenHeight * 0.94
+        : screenHeight * 0.54
+    : SNAP_HEIGHTS[settledPanelSnapState];
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
-  const bottomPanelHeightRef = useRef(SNAP_HEIGHTS[settledPanelSnapState]);
+  const bottomPanelHeightRef = useRef(settledBottomPanelHeight);
   const mapRef = useRef<MapboxMapHandle>(null);
   // Recomputed whenever the active bottom panel toggles OR its resolved snap state
   // changes, so a discrete camera recenter (e.g. selecting a different marker while
@@ -183,10 +288,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // the map padding smoothly. Per-frame drag tracking stays on the ref-based path below.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: bottomPanelActive ? SNAP_HEIGHTS[settledPanelSnapState] : 0,
+    paddingBottom: bottomPanelActive ? settledBottomPanelHeight : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [bottomPanelActive, settledPanelSnapState]);
+  }), [bottomPanelActive, settledBottomPanelHeight]);
   useEffect(() => {
     bottomPanelHeightRef.current = mapPadding.paddingBottom;
   }, [mapPadding]);
@@ -198,8 +303,28 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   }, [bottomPanelActive]);
 
   const handleAddPress = useCallback(() => {
-    onOpenImport?.();
-  }, [onOpenImport]);
+    if (!onOpenImport) return;
+    presentAboveMainSheet(() => {
+      onOpenImport();
+    });
+  }, [onOpenImport, presentAboveMainSheet]);
+  const handleChatPress = useCallback(() => {
+    presentAboveMainSheet(() => {
+      setStandaloneChatVisible(true);
+      setChatPresented(true);
+    });
+  }, [presentAboveMainSheet]);
+  const handleAccountPress = useCallback(() => {
+    presentAboveMainSheet(() => {
+      setAccountOpen(true);
+    });
+  }, [presentAboveMainSheet]);
+  const handleNewChat = useCallback(() => {
+    setActiveHistoryItem(null);
+    setActiveSidekick('none');
+    setStandaloneChatVisible(true);
+    setStandaloneChatKey((current) => current + 1);
+  }, [setActiveHistoryItem, setActiveSidekick]);
   const animateToTab = useCallback((tab: string) => {
     const idx = Math.max(0, tabOrder.indexOf(tab));
     Animated.spring(pagerTranslateX, {
@@ -218,9 +343,22 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     animateToTab(activeTab);
   }, []);
   // --- Search & History handlers ---
+  // SearchPanel is a root-level RN overlay, so on iOS it would render beneath
+  // the native places sheet. Going through presentAboveMainSheet lets the sheet
+  // finish dismissing first instead of the two animating over each other.
   const handleSearchPress = useCallback(() => {
-    setOverlay({ kind: 'search' });
-  }, [setOverlay]);
+    presentAboveMainSheet(() => {
+      setOverlay({ kind: 'search' });
+    });
+  }, [presentAboveMainSheet, setOverlay]);
+
+  /** Locate button: take a fresh fix, then recenter on whatever came back.
+      A refused permission resolves to the default centre rather than failing,
+      so the button always moves the camera somewhere sensible. */
+  const handleLocatePress = useCallback(async () => {
+    const coordinate = await refreshUserLocation();
+    mapRef.current?.flyTo(coordinate);
+  }, [refreshUserLocation]);
 
   const handleMarkerPress = useCallback((marker: MapMarker) => {
     setSelectedPlaceId(marker.id);
@@ -240,10 +378,17 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         padding={mapPadding}
         selectedMarkerId={selectedPlaceId}
         onMarkerPress={handleMarkerPress}
+        showUserLocation={locationStatus === 'granted'}
       />
 
       <TopBlurFade />
-      <TopNav onSearchPress={handleSearchPress} />
+      <TopNav
+        onNavigatePress={handleLocatePress}
+        topMode={topMode}
+        onTopModeChange={setTopMode}
+        showTopMode={activeTab === TAB_PLACES}
+        onAvatarPress={handleAccountPress}
+      />
 
       <View style={styles.pagerViewport} pointerEvents="box-none">
         <Animated.View
@@ -257,41 +402,99 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
           pointerEvents="box-none"
         >
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
-            <HomePanel
-              activeTab={TAB_PLACES}
-              snapGroup={HOME_PANEL_SNAP_GROUP}
-              visible={panelVisible}
-              onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
-            />
+            {Platform.OS !== 'ios' ? (
+              <HomePanel
+                activeTab={TAB_PLACES}
+                snapGroup={HOME_PANEL_SNAP_GROUP}
+                visible={panelVisible && activeTab === TAB_PLACES}
+                onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
+                onSearchPress={handleSearchPress}
+              />
+            ) : null}
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
-            <HomePanel
-              activeTab={TAB_PLAN}
-              snapGroup={HOME_PANEL_SNAP_GROUP}
-              visible={panelVisible}
-              onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
-            />
+            {Platform.OS !== 'ios' ? (
+              <HomePanel
+                activeTab={TAB_PLAN}
+                snapGroup={HOME_PANEL_SNAP_GROUP}
+                visible={panelVisible}
+                onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
+              />
+            ) : null}
+          </View>
+          <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
+            <View style={styles.profilePage}>
+              <Text style={styles.profileTitle}>Profile</Text>
+              <Text style={styles.profileSubtitle}>Your profile is coming soon.</Text>
+            </View>
           </View>
         </Animated.View>
       </View>
 
+      {Platform.OS === 'ios' &&
+      (activeTab === TAB_PLACES || activeTab === TAB_PLAN) ? (
+        <HomePanel
+          activeTab={activeTab}
+          topMode={topMode}
+          snapGroup={HOME_PANEL_SNAP_GROUP}
+          visible={mainSheetVisible}
+          onHeightChange={mainSheetVisible ? handlePanelHeightChange : undefined}
+          onDismissed={handleMainSheetDismissed}
+          onSearchPress={handleSearchPress}
+          bottomBar={effectiveTabBarVisible ? (
+            <HomeTabBar
+              activeTab={activeTab}
+              onTabChange={handleTabChange}
+              onAddPress={handleAddPress}
+              onChatPress={handleChatPress}
+              bottomOffset={0}
+            />
+          ) : undefined}
+        />
+      ) : null}
+
       <AIChatBox
-        key={activeHistoryItem?.id ?? 'atlas-ai-empty'}
-        places={activeHistoryItem?.places ?? parsedPlaces}
+        key={
+          standaloneChatVisible
+            ? `atlas-ai-standalone-${standaloneChatKey}`
+            : (activeHistoryItem?.id ?? 'atlas-ai-empty')
+        }
+        places={standaloneChatVisible ? [] : (activeHistoryItem?.places ?? parsedPlaces)}
         onClose={() => {
+          setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
-          setParsedPlaces([]);
-          setSelectedPlaceCoordinate(null);
-          setSelectedPlaceId(null);
           setActiveSidekick('none');
         }}
         onOpenHistory={onOpenChatHistory}
-        title={activeHistoryItem?.title}
-        visible={activeSidekick === 'aiChat' && panelVisible}
-        conversationId={activeHistoryItem?.id ?? null}
-        onPlacesCommitted={(newPlaces) => {
-          const currentItem = activeHistoryItem;
-          if (!currentItem) return;
+        onNewChat={handleNewChat}
+        showLanding={standaloneChatVisible}
+        title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
+        visible={chatPresented}
+        conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
+        onPlacesCommitted={(newPlaces, action) => {
+          const currentItem = standaloneChatVisible ? null : activeHistoryItem;
+          if (!currentItem) {
+            if (action === 'pin_in_chat' || action === 'both') {
+              const merged = [...parsedPlaces];
+              newPlaces.forEach((place) => {
+                const duplicate = merged.some(
+                  (item) =>
+                    item.name === place.name &&
+                    Math.abs(item.latitude - place.latitude) < 0.0002 &&
+                    Math.abs(item.longitude - place.longitude) < 0.0002,
+                );
+                if (!duplicate) merged.push(place);
+              });
+              setParsedPlaces(merged);
+              if (merged[0]) {
+                setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
+              }
+            }
+            refreshSavedPlaces().catch((error) => {
+              console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
+            });
+            return;
+          }
 
           const existing = currentItem.places ?? [];
           const merged = [...existing];
@@ -323,14 +526,17 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
       {/* Native tab bar — fades out when overlay features request it */}
       <Animated.View
         style={{ opacity: tabBarOpacity }}
-        pointerEvents={tabBarVisible ? 'box-none' : 'none'}
+        pointerEvents={rootTabBarVisible ? 'box-none' : 'none'}
       >
         <HomeTabBar
           activeTab={activeTab}
           onTabChange={handleTabChange}
           onAddPress={handleAddPress}
+          onChatPress={handleChatPress}
         />
       </Animated.View>
+
+      <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
 
       {/* Full-screen overlays — driven by HomeContext, above everything */}
 
@@ -367,7 +573,9 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
       <PlaceDetail
         placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
         onDismiss={() => setOverlay(overlay.kind === 'placeDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
-        onEdit={(place) => console.log('[HomeScreen] Edit place:', place.name)}
+        onEdit={(place) => {
+          if (__DEV__) console.log('[HomeScreen] Edit place:', place.name);
+        }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
       />
@@ -416,5 +624,24 @@ const styles = StyleSheet.create({
   pagerViewport: {
     ...StyleSheet.absoluteFill,
     overflow: 'hidden',
+  },
+  profilePage: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    paddingTop: 112,
+    paddingHorizontal: 28,
+  },
+  profileTitle: {
+    color: '#09090B',
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
+    letterSpacing: -0.8,
+  },
+  profileSubtitle: {
+    marginTop: 10,
+    color: '#8E8E93',
+    fontSize: 16,
+    lineHeight: 22,
   },
 });

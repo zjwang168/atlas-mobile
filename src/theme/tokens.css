@@ -86,6 +86,12 @@
   --color-atlas-6: var(--atlas-6);
   --color-atlas-7: var(--atlas-7);
   --color-atlas-8: var(--atlas-8);
+  --color-category-attraction: var(--category-attraction);
+  --color-category-food: var(--category-food);
+  --color-category-outdoors: var(--category-outdoors);
+  --color-category-shopping: var(--category-shopping);
+  --color-category-lodging: var(--category-lodging);
+  --color-category-neutral: var(--category-neutral);
 }
 
 /* ── Typography utilities ───────────────────────────────────────────────────
@@ -195,6 +201,16 @@
   --atlas-6: var(--color-teal-500);
   --atlas-7: var(--color-rose-500);
   --atlas-8: var(--color-olive-500);
+
+  /* Place-category covers. Saturated enough to carry a light glyph in either
+     theme, so — like --atlas-* above — only the neutral one is re-pointed for
+     dark mode. */
+  --category-attraction: var(--color-purple-500);
+  --category-food: var(--color-coral-500);
+  --category-outdoors: var(--color-emerald-500);
+  --category-shopping: var(--color-rose-500);
+  --category-lodging: var(--color-indigo-500);
+  --category-neutral: var(--color-gray-400);
 }
 
 /* ── Dark mode ──────────────────────────────────────────────────────────────
@@ -232,4 +248,5 @@
   --text-tertiary: var(--color-gray-500);
   --text-inverse: var(--color-gray-900);
   --handle: var(--color-gray-800);
+  --category-neutral: var(--color-gray-600);
 }

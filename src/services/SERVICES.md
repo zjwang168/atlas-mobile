@@ -2,6 +2,8 @@
 
 All backend API calls and external integrations live here. Nothing in `src/features/` should call `fetch()` directly — go through a service.
 
+Every module here is a plain async API except one: `place/usePlaceSearch.ts` is a React hook. See that section for why the search session cannot be expressed as a stateless function.
+
 ## Active Services
 
 ### `api/apiService.ts`
@@ -15,6 +17,14 @@ FastAPI backend client.
  * Timeout: 30 seconds (AbortController)
  */
 export async function parseLink(url: string): Promise<ParseResult>
+
+/** Typeahead place search. `sessionToken` must be the same one later passed to
+ *  retrievePlace() — Mapbox bills the session, not the keystrokes.
+ *  Pass `signal` to cancel a request the user has already typed past. */
+export async function searchPlaces(params: { query: string; sessionToken: string; proximity?: [number, number]; limit?: number; language?: string; country?: string }, signal?: AbortSignal): Promise<PlaceSuggestResponse>
+
+/** Resolve one suggestion into saveable places; a `brand` resolves to several. */
+export async function retrievePlace(externalId: string, sessionToken: string, signal?: AbortSignal): Promise<PlaceRetrieveResponse>
 ```
 
 `ParseResult` is defined in `src/types/route.ts`. See `src/features/parse-route/FETCHPARSE.md` for full backend documentation.
@@ -36,20 +46,86 @@ export async function parseInput(input: string): Promise<ParseResult>
 
 `parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape, including backend-filled `photo_url` as the place `imageUri`.
 
+### `location/locationService.ts`
+
+Device location via `expo-location`. Every call resolves to a usable coordinate, falling back to `DEFAULT_MAP_CENTER` when permission is refused, location services are off, or the fix fails — it never throws and never returns null, so callers don't each reimplement the fallback.
+
+```ts
+export type LocationPermissionStatus = 'undetermined' | 'granted' | 'denied'
+export type UserLocationResult = { coordinate: [number, number]; status: LocationPermissionStatus; isFallback: boolean }
+
+export async function getLocationPermissionStatus(): Promise<LocationPermissionStatus>  // does not prompt
+export async function requestUserLocation(): Promise<UserLocationResult>  // prompts on first call; safe to call repeatedly since iOS only asks once
+```
+
+### `place/placeSearchService.ts`
+
+Turns typed text into saveable places via the backend's Mapbox Search Box endpoints. Search is two steps — suggestions carry no coordinates, and the one the user picks is resolved into a full place. Both steps share a session token created here, not on the server, because Mapbox bills a search session and only the client knows when a typing session starts and ends.
+
+Only `poi` suggestions are surfaced. A `brand` resolves to every branch Mapbox knows about, which the one-row-one-place save path cannot represent; nearby branches already appear as their own `poi` rows under proximity weighting. Because filtering happens after the request, more suggestions are asked for than are displayed.
+
+```ts
+export const SEARCH_DISPLAY_LIMIT: number
+export const MIN_QUERY_LENGTH: number
+
+export function createSearchSession(): string   // hold one per typing session, then discard
+export function isAbortError(error: unknown): boolean
+
+export async function suggestPlaces(query: string, sessionToken: string, options?: { proximity?: [number, number]; language?: string; country?: string }, signal?: AbortSignal): Promise<PlaceSuggestion[]>
+export async function resolvePlace(suggestion: PlaceSuggestion, sessionToken: string, signal?: AbortSignal): Promise<ParsedPlace | null>  // ready for savePlaces(); `imageUri` carries the backend's photo backfill, so a place saved from search keeps its photo like an imported one
+```
+
 ### `place/placeService.ts`
 
 CRUD for the user's saved places, backed by Supabase and an offline-first local cache (see `local/`).
 Parsed place photos are saved from the backend response; this service does not call third-party photo APIs from the device.
 
+`savePlaces()` skips places `isSamePlace()` matches against something already saved, so a caller must read `inserted` rather than assume the call created anything. Identity prefers the provider id both sides carry; without one it needs the names to contain each other *and* the coordinates to be within ~100m, which is deliberately strict — a duplicate row is recoverable, a place silently dropped on save is not.
+
 ```ts
-export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavedPlace[]>
+export type SavePlacesResult = { inserted: SavedPlace[]; duplicates: SavedPlace[] }  // `inserted` is what this call created (optimistic local rows when queued offline); `duplicates` is the existing row each skipped place matched
+
+export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavePlacesResult>  // per-place: externalId/externalSource/city/country when set. `region` is batch-level — it comes from `source`, not from any one place, so callers passing no source (place search) leave it null
+export function isSamePlace(a: PlaceIdentity, b: PlaceIdentity): boolean  // place identity, shared by the save dedup and the "Saved" badges; accepts either a ParsedPlace or a SavedPlace on each side
+export function isSameProviderPlace(a: ProviderIdentity, b: ProviderIdentity): boolean  // the provider-id half of isSamePlace(), the only half that needs no coordinates — a false means "not known to be the same", not "different"
+export type ProviderIdentity = { externalId?, externalSource?, external_place_id?, external_source? }  // a provider id in either the camelCase or the DB-row shape
 export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline
-export function toPlaceDetail(row: SavedPlace): PlaceDetail
-export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>): string  // real photo if saved, else a generated Mapbox static-map pin for its coordinates; used by toPlaceDetail() and savePlan.ts's plan covers
+export function toPlaceDetail(row: SavedPlace): PlaceDetail  // `category` comes through both as a tag and on its own field, which is what PlaceCover buckets on
+export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>, options?: { fallback?: 'staticMap' | 'none' }): string  // real photo if saved; `fallback` picks what stands in when there isn't one — default 'staticMap' generates a Mapbox pin, 'none' returns '' so the caller can render PlaceCover instead
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
 ```
+
+### `place/usePlaceSearch.ts`
+
+A **React hook**, not a plain async API — the one such module here. It owns a search *session*: the functions in `placeSearchService` are stateless, but Mapbox bills a session rather than the keystrokes, so one token must span every request in a typing burst and be dropped when that burst ends. Only a component knows those boundaries, and more than one feature needs the same discipline — copying it is how one copy quietly starts billing per keystroke.
+
+Wraps `suggestPlaces` (debounced, each settled query cancelling whatever the previous one started) and, on pick, `resolvePlace` + `savePlaces()`, reporting whether the pick created a place or matched one already saved. Takes `proximity` and `onSaved` as arguments rather than reading `HomeContext` itself — a service importing a feature would invert the dependency the rest of `services/` keeps.
+
+```ts
+export type PlaceSearchStatus = 'idle' | 'searching' | 'ready' | 'error'
+// PlaceSaveOutcome ('saved' | 'duplicate') is a shared type — see @/types/place
+
+export function usePlaceSearch(options?: {
+  proximity?: [number, number];          // biases suggestions toward the user
+  onSaved?: () => void | Promise<void>;  // awaited after a save or dedup match, before the suggestion settles
+  savedPlaces?: SavedPlace[];            // pre-marks suggestions already in My Places
+}): {
+  query: string;
+  setQuery: (query: string) => void;
+  suggestions: PlaceSuggestion[];
+  status: PlaceSearchStatus;
+  savingId: string | null;               // external_id currently being resolved and saved
+  outcomeFor: (suggestion: PlaceSuggestion) => PlaceSaveOutcome | null;  // what a tap did, or the pre-mark before any tap
+  pick: (suggestion: PlaceSuggestion) => Promise<void>;
+  reset: () => void;                     // clears query/results/outcomes and starts a new billed session
+}
+```
+
+Passing `savedPlaces` marks results the user already has before they tap. It goes through `isSameProviderPlace`, not `isSamePlace`, because a suggestion has no coordinates until it is resolved — so it only catches saved places that carry a provider id, which today means places saved through search rather than through a link import. It is a hint layered on top of the authoritative answer, which still comes from `savePlaces()` on tap.
+
+`reset()` exists for a consumer that stays mounted after the user leaves it. `SearchPanel` unmounts and does not need it; Discover's pane is only hidden, so nothing else would end its typing session or rotate the billed token.
 
 ### `atlas/atlasService.ts`
 

@@ -12,23 +12,21 @@ src/features/atlas-ai/ai-chat/
   AI-CHAT.md         ← this document
 ```
 
-## Props
+## API
 
 ```ts
 type AIChatBoxProps = {
-  places: ParsedPlace[];
+  places: ParsedPlace[];        // places associated with this session; shown as context and as the default set when the model asks "want me to add these?"
   onClose: () => void;
   onOpenHistory?: () => void;
   title?: string;
   visible?: boolean;
-  conversationId?: string | null;
-  onPlacesCommitted?: (places: ParsedPlace[], action: PendingMode) => void;
+  conversationId?: string | null;  // Supabase conversation id; loads history via fetchConversation, or lazily creates a session on first message when null
+  onPlacesCommitted?: (places: ParsedPlace[], action: PendingMode) => void;  // user confirmed a pending place action; caller merges into the active history item / saved places
 };
-```
 
-- `places` — the places currently associated with this chat session; shown as context and as the default set offered when the model asks "want me to add these?".
-- `conversationId` — Supabase conversation id; when set, history is loaded via `fetchConversation`. When `null`, a new session is created lazily via `createChatSession` on first message.
-- `onPlacesCommitted(places, action)` — fired when the user confirms a pending place action (`'pin_in_chat' | 'save_to_my_places' | 'both'`); caller merges `places` into the active history item / saved places.
+export function looksLikePlaceName(name: string): boolean  // false for values that read as prose rather than a place label
+```
 
 ## Behaviour
 
@@ -39,6 +37,7 @@ type AIChatBoxProps = {
 - Matches the two Figma composer states: an empty 56 pt single-row composer (28 pt side/bottom inset, 32 pt radius), and an animated content composer (12 pt side inset, 28 pt bottom inset, 24 pt radius).
 - Keeps one persistent multiline `TextInput` mounted across both composer states; entering the first character changes layout without replacing the native input or dropping keyboard focus.
 - Parses backend replies for a `[[CONFIRM_ADD_PLACES:{...}]]` marker (`extractPendingAction`) to render an inline place-action confirmation card instead of raw JSON.
+- Screens every route that carries extractor output — the structured `place_cards` field, the `[[PLACE_ACTION_CARD]]` / `[[CONFIRM_ADD_PLACES]]` markers, and the reply-text heuristic — through `looksLikePlaceName`, dropping places whose name reads as prose rather than a label. A card left with no places is dropped; a confirm marker left with no places yields no pending action but still reports `hasConfirmMarker`, so the natural-language fallbacks can offer the session's own places instead. Rejections are logged with `console.warn`. Places sourced from the `places` prop are not screened.
 - Presents place actions as vertically stacked neutral capsules with 16/24 semibold labels, bold 16 pt arrows, 8 pt vertical padding, and 16 pt effective horizontal padding (the Figma component's 12 pt padding plus its 4 pt internal spacer), while preserving the existing `pin_in_chat` / `save_to_my_places` handlers.
 - Adds a bold 16 pt feedback row beneath every assistant response: local like/dislike selection, clipboard copy, native share, and a compact overflow action sheet.
 - Matches the Figma message rhythm with SF Pro 16/24 body text, an 8 pt label-to-body gap, 12 pt gaps between content/actions/feedback, and no extra Markdown paragraph margin.

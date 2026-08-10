@@ -55,7 +55,7 @@ def _trim_lru(cache: OrderedDict[str, dict], max_size: int) -> None:
 
 
 def _is_misc_key(key: str) -> bool:
-    return key.startswith(("geo:", "photo:"))
+    return key.startswith(("geo:", "photo:", "search:"))
 
 
 def _select_cache(key: str) -> tuple[OrderedDict[str, dict], int]:

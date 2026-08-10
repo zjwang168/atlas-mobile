@@ -128,7 +128,7 @@ type PlanDateSlot = {
 
 ### Behaviour
 
-`listSavedPlans()` returns each plan's real `placeCount` and a default `imageUrl` (the earliest-added place's thumbnail across both flexible and scheduled places, via `planItineraryService.fetchPlanSummaries()` + `placeService.resolvePlaceThumbnail()`) but empty `freePlaces`/`schedule` — the grid doesn't need the full per-place breakdown, only `findSavedPlan()` (used by `PlanDetail`) loads that. `resolvePlaceThumbnail()` is the same real-photo-or-generated-Mapbox-pin fallback `toPlaceDetail()` uses, so a place with no uploaded photo still gets a distinct per-place thumbnail rather than nothing. `plans.image_url`, when explicitly set, takes priority over the derived cover. A place added to a plan lands in exactly one place server-side: `input.places.free` entries become `plan_itinerary_place_flexible` rows, `input.places.byDate` entries become `plan_itinerary_places` rows — there's no row-level link between the two.
+`listSavedPlans()` returns each plan's real `placeCount` and a default `imageUrl` (the earliest-added place's thumbnail across both flexible and scheduled places, via `planItineraryService.fetchPlanSummaries()` + `placeService.resolvePlaceThumbnail()`) but empty `freePlaces`/`schedule` — the grid doesn't need the full per-place breakdown, only `findSavedPlan()` (used by `PlanDetail`) loads that. The plan cover keeps `resolvePlaceThumbnail()`'s generated-Mapbox-pin fallback, so a plan whose cover place has no photo still gets a distinct thumbnail. Individual plan places do not: they resolve with no fallback and render a `PlaceCover` instead, matching how the same place looks everywhere else. `plans.image_url`, when explicitly set, takes priority over the derived cover. A place added to a plan lands in exactly one place server-side: `input.places.free` entries become `plan_itinerary_place_flexible` rows, `input.places.byDate` entries become `plan_itinerary_places` rows — there's no row-level link between the two.
 
 ---
 
@@ -194,6 +194,7 @@ export type PlannedPlace = {
   name: string;
   subtitle: string;
   imageUrl?: string;
+  category?: string;  // picks the PlaceCover colour shown when imageUrl is absent
   timeSlot?: TimeSlot;
 };
 
@@ -210,7 +211,7 @@ export type PlacesState = {
 export function slotKeyToString(key: SlotKey): string
 
 // Create a new PlannedPlace instance from a PlaceDetail-like source
-export function newPlannedPlace(place: { id: string; name: string; subtitle: string; imageUrl?: string }): PlannedPlace
+export function newPlannedPlace(place: { id: string; name: string; subtitle: string; imageUrl?: string; category?: string }): PlannedPlace
 ```
 
 ---

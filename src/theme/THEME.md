@@ -30,6 +30,19 @@ Full token definitions are in `tokens.css`. Quick reference:
 | `--text-tertiary` | `text-text-tertiary` | neutral-500 — Captions, hints |
 | `--handle` | `bg-handle` | neutral-300/800 — Drag handle pill |
 
+### Place-category tokens
+
+Backgrounds for `PlaceCover`, the fallback thumbnail a place gets when it has no photo. Saturated enough to carry a light glyph in either theme, so only `--category-neutral` is re-pointed for dark mode.
+
+| CSS variable | NativeWind class | Purpose |
+|---|---|---|
+| `--category-attraction` | `bg-category-attraction` | purple-500 — museums, landmarks, historic sites |
+| `--category-food` | `bg-category-food` | coral-500 — restaurants, cafés, bars |
+| `--category-outdoors` | `bg-category-outdoors` | emerald-500 — parks, trails, beaches |
+| `--category-shopping` | `bg-category-shopping` | rose-500 — shops, malls, markets |
+| `--category-lodging` | `bg-category-lodging` | indigo-500 — hotels, hostels |
+| `--category-neutral` | `bg-category-neutral` | gray-400/600 — no category, or one that matches nothing |
+
 ### Typography utilities
 
 `tokens.css` also defines `@utility` classes mirroring `src/theme/typography.ts`'s tokens, usable directly as a `className` (e.g. `className="h2"`, `className="bodySmallEmphasis"`) instead of `style={typography.h2}`. Keep both in sync when either changes.

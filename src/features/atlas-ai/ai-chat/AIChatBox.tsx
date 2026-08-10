@@ -5,25 +5,28 @@ import {
 } from 'expo-glass-effect';
 import { BlurView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { Icon } from 'phosphor-react-native';
 import { ArrowUpIcon } from 'phosphor-react-native/src/icons/ArrowUp';
 import { ArrowRightIcon } from 'phosphor-react-native/src/icons/ArrowRight';
-import { CaretLeftIcon } from 'phosphor-react-native/src/icons/CaretLeft';
 import { ClockIcon } from 'phosphor-react-native/src/icons/Clock';
 import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
 import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
+import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
 import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
+import { PencilSimpleLineIcon } from 'phosphor-react-native/src/icons/PencilSimpleLine';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
 import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
 import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
 import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
+import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   Share,
@@ -33,7 +36,11 @@ import {
   View,
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
-import Animated, { LinearTransition } from 'react-native-reanimated';
+import Animated, {
+  LinearTransition,
+  SlideInDown,
+  useReducedMotion,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/ui/text';
@@ -54,6 +61,17 @@ const LIQUID_GLASS_AVAILABLE =
   isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
 
 const COMPOSER_LAYOUT_TRANSITION = LinearTransition.duration(180);
+const CHAT_ENTER_TRANSITION = SlideInDown
+  .springify()
+  .damping(22)
+  .stiffness(190)
+  .mass(0.86);
+const ATLAS_AI_MARK = require('../../../../assets/atlas-ai-mark.png');
+const STARTER_PROMPTS = [
+  'Cozy cafes to work from near me',
+  'Best date-night viewpoints',
+  'A hidden gem tourists don’t know',
+] as const;
 
 type Message = {
   id: string;
@@ -87,9 +105,13 @@ function extractPendingAction(text: string): { text: string; pendingAction: Pend
   const match = text.match(/\[\[CONFIRM_ADD_PLACES:(.*?)\]\]/s);
   if (!match) return { text, pendingAction: null, hasConfirmMarker: false };
   try {
-    const pendingAction = JSON.parse(match[1]) as PendingAction;
+    const parsed = JSON.parse(match[1]) as PendingAction;
     const cleaned = text.replace(match[0], '').trim();
-    return { text: cleaned, pendingAction, hasConfirmMarker: true };
+    const places = screenPlaces(parsed.places || [], 'confirm marker');
+    // Every proposed place was prose: report the marker but no action, so the
+    // caller's fallbacks can still offer the session's own places instead.
+    if (places.length === 0) return { text: cleaned, pendingAction: null, hasConfirmMarker: true };
+    return { text: cleaned, pendingAction: { ...parsed, places }, hasConfirmMarker: true };
   } catch {
     return { text, pendingAction: null, hasConfirmMarker: true };
   }
@@ -237,6 +259,11 @@ function extractRecommendedPlaceCardsFromText(text: string): PlaceActionCard[] {
 
     const rawName = nameMatch[1].trim();
     const name = rawName.replace(/[。.!！?？]+$/, '').trim();
+    // This strip omits commas, so a clause here survives as a "name".
+    if (!looksLikePlaceName(name)) {
+      console.warn('[AIChatBox] dropped reply-text place with non-name:', name);
+      continue;
+    }
     const latitude = Number(coordMatch[1]);
     const longitude = Number(coordMatch[2]);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
@@ -280,8 +307,10 @@ function parseAllPlaceActionCards(text: string): PlaceActionCard[] {
 
   while ((match = markerRegex.exec(text)) !== null) {
     const parsed = parseCardJson(match[2]);
-    if (parsed?.places?.length) {
-      cards.push(parsed);
+    if (!parsed?.places?.length) continue;
+    const places = screenPlaces(parsed.places, 'marker card');
+    if (places.length > 0) {
+      cards.push({ ...parsed, places });
     }
   }
 
@@ -323,11 +352,95 @@ function extractPlaceActionCards(text: string): { text: string; cards: PlaceActi
   };
 }
 
+/** Longest plausible real-world place label; past this it reads as prose. */
+const PLACE_NAME_MAX_LENGTH = 80;
+/** Word count past which a "name" is a sentence, not a label. */
+const PLACE_NAME_MAX_WORDS = 12;
+/** A lat/lng pair that leaked in from an unparsed line of the reply. */
+const EMBEDDED_COORDINATES_RE = /-?\d{1,3}\.\d+\s*[,，]\s*-?\d{1,3}\.\d+/;
+/** Trailing connector punctuation — a clause cut out of a longer sentence. */
+const SENTENCE_FRAGMENT_TAIL_RE = /[,;:，；：]$/;
+/** Terminal punctuation with text after it — the value spans two sentences. */
+const MULTI_SENTENCE_RE = /[.!?。！？]\s+\S/;
+/** Abbreviations that legitimately carry a period inside a name ("Powell St. Station"). */
+const NAME_ABBREVIATION_RE = /\b(?:st|ave|rd|blvd|dr|mt|ft|pt|sq|jr|sr|no|dept|univ|co|inc|ltd)\.\s/gi;
+/** Pronouns that, followed by a copula, open a description rather than a name. */
+const PROSE_PRONOUNS = new Set([
+  'it', 'this', 'that', 'there', 'they', 'these', 'those', 'here', 'you', 'we',
+]);
+const PROSE_COPULAS = new Set([
+  'is', 'are', 'was', 'were', 'has', 'have', 'had',
+  'can', 'could', 'will', 'would', 'also',
+  'offer', 'offers', 'sit', 'sits', 'lie', 'lies',
+]);
+
+/** True when the value contains a real sentence boundary, ignoring name abbreviations. */
+function hasSentenceBreak(value: string): boolean {
+  return MULTI_SENTENCE_RE.test(value.replace(NAME_ABBREVIATION_RE, 'X '));
+}
+
+/**
+ * True when the value opens like a description ("It's located on …") rather
+ * than a name. A capitalised word after the contraction keeps real names such
+ * as "Here's Looking at You"; the trade-off is that a lowercase-continuing
+ * name like "It's a Grind Coffee House" is rejected.
+ */
+function hasProseOpener(value: string): boolean {
+  const [first = '', second = ''] = value.split(/\s+/);
+  const contraction = /^([A-Za-z]+)['’]s$/.exec(first);
+  if (contraction && PROSE_PRONOUNS.has(contraction[1].toLowerCase())) {
+    return second !== '' && second[0] === second[0].toLowerCase();
+  }
+  return PROSE_PRONOUNS.has(first.toLowerCase()) && PROSE_COPULAS.has(second.toLowerCase());
+}
+
+/**
+ * True when `name` reads like a place label rather than a fragment of the
+ * assistant's prose.
+ *
+ * The backend card extractor can put a whole line of the reply into `name`:
+ * its regex path falls back to the block's first non-empty line, and its LLM
+ * path only rejects empty strings. Either way the mobile client is the last
+ * stop before the value is persisted as a place, so it is checked here.
+ *
+ * Deliberately conservative — it rejects only shapes a real place name does
+ * not have, and lets anything ambiguous through.
+ */
+export function looksLikePlaceName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > PLACE_NAME_MAX_LENGTH) return false;
+  if (trimmed.split(/\s+/).length > PLACE_NAME_MAX_WORDS) return false;
+  if (EMBEDDED_COORDINATES_RE.test(trimmed)) return false;
+  if (SENTENCE_FRAGMENT_TAIL_RE.test(trimmed)) return false;
+  if (hasSentenceBreak(trimmed)) return false;
+  if (hasProseOpener(trimmed)) return false;
+  return true;
+}
+
+/**
+ * Drop places the extractor named with a sentence instead of a label.
+ *
+ * Applied to every route that carries extractor output — the structured
+ * `place_cards` field, the `[[PLACE_ACTION_CARD]]` / `[[CONFIRM_ADD_PLACES]]`
+ * markers, and this file's own reply-text heuristic — since all three end at
+ * the same `places` table. Not applied to places sourced from the `places`
+ * prop, which the user already holds.
+ */
+function screenPlaces<T extends { name?: string }>(places: T[], source: string): T[] {
+  return places.filter((place) => {
+    if (looksLikePlaceName(place.name || '')) return true;
+    // Loud on purpose: this silently wrote prose into the places table.
+    console.warn(`[AIChatBox] dropped ${source} place with non-name:`, place.name);
+    return false;
+  });
+}
+
 function normalizeBackendPlaceCards(cards: NonNullable<import('@/services/api/apiService').AtlasChatResponse['place_cards']>): PlaceActionCard[] {
   return cards
     .map((card) => ({
       status: card.status,
-      places: (card.places || []).map((place) => ({
+      places: screenPlaces(card.places || [], 'place_cards').map((place) => ({
         name: place.name,
         latitude: place.latitude,
         longitude: place.longitude,
@@ -377,9 +490,11 @@ type AIChatBoxProps = {
   places: ParsedPlace[];
   onClose: () => void;
   onOpenHistory?: () => void;
+  onNewChat?: () => void;
   title?: string;
   visible?: boolean;
   conversationId?: string | null;
+  showLanding?: boolean;
   onPlacesCommitted?: (places: ParsedPlace[], action: PendingMode) => void;
 };
 
@@ -427,12 +542,15 @@ export default function AIChatBox({
   places,
   onClose,
   onOpenHistory,
+  onNewChat,
   title,
   visible = true,
   conversationId = null,
+  showLanding = false,
   onPlacesCommitted,
 }: AIChatBoxProps) {
   const insets = useSafeAreaInsets();
+  const reducedMotion = useReducedMotion();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -445,11 +563,13 @@ export default function AIChatBox({
   const [pending, setPending] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [inputContentHeight, setInputContentHeight] = useState(21);
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
   >({});
   const flatListRef = useRef<FlatList>(null);
+  const inputRef = useRef<TextInput>(null);
   const hydratedConversationIdRef = useRef<string | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const lastWelcomeKeyRef = useRef<string>('');
@@ -457,14 +577,32 @@ export default function AIChatBox({
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSubscription = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
-    const hideSubscription = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      if (Platform.OS === 'ios') Keyboard.scheduleLayoutAnimation(event);
+      setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates.height);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+      if (Platform.OS === 'ios') Keyboard.scheduleLayoutAnimation(event);
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
 
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const focusTimer = setTimeout(() => {
+      inputRef.current?.focus();
+    }, reducedMotion ? 0 : 320);
+
+    return () => clearTimeout(focusTimer);
+  }, [reducedMotion, visible]);
 
   const ensureSession = async (): Promise<string> => {
     if (sessionId) return sessionId;
@@ -870,15 +1008,21 @@ export default function AIChatBox({
   if (!visible) return null;
 
   const hasComposerText = inputText.length > 0;
+  const landingVisible =
+    showLanding && !messages.some((message) => message.role === 'user');
+  const hasStartedChat = messages.some((message) => message.role === 'user');
   const headerTop = Math.max(insets.top, 56);
   const headerOverlayHeight = headerTop + 68;
   const composerHeight = hasComposerText
     ? Math.min(196, Math.max(120, inputContentHeight + 72))
     : 56;
-  const composerBottom = keyboardVisible ? 12 : 28;
+  const composerEdgeGap = keyboardVisible ? 12 : 28;
+  const composerBottom = keyboardHeight + composerEdgeGap;
   const composerOverlayHeight = composerHeight + composerBottom + 56;
   const headerMaterialHeight = headerOverlayHeight - 32;
-  const composerMaterialHeight = composerOverlayHeight - 50;
+  const composerMaterialHeight = composerHeight + composerEdgeGap + 6;
+  const bottomMaterialOffset =
+    landingVisible && keyboardVisible ? 0 : keyboardHeight;
 
   const sendButton = (
     <Pressable
@@ -900,34 +1044,82 @@ export default function AIChatBox({
   );
 
   return (
-    <View style={styles.screen}>
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          renderItem={renderMessage}
-          style={styles.list}
-          contentContainerStyle={[
-            styles.listContent,
-            {
-              paddingTop: headerOverlayHeight - 1,
-              paddingBottom: composerOverlayHeight,
-            },
-          ]}
-          contentInsetAdjustmentBehavior="never"
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          scrollIndicatorInsets={{
-            top: headerOverlayHeight,
-            bottom: composerHeight + composerBottom,
-          }}
-          showsVerticalScrollIndicator={false}
-        />
+    <Animated.View
+      entering={reducedMotion ? undefined : CHAT_ENTER_TRANSITION}
+      style={styles.screen}
+    >
+      <View style={styles.container}>
+        {landingVisible ? (
+          <>
+            <LinearGradient
+              pointerEvents="none"
+              colors={['#F4F4F5', '#F4F4F5', '#DDF5E9', '#BDEDDC']}
+              locations={[0, 0.34, 0.68, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+            <View pointerEvents="none" style={styles.landingBackground}>
+              <View style={styles.landingHero}>
+                <Image
+                  source={ATLAS_AI_MARK}
+                  resizeMode="contain"
+                  style={styles.landingMark}
+                />
+                <Text style={styles.landingTitle}>
+                  Hey Jay! Start explore{'\n'}with Atlas AI
+                </Text>
+              </View>
+            </View>
+            <View style={styles.starterPrompts}>
+              {STARTER_PROMPTS.map((prompt) => (
+                <Pressable
+                  key={prompt}
+                  accessibilityRole="button"
+                  accessibilityLabel={prompt}
+                  onPress={() => setInputText(prompt)}
+                  style={({ pressed }) => [
+                    styles.starterPrompt,
+                    pressed && styles.starterPromptPressed,
+                  ]}
+                >
+                  <MagnifyingGlassIcon
+                    size={20}
+                    weight="regular"
+                    color="#717171"
+                  />
+                  <Text numberOfLines={1} style={styles.starterPromptText}>
+                    {prompt}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
+        ) : null}
+
+        {!landingVisible ? (
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(item) => item.id}
+            renderItem={renderMessage}
+            style={styles.list}
+            contentContainerStyle={[
+              styles.listContent,
+              {
+                paddingTop: headerOverlayHeight - 1,
+                paddingBottom: composerOverlayHeight,
+              },
+            ]}
+            contentInsetAdjustmentBehavior="never"
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            scrollIndicatorInsets={{
+              top: headerOverlayHeight,
+              bottom: composerHeight + composerBottom,
+            }}
+            showsVerticalScrollIndicator={false}
+          />
+        ) : null}
 
         <TopBlurFade
           height={headerMaterialHeight}
@@ -936,22 +1128,84 @@ export default function AIChatBox({
           scrim={1}
         />
 
-        <TopBlurFade
-          edge="bottom"
-          height={composerMaterialHeight}
-          intensity={5}
-          tint="systemUltraThinMaterialLight"
-          scrim={1}
-        />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.bottomMaterial,
+            {
+              bottom: bottomMaterialOffset,
+              height: composerMaterialHeight,
+            },
+          ]}
+        >
+          <TopBlurFade
+            edge="bottom"
+            height={composerMaterialHeight}
+            intensity={5}
+            tint="systemUltraThinMaterialLight"
+            scrim={1}
+          />
+        </View>
 
         <View style={[styles.header, { paddingTop: headerTop }]}>
           <View style={styles.headerControls}>
-            <GlassIconButton icon={CaretLeftIcon} label="Back" onPress={onClose} />
-            <GlassIconButton
-              icon={ClockIcon}
-              label="Open chat history"
-              onPress={onOpenHistory}
-            />
+            <GlassIconButton icon={XIcon} label="Close chat" onPress={onClose} />
+            <View
+              style={[
+                styles.headerActionGroupShadow,
+                !hasStartedChat && styles.headerActionGroupShadowSingle,
+              ]}
+            >
+              <View
+                style={[
+                  styles.headerActionGroup,
+                  !hasStartedChat && styles.headerActionGroupSingle,
+                ]}
+              >
+                {LIQUID_GLASS_AVAILABLE ? (
+                  <GlassView
+                    pointerEvents="none"
+                    style={StyleSheet.absoluteFill}
+                    glassEffectStyle="regular"
+                    tintColor="rgba(255,255,255,0.35)"
+                  />
+                ) : (
+                  <View pointerEvents="none" style={styles.glassButtonFallback} />
+                )}
+                {hasStartedChat ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Start a new chat"
+                    onPress={onNewChat}
+                    disabled={!onNewChat}
+                    style={({ pressed }) => [
+                      styles.headerActionButton,
+                      pressed && styles.glassButtonPressed,
+                      !onNewChat && styles.glassButtonDisabled,
+                    ]}
+                  >
+                    <PencilSimpleLineIcon
+                      size={24}
+                      weight="regular"
+                      color={COLOR.foreground}
+                    />
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Open chat history"
+                  onPress={onOpenHistory}
+                  disabled={!onOpenHistory}
+                  style={({ pressed }) => [
+                    styles.headerActionButton,
+                    pressed && styles.glassButtonPressed,
+                    !onOpenHistory && styles.glassButtonDisabled,
+                  ]}
+                >
+                  <ClockIcon size={24} weight="regular" color={COLOR.foreground} />
+                </Pressable>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -967,7 +1221,7 @@ export default function AIChatBox({
               styles.composer,
               {
                 height: composerHeight,
-                marginHorizontal: hasComposerText ? 12 : 28,
+                marginHorizontal: 12,
                 borderRadius: hasComposerText ? 24 : 32,
               },
             ]}
@@ -990,6 +1244,7 @@ export default function AIChatBox({
             <View pointerEvents="none" style={styles.composerFrost} />
 
             <TextInput
+              ref={inputRef}
               value={inputText}
               onChangeText={setInputText}
               onContentSizeChange={({ nativeEvent }) => {
@@ -1028,8 +1283,8 @@ export default function AIChatBox({
             </View>
           </Animated.View>
         </View>
-      </KeyboardAvoidingView>
-    </View>
+      </View>
+    </Animated.View>
   );
 }
 
@@ -1062,6 +1317,36 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     height: 44,
     position: 'relative',
+  },
+  headerActionGroupShadow: {
+    width: 96,
+    height: 44,
+    borderRadius: 22,
+    boxShadow: '0 10px 26px rgba(0,0,0,0.16)',
+  },
+  headerActionGroupShadowSingle: {
+    width: 48,
+  },
+  headerActionGroup: {
+    width: 96,
+    height: 44,
+    borderRadius: 22,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 24,
+    paddingHorizontal: 12,
+  },
+  headerActionGroupSingle: {
+    width: 48,
+  },
+  headerActionButton: {
+    width: 24,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   glassButtonShadow: {
     width: 44,
@@ -1101,6 +1386,63 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 16,
     paddingBottom: 16,
+  },
+  landingBackground: {
+    position: 'absolute',
+    top: 118,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  landingHero: {
+    alignItems: 'center',
+    gap: 16,
+  },
+  landingMark: {
+    width: 72,
+    height: 72,
+  },
+  landingTitle: {
+    color: '#1A1A1A',
+    fontSize: 32,
+    lineHeight: 40,
+    fontWeight: '400',
+    letterSpacing: -0.32,
+    textAlign: 'center',
+  },
+  starterPrompts: {
+    position: 'absolute',
+    top: 316,
+    left: 12,
+    right: 12,
+    zIndex: 1,
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  starterPrompt: {
+    maxWidth: '100%',
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 32,
+    borderCurve: 'continuous',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F7F7F7',
+    borderWidth: 0.5,
+    borderColor: '#E0E0E0',
+  },
+  starterPromptPressed: {
+    opacity: 0.65,
+    transform: [{ scale: 0.98 }],
+  },
+  starterPromptText: {
+    flexShrink: 1,
+    color: '#717171',
+    fontSize: 16,
+    lineHeight: 24,
+    letterSpacing: -0.16,
   },
   messageRow: {
     width: '100%',
@@ -1207,6 +1549,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 3,
+  },
+  bottomMaterial: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 2,
   },
   composer: {
     position: 'relative',

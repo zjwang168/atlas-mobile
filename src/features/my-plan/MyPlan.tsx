@@ -67,6 +67,7 @@ type MyPlanProps = {
   onAvatarPress?: () => void;
   onScroll?: (y: number) => void;
   bottomInset?: number;
+  verticalScrollEnabled?: boolean;
   /** Renders a condensed header only — used when the panel is in compact snap state */
   compact?: boolean;
   /** ContentPanel's imperative snap function — called directly (not via a state/prop
@@ -79,6 +80,7 @@ function MyPlan({
   onAvatarPress,
   onScroll,
   bottomInset = 0,
+  verticalScrollEnabled = true,
   compact = false,
   snapTo,
 }: MyPlanProps) {
@@ -265,6 +267,7 @@ function MyPlan({
           <FlatList
             style={{ flex: 1 }}
             data={gridData}
+            scrollEnabled={verticalScrollEnabled}
             keyExtractor={keyExtractor}
             numColumns={2}
             showsVerticalScrollIndicator={false}
