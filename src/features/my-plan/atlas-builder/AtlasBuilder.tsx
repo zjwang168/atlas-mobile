@@ -4,8 +4,8 @@ import { Text } from '@/components/ui/text';
 import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
-import { discoverAtlasPlaces, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
-import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
+import { discoverAtlasPlaces, geocodeAtlasArea, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
+import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlace, type AtlasPlaceSnapshot } from '@/services/atlas/atlasPlacesService';
 import { decodeAtlasPlaceMetadata, encodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
 import { createSearchSession, isAbortError, resolvePlace, suggestPlaces } from '@/services/place/placeSearchService';
@@ -100,7 +100,7 @@ const PLANNING_HOURS = Array.from({ length: 17 }, (_, index) => {
 // Atlas search field, while this zoom leaves the entire lower 48 in view.
 const CONTINENTAL_US_CENTER = [-98.5, 46.0] as [number, number];
 const CONTINENTAL_US_ZOOM = 1.9;
-const PLAN_CAMERA_LATITUDE_OFFSET = -0.25;
+const FOCUS_SAVED_PLACES_RADIUS_KM = 65;
 
 function boundsFromPolygon(polygon: Array<[number, number]>, padding = 0.06) {
   const minLng = Math.min(...polygon.map(([lng]) => lng));
@@ -108,6 +108,15 @@ function boundsFromPolygon(polygon: Array<[number, number]>, padding = 0.06) {
   const minLat = Math.min(...polygon.map(([, lat]) => lat));
   const maxLat = Math.max(...polygon.map(([, lat]) => lat));
   return { ne: [maxLng + padding, maxLat + padding] as [number, number], sw: [minLng - padding, minLat - padding] as [number, number] };
+}
+
+function boundsFromRadius([longitude, latitude]: [number, number], radiusKm: number) {
+  const latitudeRadius = radiusKm / 110.574;
+  const longitudeRadius = radiusKm / Math.max(0.01, 111.320 * Math.cos((latitude * Math.PI) / 180));
+  return {
+    ne: [longitude + longitudeRadius, latitude + latitudeRadius] as [number, number],
+    sw: [longitude - longitudeRadius, latitude - latitudeRadius] as [number, number],
+  };
 }
 
 function zoomForBounds(bounds: { ne: [number, number]; sw: [number, number] }) {
@@ -118,24 +127,15 @@ function zoomForBounds(bounds: { ne: [number, number]; sw: [number, number] }) {
   return Math.max(1.9, Math.min(14, Math.min(widthZoom, heightZoom) - 0.25));
 }
 
-function polygonAroundCoordinate([lng, lat]: [number, number], lngRadius: number, latRadius: number, points = 10) {
-  return Array.from({ length: points }, (_, index) => {
-    const angle = (Math.PI * 2 * index) / points;
-    return [lng + Math.cos(angle) * lngRadius, lat + Math.sin(angle) * latRadius] as [number, number];
-  });
-}
-
 function acceptAiDescription(value?: string | null) {
   const description = value?.trim();
   if (!description || description.split(/\s+/).length > 4) return null;
   return description;
 }
 
-const BAY_AREA_POLYGON: Array<[number, number]> = [
-  [-122.75, 38.18], [-122.16, 38.16], [-121.66, 37.90], [-121.62, 37.28], [-122.06, 37.08],
-  [-122.55, 37.15], [-123.00, 37.43], [-123.08, 37.88], [-122.95, 38.08], [-122.75, 38.18],
-];
-const BAY_AREA_BOUNDS = boundsFromPolygon(BAY_AREA_POLYGON, 0.08);
+// Create an Atlas stays at the original camera position; editing an existing
+// Atlas shifts its map content down by about 2 cm above the editing sheet.
+const EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y = 80;
 
 const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const timeRank = (day: number, time: string) => day * 24 + Math.max(0, PLANNING_HOURS.indexOf(time) + 7);
@@ -144,16 +144,17 @@ const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout
 
 function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
   const metadata = decodeAtlasPlaceMetadata(row?.note);
+  const hasSnapshotCoordinates = row?.latitude != null && row.longitude != null;
   return {
     id: place.id,
-    name: place.name,
-    subtitle: place.subtitle,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    photo_url: place.photo_url,
-    city: place.city,
-    region: place.region,
-    country: place.country,
+    name: row?.place_name ?? place.name,
+    subtitle: row?.place_subtitle ?? place.subtitle,
+    latitude: hasSnapshotCoordinates ? row.latitude! : place.latitude,
+    longitude: hasSnapshotCoordinates ? row.longitude! : place.longitude,
+    photo_url: row?.photo_url ?? place.photo_url,
+    city: row?.city ?? place.city,
+    region: row?.region ?? place.region,
+    country: row?.country ?? place.country,
     category: place.category,
     source: 'saved',
     note: metadata.note,
@@ -161,6 +162,19 @@ function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
     timeline_time: row?.timeline_time,
     transport: metadata.transport,
     joinId: row?.id,
+  };
+}
+
+function atlasPlaceSnapshot(place: DraftPlace): AtlasPlaceSnapshot {
+  return {
+    place_name: place.name,
+    place_subtitle: place.subtitle,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    photo_url: place.photo_url ?? null,
+    city: place.city ?? null,
+    region: place.region ?? null,
+    country: place.country ?? null,
   };
 }
 
@@ -197,9 +211,50 @@ function isLocalMatch(place: SavedPlace, query: string) {
 }
 
 function isNearCoordinate(place: { latitude: number; longitude: number }, center: [number, number]) {
-  const latitudeDelta = Math.abs(place.latitude - center[1]);
-  const longitudeDelta = Math.abs(place.longitude - center[0]);
-  return latitudeDelta < 1.25 && longitudeDelta < 1.5;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const latitudeDelta = toRadians(place.latitude - center[1]);
+  const longitudeDelta = toRadians(place.longitude - center[0]);
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(toRadians(center[1])) * Math.cos(toRadians(place.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
+  const distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return distanceKm <= FOCUS_SAVED_PLACES_RADIUS_KM;
+}
+
+function centerOfBounds(bounds: { ne: [number, number]; sw: [number, number] }): [number, number] {
+  return [(bounds.ne[0] + bounds.sw[0]) / 2, (bounds.ne[1] + bounds.sw[1]) / 2];
+}
+
+function focusBoundsForSavedPlaces(center: [number, number], places: Array<{ latitude: number; longitude: number }>) {
+  const coordinates = [center, ...places.map((place) => [place.longitude, place.latitude] as [number, number])];
+  const longitudeSpan = Math.max(...coordinates.map(([longitude]) => longitude)) - Math.min(...coordinates.map(([longitude]) => longitude));
+  const latitudeSpan = Math.max(...coordinates.map(([, latitude]) => latitude)) - Math.min(...coordinates.map(([, latitude]) => latitude));
+  // The breathing room grows with the true footprint. This keeps a local
+  // collection useful while allowing country-scale collections to zoom out.
+  const padding = Math.max(0.06, Math.min(3, Math.max(longitudeSpan, latitudeSpan) * 0.12));
+  return boundsFromPolygon(coordinates, padding);
+}
+
+function uniquePlaces(places: SavedPlace[]) {
+  return [...new Map(places.map((place) => [place.id, place])).values()];
+}
+
+function clusterLocationNames(places: SavedPlace[]) {
+  return new Set(
+    places.map((place) => normalize(place.city ?? place.region ?? place.country ?? '')).filter(Boolean),
+  );
+}
+
+function savedPlacesMatchingAdministrativeFocus(place: DraftPlace, savedPlaces: SavedPlace[], featureType?: string) {
+  const administrativeField = featureType === 'country' ? 'country' : 'region';
+  const focusTerm = normalize(
+    administrativeField === 'country'
+      ? place.country ?? place.name
+      : place.region ?? place.name,
+  );
+  if (!focusTerm) return [];
+  return savedPlaces.filter((savedPlace) => (
+    normalize(savedPlace[administrativeField] ?? '') === focusTerm
+  ));
 }
 
 function isWithinBounds(place: { latitude: number; longitude: number }, bounds?: { ne: [number, number]; sw: [number, number] }) {
@@ -231,9 +286,10 @@ function deriveFocusAreas(places: SavedPlace[]): FocusArea[] {
         group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
       ] as [number, number],
       count: group.length,
-      // The polygon is an internal camera footprint. It is intentionally a
-      // little wider than the saved points so a regional plan remains useful.
-      bounds: boundsFromPolygon(group.map((place) => [place.longitude, place.latitude] as [number, number]), 0.18),
+      bounds: focusBoundsForSavedPlaces([
+        group.reduce((sum, place) => sum + place.longitude, 0) / group.length,
+        group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
+      ], group),
     }))
     .filter((area) => Boolean(area.label))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
@@ -286,6 +342,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [enteringPlaceIds, setEnteringPlaceIds] = useState<Set<string>>(() => new Set());
   const [removingPlace, setRemovingPlace] = useState<DraftPlace | null>(null);
   const [localMustSeesVisible, setLocalMustSeesVisible] = useState(false);
+  const [localMustSeesPending, setLocalMustSeesPending] = useState(false);
   const [nearbyPromptVisible, setNearbyPromptVisible] = useState(false);
   const [nearbyRecommending, setNearbyRecommending] = useState(false);
   const popupScale = useRef(new Animated.Value(0.92)).current;
@@ -295,14 +352,21 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const localMustSeesOpacity = useRef(new Animated.Value(0)).current;
   const nearbyPromptOpacity = useRef(new Animated.Value(0)).current;
   const localMustSeesShownRef = useRef(false);
-  // Recommendations supplied when the editor opens already exist on the map;
-  // only a later verified pin should earn the local-must-sees note.
-  const pinnedAiPlaceIdsRef = useRef(new Set((initialCandidates ?? []).filter((place) => !place.provisional).map((place) => place.id)));
-  const localMustSeesPendingRef = useRef(false);
+  const localMustSeesVisibleRef = useRef(false);
+  const nearbyPromptEligibleRef = useRef(false);
+  // Saved candidates can seed Create an Atlas, but only actual AI-recommended
+  // pins are allowed to trigger the local-must-sees note.
+  const pinnedAiPlaceIdsRef = useRef(new Set((initialCandidates ?? []).filter((place) => place.source === 'recommended').map((place) => place.id)));
   const viewportCenterRef = useRef<[number, number]>(initialCenter ?? CONTINENTAL_US_CENTER);
   const nearbyIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nearbyAfterLocalNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearbyPromptDismissedRef = useRef(false);
-  const cameraKey = useRef(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
+  const nearbyPromptVisibleRef = useRef(false);
+  // Each mounted editor owns one recommendation conversation. Closing an
+  // Atlas and entering Edit Atlas again mounts a fresh editor and new session.
+  const aiRecommendationSessionId = useRef(`atlas-edit-${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
+  const aiRecommendedNamesRef = useRef(new Set((initialCandidates ?? []).map((place) => normalize(place.name)).filter(Boolean)));
+  const [cameraKey, setCameraKey] = useState(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const initialPlaceSelected = useRef(false);
   const timeConflictTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -350,6 +414,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       setMapBounds(initialBounds);
       setMapZoom(zoomForBounds(initialBounds));
     }
+    // The map is shared between the Create screen and the editor. A fresh key
+    // forces Mapbox to apply the incoming Focus-area camera rather than retain
+    // the previous screen's cached viewport.
+    if (initialCenter || initialBounds) setCameraKey(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   }, [initialBounds, initialCenter, started]);
 
   useEffect(() => {
@@ -368,53 +436,68 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const hideNearbyPrompt = useCallback((permanent = false) => {
     if (permanent) nearbyPromptDismissedRef.current = true;
     if (nearbyIdleTimerRef.current) clearTimeout(nearbyIdleTimerRef.current);
-    if (!nearbyPromptVisible) return;
-    Animated.timing(nearbyPromptOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => setNearbyPromptVisible(false));
-  }, [nearbyPromptOpacity, nearbyPromptVisible]);
+    if (permanent && nearbyAfterLocalNoteTimerRef.current) clearTimeout(nearbyAfterLocalNoteTimerRef.current);
+    if (!nearbyPromptVisibleRef.current) return;
+    Animated.timing(nearbyPromptOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+      nearbyPromptVisibleRef.current = false;
+      setNearbyPromptVisible(false);
+    });
+  }, [nearbyPromptOpacity]);
+
+  const showNearbyPrompt = useCallback(() => {
+    if ((!atlasId && !started) || !nearbyPromptEligibleRef.current || nearbyPromptDismissedRef.current || localMustSeesVisibleRef.current || nearbyPromptVisibleRef.current) return;
+    nearbyPromptOpacity.setValue(0);
+    nearbyPromptVisibleRef.current = true;
+    setNearbyPromptVisible(true);
+    Animated.timing(nearbyPromptOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+  }, [atlasId, nearbyPromptOpacity, started]);
 
   const scheduleNearbyPrompt = useCallback((center: [number, number], delay = 10_000) => {
     viewportCenterRef.current = center;
-    if (!atlasId || nearbyPromptDismissedRef.current || localMustSeesVisible) return;
+    if ((!atlasId && !started) || !nearbyPromptEligibleRef.current || nearbyPromptDismissedRef.current || localMustSeesVisibleRef.current || nearbyPromptVisibleRef.current) return;
     if (nearbyIdleTimerRef.current) clearTimeout(nearbyIdleTimerRef.current);
-    hideNearbyPrompt();
     nearbyIdleTimerRef.current = setTimeout(() => {
-      if (nearbyPromptDismissedRef.current || localMustSeesVisible) return;
-      nearbyPromptOpacity.setValue(0);
-      setNearbyPromptVisible(true);
-      Animated.timing(nearbyPromptOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+      showNearbyPrompt();
     }, delay);
-  }, [atlasId, hideNearbyPrompt, localMustSeesVisible, nearbyPromptOpacity]);
+  }, [atlasId, showNearbyPrompt, started]);
+
+  const hideLocalMustSees = useCallback(() => {
+    if (!localMustSeesVisibleRef.current) return;
+    Animated.timing(localMustSeesOpacity, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
+      localMustSeesVisibleRef.current = false;
+      setLocalMustSeesVisible(false);
+      nearbyPromptEligibleRef.current = true;
+      if (nearbyAfterLocalNoteTimerRef.current) clearTimeout(nearbyAfterLocalNoteTimerRef.current);
+      nearbyAfterLocalNoteTimerRef.current = setTimeout(showNearbyPrompt, 2000);
+    });
+  }, [localMustSeesOpacity, showNearbyPrompt]);
 
   useEffect(() => {
-    const pinnedAiPlaceIds = new Set(recommendedPlaces.map((place) => place.id));
+    const pinnedAiPlaceIds = new Set(recommendedPlaces.filter((place) => place.source === 'recommended').map((place) => place.id));
     const hasNewAiPlace = [...pinnedAiPlaceIds].some((id) => !pinnedAiPlaceIdsRef.current.has(id));
     pinnedAiPlaceIdsRef.current = pinnedAiPlaceIds;
-    if (hasNewAiPlace && !localMustSeesShownRef.current) localMustSeesPendingRef.current = true;
+    if (hasNewAiPlace && !localMustSeesShownRef.current) setLocalMustSeesPending(true);
   }, [recommendedPlaces]);
 
   useEffect(() => {
     // A single note accompanies the first AI pin. It never stacks with the
     // nearby recommendation control.
-    if (!localMustSeesPendingRef.current || localMustSeesShownRef.current || localMustSeesVisible || popupVisible) return;
+    if (!localMustSeesPending || localMustSeesShownRef.current || localMustSeesVisibleRef.current) return;
     hideNearbyPrompt();
-    localMustSeesPendingRef.current = false;
     localMustSeesShownRef.current = true;
+    localMustSeesVisibleRef.current = true;
     setLocalMustSeesVisible(true);
     localMustSeesOpacity.stopAnimation();
     Animated.timing(localMustSeesOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
-    const timeout = setTimeout(() => {
-      Animated.timing(localMustSeesOpacity, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
-        setLocalMustSeesVisible(false);
-        scheduleNearbyPrompt(viewportCenterRef.current, 2000);
-      });
-    }, 5200);
+    const timeout = setTimeout(hideLocalMustSees, 10_000);
     return () => clearTimeout(timeout);
-  }, [hideNearbyPrompt, localMustSeesOpacity, localMustSeesVisible, popupVisible, scheduleNearbyPrompt]);
+  }, [hideLocalMustSees, hideNearbyPrompt, localMustSeesOpacity, localMustSeesPending]);
 
   useEffect(() => {
     scheduleNearbyPrompt(mapCenter);
     return () => {
       if (nearbyIdleTimerRef.current) clearTimeout(nearbyIdleTimerRef.current);
+      if (nearbyAfterLocalNoteTimerRef.current) clearTimeout(nearbyAfterLocalNoteTimerRef.current);
     };
   }, [mapCenter, scheduleNearbyPrompt]);
 
@@ -517,9 +600,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setFullResults(null);
   }, []);
 
-  const discoverDeepSeekPlaces = useCallback(async (city: string, count: number): Promise<DraftPlace[]> => {
+  const discoverDeepSeekPlaces = useCallback(async (city: string, count: number, proximity?: [number, number]): Promise<DraftPlace[]> => {
     const toDraftRecommendation = (place: GeocodedLocation, index: number): DraftPlace => ({
-      id: `deepseek-${city}-${place.external_id ?? index}`,
+      id: `deepseek-${aiRecommendationSessionId}-${place.external_id ?? `${normalize(place.name)}-${index}`}`,
       name: place.name,
       subtitle: place.full_address,
       latitude: place.latitude,
@@ -533,25 +616,41 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       // The prompt asks DeepSeek to generate this field within four words;
       // preserve that authored phrase instead of truncating a sentence.
       aiDescription: acceptAiDescription(place.description),
-      provisional: Boolean(place.provisional),
+      // AI recommendations remain immediately actionable. The service may
+      // refine coordinates in the background, but never blocks the add flow.
+      provisional: false,
       confidence: place.confidence ?? null,
     });
-    let provisionalSignature = '';
-    const result = await discoverAtlasPlaces(`Recommend exactly ${count} famous places in ${city}. Return each real place name, plausible decimal latitude and longitude, city/region context, category, and a location-specific license-plate-style English slogan in the description field (maximum 4 English words). Do not use a category as the description, do not truncate a sentence, and do not write a complete sentence. Coordinates are provisional and will be geocode-verified in parallel. Style references: The Emerald Needle; Where Fish Fly; Glass Without Limits; Rock Meets Tech; Art By The Sound; Skyline Capital; Rainforest Not Rain; Wisdom Under Cherry; Where Water Works; Wheel Over Waves.`, (progress) => {
-      const event = [...progress.events].reverse().find((entry) => entry.label === 'atlas_ai:provisional_places');
-      const locations = event?.data?.locations;
-      if (!Array.isArray(locations)) return;
-      const signature = JSON.stringify(locations);
-      if (signature === provisionalSignature) return;
-      provisionalSignature = signature;
-      setRecommendedPlaces(locations.slice(0, count).map((place, index) => toDraftRecommendation(place as GeocodedLocation, index)));
-    });
-    return result.locations.slice(0, count).map(toDraftRecommendation);
-  }, []);
+    const discoveries: DraftPlace[] = [];
+    const knownNames = new Set(aiRecommendedNamesRef.current);
+
+    // A model can occasionally return one already-known landmark despite the
+    // exclusion list. Retry only for the missing count and enforce the same
+    // normalized-name check locally before any pin reaches the map.
+    for (let attempt = 0; attempt < 3 && discoveries.length < count; attempt += 1) {
+      const needed = count - discoveries.length;
+      const proximityInstruction = proximity
+        ? ` The requested area is centered at ${proximity[1].toFixed(4)}, ${proximity[0].toFixed(4)}. Every returned place must be within ${FOCUS_SAVED_PLACES_RADIUS_KM} km of that coordinate; do not return places from another city or state.`
+        : '';
+      const result = await discoverAtlasPlaces(
+        `Recommend exactly ${needed} famous places in ${city}.${proximityInstruction} This is turn ${attempt + 1} of one continuous Atlas editing conversation. Return only real places that are different from every place already discussed. Return each real place name, plausible decimal latitude and longitude, city/region context, category, and a location-specific license-plate-style English slogan in the description field (maximum 4 English words). Do not use a category as the description, do not truncate a sentence, and do not write a complete sentence. Coordinates are provisional and will be geocode-verified in parallel. Style references: The Emerald Needle; Where Fish Fly; Glass Without Limits; Rock Meets Tech; Art By The Sound; Skyline Capital; Rainforest Not Rain; Wisdom Under Cherry; Where Water Works; Wheel Over Waves.`,
+        undefined,
+        undefined,
+        { sessionId: aiRecommendationSessionId, excludedPlaceNames: [...knownNames] },
+      );
+      result.locations.forEach((place, index) => {
+        const name = normalize(place.name);
+        if (!name || knownNames.has(name) || discoveries.length >= count || (proximity && !isNearCoordinate(place, proximity))) return;
+        knownNames.add(name);
+        aiRecommendedNamesRef.current.add(name);
+        discoveries.push(toDraftRecommendation(place, discoveries.length + index));
+      });
+    }
+    return discoveries;
+  }, [aiRecommendationSessionId]);
 
   const recommendNearby = useCallback(async () => {
     if (nearbyRecommending) return;
-    hideNearbyPrompt();
     setNearbyRecommending(true);
     const [longitude, latitude] = viewportCenterRef.current;
     try {
@@ -573,40 +672,58 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       setNearbyRecommending(false);
       scheduleNearbyPrompt(viewportCenterRef.current);
     }
-  }, [discoverDeepSeekPlaces, hideNearbyPrompt, items, nearbyRecommending, recommendedPlaces, scheduleNearbyPrompt]);
-
-  const discoverFocusPolygon = useCallback(async (area: string) => {
-    const result = await discoverAtlasPlaces(`I need 8 boundary points to form a polygon around ${area}. Return only 8 boundary coordinate points, not tourist attractions. These are camera-boundary points, not recommended places.`);
-    const polygon = result.locations
-      .slice(0, 8)
-      .filter((point) => Number.isFinite(point.longitude) && Number.isFinite(point.latitude))
-      .map((point) => [point.longitude, point.latitude] as [number, number]);
-    return polygon.length >= 3 ? boundsFromPolygon(polygon, 0.12) : undefined;
-  }, []);
+  }, [discoverDeepSeekPlaces, items, nearbyRecommending, recommendedPlaces, scheduleNearbyPrompt]);
 
   const handoffToPlan = useCallback((location: string, candidates: DraftPlace[], center?: [number, number], bounds?: FocusArea['bounds']) => {
     setHandoffStarted(true);
-    const adjustedCenter = center ? [center[0], center[1] + PLAN_CAMERA_LATITUDE_OFFSET] as [number, number] : center;
-    onBuildPlan?.(location, candidates, adjustedCenter, bounds);
+    // AtlasBuilder draws from center/zoom rather than Mapbox fitBounds, so
+    // derive the passed center from the same bounds used for the zoom.
+    onBuildPlan?.(location, candidates, bounds ? centerOfBounds(bounds) : center, bounds);
   }, [onBuildPlan]);
 
   const focusArea = useCallback(async (area: FocusArea) => {
-    const initial = area.places.map((item) => toDraft(item));
-    if (!initial.length) return;
-    handoffToPlan(area.label, initial, area.coordinate, area.bounds);
+    const isBroadArea = !area.places.some((place) => Boolean(place.city?.trim()));
+    const clusterLocations = clusterLocationNames(area.places);
+    const isMultiLocationCluster = clusterLocations.size > 1;
+    let focusCoordinate = area.coordinate;
+    if (!isBroadArea) {
+      try {
+        const areaQuery = [area.label, area.places[0]?.country].filter(Boolean).join(', ');
+        const resolvedArea = await geocodeAtlasArea(areaQuery);
+        if (resolvedArea) focusCoordinate = resolvedArea;
+        else {
+          const [deviceResolvedArea] = await Location.geocodeAsync(areaQuery);
+          if (deviceResolvedArea) focusCoordinate = [deviceResolvedArea.longitude, deviceResolvedArea.latitude];
+        }
+      } catch (error) {
+        console.warn('[AtlasBuilder] focus-area geocoding failed', error);
+      }
+    }
+    const localSaved = uniquePlaces([
+      ...area.places.filter((place) => isMultiLocationCluster || isBroadArea || isNearCoordinate(place, focusCoordinate)),
+      ...savedPlaces.filter((place) => (
+        isMultiLocationCluster
+          ? clusterLocations.has(normalize(place.city ?? place.region ?? place.country ?? ''))
+          : isBroadArea || isNearCoordinate(place, focusCoordinate)
+      )),
+    ]);
+    const initial = localSaved.map((item) => toDraft(item));
+    const bounds = isMultiLocationCluster && localSaved.length > 1
+      ? focusBoundsForSavedPlaces(focusCoordinate, localSaved)
+      : boundsFromRadius(focusCoordinate, FOCUS_SAVED_PLACES_RADIUS_KM);
+    handoffToPlan(area.label, initial, focusCoordinate, bounds);
     try {
-      const recommendations = await discoverDeepSeekPlaces(area.label, 6);
+      const recommendations = await discoverDeepSeekPlaces(area.label, 6, isBroadArea ? undefined : focusCoordinate);
       setRecommendedPlaces(recommendations);
     } catch (error) {
       console.warn('[AtlasBuilder] plan discovery failed', error);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, savedPlaces]);
 
   const simpleStart = useCallback(async () => {
-    const nearbySaved = savedPlaces.filter((place) => isNearCoordinate(place, userLocation)).map((place) => toDraft(place));
-    const localBounds = Math.abs(userLocation[0] + 122.4) < 1.1 && Math.abs(userLocation[1] - 37.7) < 0.9
-      ? BAY_AREA_BOUNDS
-      : boundsFromPolygon(polygonAroundCoordinate(userLocation, 1.1, 0.8), 0.08);
+    const localSaved = savedPlaces.filter((place) => isNearCoordinate(place, userLocation));
+    const nearbySaved = localSaved.map((place) => toDraft(place));
+    const localBounds = boundsFromRadius(userLocation, FOCUS_SAVED_PLACES_RADIUS_KM);
     // Enter the Builder immediately. Reverse geocoding and AI discovery should
     // improve the map after it opens, never block the transition.
     const initialCity = nearbySaved.find((place) => place.city)?.city ?? 'San Francisco';
@@ -620,7 +737,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
     try {
-      const recommendations = await discoverDeepSeekPlaces(city, 6);
+      const recommendations = await discoverDeepSeekPlaces(city, 6, userLocation);
       setRecommendedPlaces(recommendations);
       setFocusLabel(city);
     } catch (error) {
@@ -679,33 +796,34 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     try {
       const place = await resolveResult(result);
       if (!place) return;
-      const bounds = boundsFromPolygon(polygonAroundCoordinate([place.longitude, place.latitude], 1.35, 0.9), 0.12);
-      setMapCenter([place.longitude, place.latitude]);
+      const nearbySaved = savedPlaces.filter((savedPlace) => isNearCoordinate(savedPlace, [place.longitude, place.latitude]));
+      // Country and region searches can legitimately span thousands of
+      // kilometres. A city result also contains its country metadata, so only
+      // explicit administrative searches may expand beyond the local radius.
+      const isAdministrativeSearch = result.kind === 'remote'
+        && (result.featureType === 'country' || result.featureType === 'region');
+      const scopedSaved = isAdministrativeSearch
+        ? savedPlacesMatchingAdministrativeFocus(place, savedPlaces, result.featureType)
+        : [];
+      const placesInView = scopedSaved.length ? scopedSaved : nearbySaved;
+      const bounds = focusBoundsForSavedPlaces([place.longitude, place.latitude], placesInView);
+      setMapCenter(centerOfBounds(bounds));
       setMapBounds(bounds);
       setMapZoom(zoomForBounds(bounds));
       setFocused(null);
       setPopupVisible(false);
       setFocusLabel(place.city ?? place.region ?? place.name);
       closeFocusSearch();
-      try {
-        const polygonBounds = await discoverFocusPolygon(place.city ?? place.name);
-        if (polygonBounds) {
-          setMapBounds(polygonBounds);
-          setMapZoom(zoomForBounds(polygonBounds));
-        }
-      } catch (error) {
-        console.warn('[AtlasBuilder] area boundary discovery failed', error);
-      }
     } catch (error) {
       console.warn('[AtlasBuilder] focusing search area failed', error);
     }
-  }, [closeFocusSearch, discoverFocusPolygon, resolveResult]);
+  }, [closeFocusSearch, resolveResult, savedPlaces]);
 
   const persistAddedPlace = useCallback(async (place: DraftPlace): Promise<string | undefined> => {
     if (!atlasId) return undefined;
     try {
       if (savedPlaces.some((saved) => saved.id === place.id)) {
-        const [row] = await addPlacesToAtlas(atlasId, [place.id]);
+        const [row] = await addPlacesToAtlas(atlasId, [place.id], new Map([[place.id, atlasPlaceSnapshot(place)]]));
         return row?.id;
       }
       const [row] = await addAtlasOwnedPlaces(atlasId, [{
@@ -951,17 +1069,52 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       showDialog({ title: 'Location verification in progress', message: 'Wait for AI map positions to be verified before saving this Atlas.', tone: 'warning' });
       return;
     }
+    const overviewBounds = boundsFromPolygon(items.map((item) => [item.longitude, item.latitude] as [number, number]), 0.08);
+    const overviewCenter: [number, number] = [
+      items.reduce((sum, item) => sum + item.longitude, 0) / items.length,
+      items.reduce((sum, item) => sum + item.latitude, 0) / items.length,
+    ];
+    const overviewZoom = zoomForBounds(overviewBounds);
+    // A new Atlas resolves into its complete overview as it saves. Existing
+    // Atlases deliberately retain the editor's exact current camera.
+    if (!atlasId) {
+      setMapBounds(undefined);
+      setMapCenter(overviewCenter);
+      setMapZoom(overviewZoom);
+    }
+    const savedMapView = {
+      centerCoordinate: atlasId ? mapCenter : overviewCenter,
+      zoomLevel: atlasId ? mapZoom : overviewZoom,
+      markers: items.map((item, index) => ({
+        id: item.id,
+        title: item.name,
+        description: item.subtitle,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        tone: 'atlas' as const,
+        order: index + 1,
+      })),
+      routeGeoJSON: route?.route,
+    };
     setSavingKind(askAI ? 'ai' : 'atlas');
     try {
+      // Keep the save indicator and white marker breath on screen long enough
+      // to be perceived before the editor hands its map state to the detail.
+      await wait(460);
       const title = atlasId ? (atlasTitle.trim() || existingAtlas?.title || buildAtlasTitle(items)) : buildAtlasTitle(items);
       const atlas = atlasId ? existingAtlas : await createAtlas(title);
       if (!atlas) throw new Error('Atlas could not be created');
       const hasPendingRows = Boolean(atlasId) && items.some((item) => !item.joinId);
       if (atlasId && !hasPendingRows) {
-        void Promise.all(items.map((item, index) => updateAtlasPlace(item.joinId!, { sort_order: index, note: encodeAtlasPlaceMetadata(item.note, item.transport), timeline_day: item.timeline_day ?? null, timeline_time: item.timeline_time ?? null })))
-          .then(() => updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) }))
-          .catch((error) => console.warn('[AtlasBuilder] background save failed', error));
-        onSaved(atlas.id, askAI, { centerCoordinate: mapCenter, zoomLevel: mapZoom });
+        await Promise.all(items.map((item, index) => updateAtlasPlace(item.joinId!, {
+          ...atlasPlaceSnapshot(item),
+          sort_order: index,
+          note: encodeAtlasPlaceMetadata(item.note, item.transport),
+          timeline_day: item.timeline_day ?? null,
+          timeline_time: item.timeline_time ?? null,
+        })));
+        await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
+        onSaved(atlas.id, askAI, savedMapView);
         return;
       }
       const existingRows = atlasPlaces.filter((row) => row.atlas_id === atlas.id);
@@ -970,16 +1123,22 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       const newSaved = items.filter((item) => savedIds.has(item.id) && !existingIds.has(item.id));
       const newOwned = items.filter((item) => !savedIds.has(item.id) && !existingIds.has(item.id));
       const [savedRows, ownedRows] = await Promise.all([
-        addPlacesToAtlas(atlas.id, newSaved.map((item) => item.id)),
+        addPlacesToAtlas(atlas.id, newSaved.map((item) => item.id), new Map(newSaved.map((item) => [item.id, atlasPlaceSnapshot(item)]))),
         addAtlasOwnedPlaces(atlas.id, newOwned.map((item) => ({ ...item, external_place_id: item.id }))),
       ]);
       const joins = new Map([...existingRows, ...savedRows, ...ownedRows].map((row) => [row.place_id ?? row.external_place_id, row]));
       await Promise.all(items.map((item, index) => {
         const join = item.joinId ? { id: item.joinId } : joins.get(item.id);
-        return join ? updateAtlasPlace(join.id, { sort_order: index, note: encodeAtlasPlaceMetadata(item.note, item.transport), timeline_day: item.timeline_day ?? null, timeline_time: item.timeline_time ?? null }) : Promise.resolve();
+        return join ? updateAtlasPlace(join.id, {
+          ...atlasPlaceSnapshot(item),
+          sort_order: index,
+          note: encodeAtlasPlaceMetadata(item.note, item.transport),
+          timeline_day: item.timeline_day ?? null,
+          timeline_time: item.timeline_time ?? null,
+        }) : Promise.resolve();
       }));
       await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
-      onSaved(atlas.id, askAI, { centerCoordinate: mapCenter, zoomLevel: mapZoom });
+      onSaved(atlas.id, askAI, savedMapView);
     } catch (error) {
       console.warn('[AtlasBuilder] saving failed', error);
       showDialog({ title: 'Atlas was not saved', message: 'Please check your connection and try again.', tone: 'warning' });
@@ -1033,13 +1192,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       {searching ? <ActivityIndicator size="small" color="#2563EB" /> : <TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus search area' : 'Search all places'} onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity>}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>
-    {recommendedPlaces.length ? <Animated.View pointerEvents={localMustSeesVisible ? 'auto' : 'none'} style={[styles.localMustSeesNote, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={() => { Animated.timing(localMustSeesOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => setLocalMustSeesVisible(false)); }} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></Animated.View> : null}
-    {nearbyPromptVisible ? <Animated.View style={{ opacity: nearbyPromptOpacity }}><View style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="Ask OurAtlas for more nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <ActivityIndicator size="small" color="#6446B4" /> : <Text style={styles.nearbyPromptText}>Ask OurAtlas for more nearby must-sees</Text>}</TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss nearby recommendations" onPress={() => hideNearbyPrompt(true)} style={styles.nearbyPromptClose}><Ionicons name="close" size={13} color="#6D5A9A" /></TouchableOpacity></View></Animated.View> : null}
+    {localMustSeesVisible ? <Animated.View style={[styles.localMustSeesNote, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={hideLocalMustSees} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></Animated.View> : null}
+    {nearbyPromptVisible ? <Animated.View style={{ opacity: nearbyPromptOpacity }}><View style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
     {results.length > 0 ? <View pointerEvents="auto" style={styles.results}>{results.map((result) => {
       const key = result.kind === 'saved' ? result.place.id : result.externalId;
       return <View key={key} style={styles.resultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultFocus(result)}><View style={styles.resultTitleRow}><Text numberOfLines={1} style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text>{result.kind === 'saved' ? <View style={styles.savedTag}><Text style={styles.savedTagText}>Saved</Text></View> : null}</View><Text numberOfLines={1} style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus this area' : 'Add to Atlas'} disabled={focusSearchActive ? false : addingResult === key} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultAdd(result)} style={[focusSearchActive ? styles.focusResultButton : styles.addResultButton, !focusSearchActive && addingResult === key && styles.addResultButtonPending]}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>;
     })}</View> : null}
-  </Animated.View>, [addingResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleResultAdd, handleResultFocus, hideNearbyPrompt, localMustSeesOpacity, localMustSeesVisible, nearbyPromptOpacity, nearbyPromptVisible, nearbyRecommending, openFullSearch, query, recommendNearby, recommendedPlaces.length, results, searchAppear, searching]);
+  </Animated.View>, [addingResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleResultAdd, handleResultFocus, hideLocalMustSees, localMustSeesOpacity, localMustSeesVisible, nearbyPromptOpacity, nearbyPromptVisible, nearbyRecommending, openFullSearch, query, recommendNearby, recommendedPlaces.length, results, searchAppear, searching]);
 
   const handlePanelHeightChange = useCallback((height: number) => {
     // Keep layout-position state outside the native animation. Native Animated
@@ -1055,6 +1214,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useEffect(() => {
     setAtlasMapState({
       markers: mapMarkers,
+      cameraVerticalOffset: 0,
+      cameraScreenOffsetY: atlasId ? EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y : 0,
       centerCoordinate: mapCenter,
       zoomLevel: mapZoom,
       // Polygon bounds are used to derive mapZoom above. Passing bounds to
@@ -1363,7 +1524,8 @@ const styles = StyleSheet.create({
   localMustSeesDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#8B5CF6' },
   localMustSeesText: { color: '#555162', fontSize: 10, fontWeight: '700', flexShrink: 1 },
   localMustSeesClose: { width: 24, height: 26, alignItems: 'center', justifyContent: 'center' },
-  nearbyPrompt: { alignSelf: 'flex-start', minHeight: 32, marginTop: 7, paddingHorizontal: 10, borderRadius: 13, backgroundColor: '#F4F0FF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DED3FF', flexDirection: 'row', alignItems: 'center', gap: 6, shadowColor: '#4C347E', shadowOpacity: 0.1, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+  nearbyPrompt: { alignSelf: 'flex-start', minHeight: 32, marginTop: 5, paddingHorizontal: 10, borderRadius: 13, backgroundColor: '#F4F0FF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DED3FF', flexDirection: 'row', alignItems: 'center', shadowColor: '#4C347E', shadowOpacity: 0.1, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+  nearbyPromptMain: { minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 6 },
   nearbyPromptText: { color: '#6043AD', fontSize: 10, fontWeight: '800' },
   searchClose: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
   searchSubmit: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },

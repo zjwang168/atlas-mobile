@@ -27,9 +27,6 @@ import SearchPanel from '../search/SearchPanel';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
-// Atlas panels already occupy a large bottom area. A small additional camera
-// clearance keeps all stops visible without lifting the map focus too high.
-const ATLAS_PANEL_CAMERA_CLEARANCE = 7;
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
 // 200 / mass 0.9) — see below for why the map's padding recompute waits this long
 // after a group snap change instead of reacting immediately.
@@ -172,6 +169,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
   // drives the same padding-tracking path.
   const bottomPanelActive = (panelVisible && homePanelVisible) || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  const atlasCameraVerticalOffset = atlasMapState?.cameraVerticalOffset ?? 0;
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
@@ -185,10 +183,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // the map padding smoothly. Per-frame drag tracking stays on the ref-based path below.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: bottomPanelActive ? SNAP_HEIGHTS[settledPanelSnapState] + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0) : 0,
+    paddingBottom: bottomPanelActive ? Math.max(0, SNAP_HEIGHTS[settledPanelSnapState] + atlasCameraVerticalOffset) : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [atlasMapState, bottomPanelActive, settledPanelSnapState]);
+  }), [atlasCameraVerticalOffset, bottomPanelActive, settledPanelSnapState]);
   useEffect(() => {
     bottomPanelHeightRef.current = mapPadding.paddingBottom;
   }, [mapPadding]);
@@ -196,18 +194,18 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
-    mapRef.current?.setPaddingBottom(bottomPanelActive ? height + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0) : 0);
+    mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + atlasCameraVerticalOffset) : 0);
     atlasMapState?.onPanelHeightChange?.(height);
-  }, [atlasMapState, bottomPanelActive]);
+  }, [atlasCameraVerticalOffset, atlasMapState, bottomPanelActive]);
 
   // A panel may already be resting when the Atlas overlay mounts, so its
   // height listener is not guaranteed to emit an initial frame. Seed the
   // popup position from the current snap height immediately.
   useEffect(() => {
     if (!atlasMapState?.onPanelHeightChange || !bottomPanelActive) return;
-    const panelHeight = Math.max(0, mapPadding.paddingBottom - (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0));
+    const panelHeight = Math.max(0, mapPadding.paddingBottom - atlasCameraVerticalOffset);
     atlasMapState.onPanelHeightChange(panelHeight);
-  }, [atlasMapState?.onPanelHeightChange, bottomPanelActive, mapPadding.paddingBottom]);
+  }, [atlasCameraVerticalOffset, atlasMapState?.onPanelHeightChange, bottomPanelActive, mapPadding.paddingBottom]);
 
   const handleAddPress = useCallback(() => {
     onOpenImport?.();
@@ -276,6 +274,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         cameraAnimationDurationMs={atlasMapState?.cameraAnimationDurationMs ?? (atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200)}
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
+        cameraScreenOffsetY={atlasMapState?.cameraScreenOffsetY}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
         routeDistanceLabels={atlasMapState?.routeDistanceLabels}
         selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}

@@ -50,6 +50,8 @@ interface MapboxMapProps {
   routeMarkers?: MapMarker[];
   /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
   padding?: MapPadding;
+  /** Positive values move rendered map content down by this many screen points. */
+  cameraScreenOffsetY?: number;
   /** Duration for prop-driven camera changes. The Save screen needs a brief
       settle after its sheet enters; the home map keeps its slower transition. */
   cameraAnimationDurationMs?: number;
@@ -94,6 +96,18 @@ function projectToWorld([longitude, latitude]: [number, number], zoom: number): 
     (longitude + 180) / 360 * worldSize,
     (1 - Math.log(Math.tan(latitudeRadians) + 1 / Math.cos(latitudeRadians)) / Math.PI) / 2 * worldSize,
   ];
+}
+
+function offsetCameraCenter([longitude, latitude]: [number, number], zoom: number, screenOffsetY = 0): [number, number] {
+  if (!screenOffsetY) return [longitude, latitude];
+  const worldSize = 512 * 2 ** zoom;
+  const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  const latitudeRadians = clampedLatitude * Math.PI / 180;
+  const currentY = (1 - Math.log(Math.tan(latitudeRadians) + 1 / Math.cos(latitudeRadians)) / Math.PI) / 2 * worldSize;
+  // Moving the camera north moves the rendered map content south on screen.
+  const targetY = Math.max(0, Math.min(worldSize, currentY - screenOffsetY));
+  const nextLatitude = Math.atan(Math.sinh(Math.PI * (1 - 2 * targetY / worldSize))) * 180 / Math.PI;
+  return [longitude, nextLatitude];
 }
 
 function overlaps(a: ScreenRect, b: ScreenRect): boolean {
@@ -309,8 +323,11 @@ function MarkerDot({
     };
   });
   const pulseStyle = useAnimatedStyle(() => ({
-    opacity: pulsing ? interpolate(pulse.value, [0, 0.82, 1], [0.72, 0.12, 0]) : 0,
-    transform: [{ scale: pulsing ? interpolate(pulse.value, [0, 1], [1, 1.78]) : 1 }],
+    // Range control: 3.56 is twice the previous 1.78 maximum scale.
+    // Keep the ring solid white through its expansion, then clear it only as
+    // the next breath starts so it reads as white padding rather than a glow.
+    opacity: pulsing ? interpolate(pulse.value, [0, 0.88, 1], [1, 1, 0]) : 0,
+    transform: [{ scale: pulsing ? interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
   }));
   return (
     <View style={styles.markerDotWrap}>
@@ -346,6 +363,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   routeDistanceLabels,
   routeMarkers,
   padding,
+  cameraScreenOffsetY = 0,
   cameraAnimationDurationMs = 2000,
   selectedMarkerId,
   deletingMarkerId,
@@ -354,6 +372,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   compassEnabled = true,
   markerPopup,
 }, ref) {
+  const cameraCenterCoordinate = useMemo(
+    () => offsetCameraCenter(centerCoordinate, zoomLevel, cameraScreenOffsetY),
+    [cameraScreenOffsetY, centerCoordinate, zoomLevel],
+  );
   const displayMarkers = routeMarkers ?? markers;
   const renderedMarkers = useMemo(
     () => {
@@ -375,7 +397,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [viewport, setViewport] = useState<MapViewport>({ center: centerCoordinate, zoom: zoomLevel });
+  const [viewport, setViewport] = useState<MapViewport>({ center: cameraCenterCoordinate, zoom: zoomLevel });
   const pendingViewportRef = useRef<MapViewport | null>(null);
   const cameraFrameRef = useRef<number | null>(null);
   const lastCameraStateKeyRef = useRef<string | null>(null);
@@ -442,7 +464,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     }
   }, []);
 
-  const prevCenterRef = useRef(centerCoordinate);
+  const prevCenterRef = useRef(cameraCenterCoordinate);
   const prevZoomRef = useRef(zoomLevel);
   const prevPaddingRef = useRef(padding);
   const prevCameraKeyRef = useRef(cameraKey);
@@ -469,7 +491,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     cameraRef.current?.fitBounds(bounds.ne, bounds.sw, fitPadding, cameraAnimationDurationMs);
   }, [bounds, cameraAnimationDurationMs, cameraKey, isReady, padding]);
   useEffect(() => {
-    const [lng, lat] = centerCoordinate;
+    const [lng, lat] = cameraCenterCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;
     const centerChanged = lng !== prevLng || lat !== prevLat;
     const zoomChanged = zoomLevel !== prevZoomRef.current;
@@ -480,7 +502,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       padding?.paddingRight !== prevPaddingRef.current?.paddingRight;
     const cameraKeyChanged = cameraKey !== prevCameraKeyRef.current;
     if (bounds) {
-      prevCenterRef.current = centerCoordinate;
+      prevCenterRef.current = cameraCenterCoordinate;
       prevZoomRef.current = zoomLevel;
       prevPaddingRef.current = padding;
       prevCameraKeyRef.current = cameraKey;
@@ -488,17 +510,17 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       return;
     }
     if (!centerChanged && !zoomChanged && !paddingChanged && !cameraKeyChanged) return;
-    prevCenterRef.current = centerCoordinate;
+    prevCenterRef.current = cameraCenterCoordinate;
     prevZoomRef.current = zoomLevel;
     prevPaddingRef.current = padding;
     prevCameraKeyRef.current = cameraKey;
     cameraRef.current?.setCamera({
-      centerCoordinate,
+      centerCoordinate: cameraCenterCoordinate,
       zoomLevel,
       animationDuration: cameraAnimationDurationMs,
       padding,
     });
-  }, [bounds, cameraAnimationDurationMs, centerCoordinate, zoomLevel, padding]);
+  }, [bounds, cameraAnimationDurationMs, cameraCenterCoordinate, zoomLevel, padding]);
 
   useImperativeHandle(ref, () => ({
     setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
@@ -511,13 +533,13 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     },
     focusCoordinate: (coordinate, nextZoomLevel = 15, durationMs = 90) => {
       cameraRef.current?.setCamera({
-        centerCoordinate: coordinate,
+      centerCoordinate: offsetCameraCenter(coordinate, nextZoomLevel, cameraScreenOffsetY),
         zoomLevel: nextZoomLevel,
         padding: prevPaddingRef.current,
         animationDuration: durationMs,
       });
     },
-  }), []);
+  }), [cameraScreenOffsetY]);
 
   if (error) {
     return (
@@ -554,7 +576,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       >
         <MapboxGL.Camera
           ref={cameraRef}
-          defaultSettings={{ centerCoordinate, zoomLevel, padding }}
+          defaultSettings={{ centerCoordinate: cameraCenterCoordinate, zoomLevel, padding }}
         />
 
         {routeGeoJSON && (

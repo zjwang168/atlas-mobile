@@ -148,12 +148,28 @@ export function requestAtlasRoute(coordinates: Array<[number, number]>): Promise
 
 type MapboxRouteResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; code?: string };
 type MapboxOptimizationResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; waypoints?: Array<{ waypoint_index: number; trips_index: number; location: [number, number] }>; code?: string };
+type MapboxGeocodingResponse = { features?: Array<{ center?: [number, number] }> };
 
 async function mapboxRequest<T>(path: string): Promise<T> {
   if (!MAPBOX_ACCESS_TOKEN) throw new Error('Mapbox access token is not configured');
   const response = await fetch(`https://api.mapbox.com${path}${path.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(MAPBOX_ACCESS_TOKEN)}`);
   if (!response.ok) throw new Error(`Mapbox request failed (${response.status})`);
   return response.json() as Promise<T>;
+}
+
+/** Resolves a named Focus area before the Atlas editor builds its camera. */
+export async function geocodeAtlasArea(query: string): Promise<[number, number] | null> {
+  if (!query.trim()) return null;
+  try {
+    const result = await mapboxRequest<MapboxGeocodingResponse>(
+      `/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?types=place,region,country&limit=1`,
+    );
+    const center = result.features?.[0]?.center;
+    return center && Number.isFinite(center[0]) && Number.isFinite(center[1]) ? center : null;
+  } catch (error) {
+    console.warn('[apiService] Focus-area geocoding failed', error);
+    return null;
+  }
 }
 
 /** Fast, ordered road route used immediately by the Atlas map. */
@@ -374,8 +390,13 @@ export async function discoverAtlasPlaces(
   query: string,
   onProgress?: (progress: ParseProgress) => void,
   onRequestId?: ParseRequestIdHandler,
+  options?: { sessionId?: string; excludedPlaceNames?: string[] },
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/atlas_ai/discover', { query }, onProgress, onRequestId);
+  return postParseWithProgress<ParseResult>('/atlas_ai/discover', {
+    query,
+    session_id: options?.sessionId,
+    exclude_place_names: options?.excludedPlaceNames,
+  }, onProgress, onRequestId);
 }
 
 export async function scanUrl(

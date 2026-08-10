@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import base64
+from collections import OrderedDict
 from typing import Optional
 import httpx
 
@@ -61,6 +62,37 @@ from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
 
 NO_PLACE_INFO = "No Place Information that can be extracted"
+
+# Atlas discovery is intentionally ephemeral: a session lasts for one mounted
+# Edit Atlas screen, while this bounded cache provides the next request with
+# the prior turns needed to avoid repeating recommendations.
+ATLAS_DISCOVERY_CONVERSATIONS: OrderedDict[str, list[dict[str, object]]] = OrderedDict()
+ATLAS_DISCOVERY_CONVERSATION_LIMIT = 64
+
+
+def atlas_discovery_context(session_id: Optional[str]) -> str:
+    if not session_id:
+        return ""
+    turns = ATLAS_DISCOVERY_CONVERSATIONS.get(session_id, [])
+    if not turns:
+        return ""
+    ATLAS_DISCOVERY_CONVERSATIONS.move_to_end(session_id)
+    history = []
+    for turn in turns[-12:]:
+        names = "; ".join(turn["places"])
+        history.append(f"User: {turn['query']}\nAtlas AI recommended: {names}")
+    return "\n\nPrevious turns in this Atlas editing conversation:\n" + "\n\n".join(history)
+
+
+def remember_atlas_discovery(session_id: Optional[str], query: str, locations: list[dict]) -> None:
+    if not session_id:
+        return
+    places = [str(location.get("name") or "").strip() for location in locations]
+    turns = ATLAS_DISCOVERY_CONVERSATIONS.setdefault(session_id, [])
+    turns.append({"query": query[:800], "places": [name for name in places if name]})
+    ATLAS_DISCOVERY_CONVERSATIONS.move_to_end(session_id)
+    while len(ATLAS_DISCOVERY_CONVERSATIONS) > ATLAS_DISCOVERY_CONVERSATION_LIMIT:
+        ATLAS_DISCOVERY_CONVERSATIONS.popitem(last=False)
 
 app = FastAPI(
     title="OurAtlas Parse & Fetch API",
@@ -126,6 +158,8 @@ class CreateSessionRequest(BaseModel):
 class AtlasDiscoverRequest(BaseModel):
     query: str
     request_id: Optional[str] = None
+    session_id: Optional[str] = None
+    exclude_place_names: list[str] = []
 
 
 class LocationItem(BaseModel):
@@ -785,6 +819,11 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
             "characters": len(query),
             "source_type": "atlas_ai",
         })
+        original_query = query
+        query += atlas_discovery_context(req.session_id)
+        excluded_names = [name.strip() for name in req.exclude_place_names if name and name.strip()]
+        if excluded_names:
+            query += "\n\nThis is a follow-up in the same Atlas editing conversation. Do not repeat any of these places already recommended in this session: " + "; ".join(excluded_names[:120]) + ". Return different real places only."
         result_state = await atlas_graph_app.ainvoke(
             {
                 "task_type": "atlas_ai_discover",
@@ -792,11 +831,12 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
                 "request_id": req.request_id,
             },
             config={
-                "configurable": {"thread_id": req.request_id or query[:32]},
+                "configurable": {"thread_id": req.session_id or req.request_id or query[:32]},
                 "run_name": "AtlasApp:atlas_ai_discover",
             },
         )
         result = result_state.get("result", {})
+        remember_atlas_discovery(req.session_id, original_query, result.get("locations", []))
         progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(result.get("locations", [])),
             "inferred_region": result.get("inferred_region"),

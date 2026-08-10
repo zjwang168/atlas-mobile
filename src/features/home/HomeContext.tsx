@@ -43,10 +43,52 @@ function hasRenderableCoordinates(place: SavedPlace): boolean {
     && place.longitude <= 180;
 }
 
-function prefetchPlacePhotos(places: SavedPlace[]) {
-  const urls = [...new Set(places.map((place) => place.photo_url).filter((url): url is string => Boolean(url)))];
-  if (!urls.length) return;
-  void Promise.all(urls.map((url) => Image.prefetch(url).catch(() => false)));
+const prefetchedPhotoUrls = new Set<string>();
+const prefetchingPhotoUrls = new Set<string>();
+
+function uniquePhotoUrls(urls: Array<string | null | undefined>): string[] {
+  return [...new Set(urls.filter((url): url is string => Boolean(url)))];
+}
+
+function focusCardPhotoUrls(places: SavedPlace[]): string[] {
+  const areas = new Map<string, SavedPlace[]>();
+  places.forEach((place) => {
+    const label = [place.city, place.region, place.country].find((value) => value?.trim());
+    if (!label) return;
+    const key = label.toLocaleLowerCase().trim();
+    areas.set(key, [...(areas.get(key) ?? []), place]);
+  });
+  return uniquePhotoUrls(
+    [...areas.values()]
+      .sort((a, b) => b.length - a.length || (a[0]?.city ?? a[0]?.region ?? a[0]?.country ?? '').localeCompare(b[0]?.city ?? b[0]?.region ?? b[0]?.country ?? ''))
+      .map((area) => area.find((place) => Boolean(place.photo_url))?.photo_url),
+  );
+}
+
+function atlasCoverPhotoUrls(atlases: Atlas[], atlasPlaces: AtlasPlace[], savedPlaces: SavedPlace[]): string[] {
+  const savedById = new Map(savedPlaces.map((place) => [place.id, place]));
+  return uniquePhotoUrls(atlases.flatMap((atlas) => {
+    const rows = atlasPlaces.filter((row) => row.atlas_id === atlas.id).sort((a, b) => a.sort_order - b.sort_order);
+    for (const row of rows) {
+      const uri = row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url;
+      if (uri) return [uri];
+    }
+    return [];
+  }));
+}
+
+async function prefetchPhotoUrlsInOrder(urls: string[]): Promise<void> {
+  for (const url of urls) {
+    if (prefetchedPhotoUrls.has(url) || prefetchingPhotoUrls.has(url)) continue;
+    prefetchingPhotoUrls.add(url);
+    try {
+      if (await Image.prefetch(url)) prefetchedPhotoUrls.add(url);
+    } catch {
+      // A later idle pass may retry transient image failures.
+    } finally {
+      prefetchingPhotoUrls.delete(url);
+    }
+  }
 }
 
 // --- Overlay ---
@@ -67,6 +109,10 @@ export type Overlay =
  */
 export type AtlasMapState = {
   markers: MapMarker[];
+  /** Per-Atlas camera adjustment. Create an Atlas deliberately leaves this at zero. */
+  cameraVerticalOffset?: number;
+  /** Moves map content vertically in screen points without changing panel layout. */
+  cameraScreenOffsetY?: number;
   centerCoordinate?: [number, number];
   zoomLevel?: number;
   bounds?: { ne: [number, number]; sw: [number, number] };
@@ -226,7 +272,9 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [savedPlacesLoaded, setSavedPlacesLoaded] = useState(false);
   const [atlases, setAtlases] = useState<Atlas[]>([]);
+  const [atlasesLoaded, setAtlasesLoaded] = useState(false);
   const [atlasPlaces, setAtlasPlaces] = useState<AtlasPlace[]>([]);
+  const [atlasPlacesLoaded, setAtlasPlacesLoaded] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
   const [deletedChatHistory, setDeletedChatHistory] = useState<ChatHistoryItem[]>([]);
   const [activeHistoryItem, setActiveHistoryItem] = useState<ChatHistoryItem | null>(null);
@@ -281,6 +329,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setAtlases(rows);
     } catch (e) {
       console.error('[HomeContext] refreshAtlases failed:', e);
+    } finally {
+      setAtlasesLoaded(true);
     }
   }, []);
 
@@ -290,6 +340,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setAtlasPlaces(rows);
     } catch (e) {
       console.error('[HomeContext] refreshAtlasPlaces failed:', e);
+    } finally {
+      setAtlasPlacesLoaded(true);
     }
   }, []);
 
@@ -341,13 +393,23 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     setSavedPlacesLoaded(true);
   }), []);
 
-  // Prepare the photos used by My Places and the Create an Atlas focus cards
-  // only after the first interactive work has completed.
+  // Idle prefetch intentionally mirrors the user-visible priority: Create an
+  // Atlas focus cards, Bookmark Atlas covers, then My Places newest first.
   useEffect(() => {
-    if (!savedPlacesLoaded || !savedPlaces.length) return;
-    const task = InteractionManager.runAfterInteractions(() => prefetchPlacePhotos(savedPlaces));
+    if (!savedPlacesLoaded || !atlasesLoaded || !atlasPlacesLoaded) return;
+    const urls = uniquePhotoUrls([
+      ...focusCardPhotoUrls(savedPlaces),
+      ...atlasCoverPhotoUrls(atlases, atlasPlaces, savedPlaces),
+      ...[...savedPlaces]
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+        .map((place) => place.photo_url),
+    ]);
+    if (!urls.length) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void prefetchPhotoUrlsInOrder(urls);
+    });
     return () => task.cancel();
-  }, [savedPlaces, savedPlacesLoaded]);
+  }, [atlasPlaces, atlasPlacesLoaded, atlases, atlasesLoaded, savedPlaces, savedPlacesLoaded]);
   useEffect(() => subscribeAtlases(setAtlases), []);
   useEffect(() => subscribeAtlasPlaces(setAtlasPlaces), []);
 

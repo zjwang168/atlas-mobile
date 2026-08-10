@@ -29,6 +29,12 @@ type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | n
 type FocusBounds = { ne: [number, number]; sw: [number, number] };
 type RouteFeature = GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
 type RouteCamera = Pick<NonNullable<ReturnType<typeof getMapPresentation>>, 'centerCoordinate' | 'zoomLevel' | 'bounds'> & { cameraAnimationDurationMs: number; cameraKey: string };
+type EditorSavedMapPresentation = {
+  centerCoordinate: [number, number];
+  zoomLevel: number;
+  markers: MapMarker[];
+  routeGeoJSON?: RouteFeature;
+};
 
 const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   walk: { label: 'Walk', icon: 'walk-outline' },
@@ -42,22 +48,21 @@ const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: 
   ferry: { label: 'Ferry', icon: 'boat-outline' },
   flight: { label: 'Flight', icon: 'airplane-outline' },
 };
+const ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET = -80;
 
 function boundsFromFocusPolygon(items: ItineraryItem[]): FocusBounds | undefined {
   if (!items.length) return undefined;
-  const center: [number, number] = [
-    items.reduce((sum, item) => sum + item.place.longitude, 0) / items.length,
-    items.reduce((sum, item) => sum + item.place.latitude, 0) / items.length,
-  ];
-  const longitudeRadius = Math.max(0.07, ...items.map((item) => Math.abs(item.place.longitude - center[0]) * 1.35));
-  const latitudeRadius = Math.max(0.055, ...items.map((item) => Math.abs(item.place.latitude - center[1]) * 1.35));
-  const polygon = Array.from({ length: 10 }, (_, index) => {
-    const angle = (Math.PI * 2 * index) / 10;
-    return [center[0] + Math.cos(angle) * longitudeRadius, center[1] + Math.sin(angle) * latitudeRadius] as [number, number];
-  });
+  const longitudes = items.map((item) => item.place.longitude);
+  const latitudes = items.map((item) => item.place.latitude);
+  const minimumLongitude = Math.min(...longitudes);
+  const maximumLongitude = Math.max(...longitudes);
+  const minimumLatitude = Math.min(...latitudes);
+  const maximumLatitude = Math.max(...latitudes);
+  const longitudePadding = Math.max(0.025, (maximumLongitude - minimumLongitude) * 0.16);
+  const latitudePadding = Math.max(0.02, (maximumLatitude - minimumLatitude) * 0.16);
   return {
-    ne: [Math.max(...polygon.map(([longitude]) => longitude)) + 0.025, Math.max(...polygon.map(([, latitude]) => latitude)) + 0.02],
-    sw: [Math.min(...polygon.map(([longitude]) => longitude)) - 0.025, Math.min(...polygon.map(([, latitude]) => latitude)) - 0.02],
+    ne: [maximumLongitude + longitudePadding, maximumLatitude + latitudePadding],
+    sw: [minimumLongitude - longitudePadding, minimumLatitude - latitudePadding],
   };
 }
 
@@ -164,6 +169,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   const [optimizationReview, setOptimizationReview] = useState(false);
   const [optimizationDismissed, setOptimizationDismissed] = useState(false);
   const [appliedOptimizedItems, setAppliedOptimizedItems] = useState<ItineraryItem[] | null>(null);
+  const [editorSavedMapPresentation, setEditorSavedMapPresentation] = useState<EditorSavedMapPresentation | null>(null);
   const [capturingShare, setCapturingShare] = useState(false);
   const [shareImageUri, setShareImageUri] = useState<string | null>(null);
   const shareCanvasRef = useRef<View>(null);
@@ -180,20 +186,23 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     const byId = new Map(savedPlaces.map((place) => [place.id, place]));
     return atlasPlaces.filter((row) => row.atlas_id === atlasId).sort((a, b) => a.sort_order - b.sort_order).flatMap((row) => {
       const saved = row.place_id ? byId.get(row.place_id) : undefined;
-      const place: AtlasDisplayPlace | null = saved ?? (row.place_name && row.latitude != null && row.longitude != null ? {
-        id: row.external_place_id ?? row.id,
-        name: row.place_name,
-        subtitle: row.place_subtitle ?? '',
+      // The Atlas row is the durable source of truth for its orange pin. Do
+      // not use the global Saved Places map to determine this Atlas's scope.
+      const place: AtlasDisplayPlace | null = row.latitude != null && row.longitude != null ? {
+        id: row.place_id ?? row.external_place_id ?? row.id,
+        name: row.place_name ?? saved?.name ?? 'Pinned place',
+        subtitle: row.place_subtitle ?? saved?.subtitle ?? '',
         latitude: row.latitude,
         longitude: row.longitude,
-        photo_url: row.photo_url ?? null,
-      } : null);
+        photo_url: row.photo_url ?? saved?.photo_url ?? null,
+      } : saved ?? null;
       const metadata = decodeAtlasPlaceMetadata(row.note);
       return place ? [{ place, rowId: row.id, note: metadata.note, day: row.timeline_day ?? null, time: row.timeline_time ?? null, transport: metadata.transport }] : [];
     });
   }, [atlasId, atlasPlaces, savedPlaces]);
 
   const presentation = useMemo(() => getMapPresentation(items, null), [items]);
+  const activePresentation = editorSavedMapPresentation ?? presentation;
   const optimizedItems = useMemo(() => optimizationOrder ? optimizationOrder.map((index) => items[index]).filter((item): item is ItineraryItem => Boolean(item)) : [], [items, optimizationOrder]);
   const listItems = optimizationReview ? optimizedItems : (appliedOptimizedItems ?? items);
 
@@ -217,6 +226,10 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     setOptimizationDismissed(false);
   }, [atlas, atlasId]);
 
+  useEffect(() => {
+    setEditorSavedMapPresentation(null);
+  }, [atlasId]);
+
   const openNextStopDirections = (from: ItineraryItem, to: ItineraryItem) => {
     const origin = `${from.place.latitude},${from.place.longitude}`;
     const destination = `${to.place.latitude},${to.place.longitude}`;
@@ -226,6 +239,8 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   };
 
   const dismissAtlas = useCallback(() => {
+    setRouteCamera(null);
+    setEditorSavedMapPresentation(null);
     setHomeSelectedPlaceId(null);
     setHomeSelectedPlaceCoordinate(null);
     onDismiss();
@@ -245,7 +260,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
         zoomLevel: presentation.zoomLevel,
         bounds: presentation.bounds,
         cameraAnimationDurationMs: 500,
-        cameraKey: `${detailCameraKey}-hidden-${Date.now()}`,
+        cameraKey: `${detailCameraKey}-${atlas.id}-hidden-${Date.now()}`,
       } : null);
       return;
     }
@@ -261,7 +276,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       });
       setRouteFeature(nextRoute.route);
       setDisplayedRoute(nextRoute.route);
-      setRouteCamera({ centerCoordinate: presentation.centerCoordinate, zoomLevel: presentation.zoomLevel, bounds: presentation.bounds, cameraAnimationDurationMs: 500, cameraKey: `${detailCameraKey}-route-${Date.now()}` });
+      setRouteCamera({ centerCoordinate: presentation.centerCoordinate, zoomLevel: presentation.zoomLevel, bounds: presentation.bounds, cameraAnimationDurationMs: 500, cameraKey: `${detailCameraKey}-${atlas.id}-route-${Date.now()}` });
       void updateAtlas(atlas.id, { route_geojson: nextRoute.route, route_visible: true }).catch((error) => console.warn('[AtlasDetail] could not save route:', error));
     } catch (error) {
       console.warn('[AtlasDetail] could not create route:', error);
@@ -279,7 +294,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     if (!optimizedRoute || optimizedItems.length !== items.length) return;
     setOptimizationReview(true);
     setDisplayedRoute(optimizedRoute);
-    setRouteCamera({ centerCoordinate: presentation.centerCoordinate, zoomLevel: presentation.zoomLevel, bounds: presentation.bounds, cameraAnimationDurationMs: 550, cameraKey: `${detailCameraKey}-optimized-review` });
+    setRouteCamera({ centerCoordinate: presentation.centerCoordinate, zoomLevel: presentation.zoomLevel, bounds: presentation.bounds, cameraAnimationDurationMs: 550, cameraKey: `${detailCameraKey}-${atlas?.id ?? 'atlas'}-optimized-review` });
   }, [detailCameraKey, items.length, optimizedItems.length, optimizedRoute, presentation.bounds, presentation.centerCoordinate, presentation.zoomLevel]);
 
   const saveOptimizedRoute = useCallback(async () => {
@@ -337,23 +352,27 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
 
   useLayoutEffect(() => {
     if (!atlas || editing) return;
+    const scopedRouteCamera = routeCamera?.cameraKey.includes(`-${atlas.id}-`) ? routeCamera : null;
+    const renderedRoute = displayedRoute ?? editorSavedMapPresentation?.routeGeoJSON;
+    const overviewCameraKey = `${detailCameraKey}-${atlas.id}-${activePresentation.markers.map((marker) => `${marker.longitude.toFixed(4)},${marker.latitude.toFixed(4)}`).join('|')}`;
     setAtlasMapState({
-      ...presentation,
-      ...routeCamera,
-      cameraKey: routeCamera?.cameraKey ?? `${detailCameraKey}-${atlas.id}`,
+      ...activePresentation,
+      cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
+      ...scopedRouteCamera,
+      cameraKey: scopedRouteCamera?.cameraKey ?? overviewCameraKey,
       cameraAnimationDurationMs: 320,
-      ...(routeCamera ? { cameraAnimationDurationMs: routeCamera.cameraAnimationDurationMs } : {}),
-      routeGeoJSON: displayedRoute ?? undefined,
-      routeDistanceLabels: displayedRoute ? routeDistanceLabelsForItems(displayedRoute, listItems) : undefined,
+      ...(scopedRouteCamera ? { cameraAnimationDurationMs: scopedRouteCamera.cameraAnimationDurationMs } : {}),
+      routeGeoJSON: renderedRoute ?? undefined,
+      routeDistanceLabels: renderedRoute && listItems.length ? routeDistanceLabelsForItems(renderedRoute, listItems) : undefined,
       hideChrome: capturingShare,
       selectedMarkerId: selectedPlaceId,
       onMarkerPress: (marker) => setSelectedPlaceId(marker.id),
       onMapPress: () => setSelectedPlaceId(null),
       onPanelHeightChange: handleRoutePanelHeight,
-      overlay: !capturingShare ? <AtlasRouteControl bottom={routeControlBottom} visible={Boolean(displayedRoute)} busy={routeBusy} disabled={items.length < 2} onPress={toggleRoute} /> : null,
+      overlay: !capturingShare ? <AtlasRouteControl bottom={routeControlBottom} visible={Boolean(renderedRoute)} busy={routeBusy} disabled={activePresentation.markers.length < 2} onPress={toggleRoute} /> : null,
     });
     return () => setAtlasMapState(null);
-  }, [atlas, capturingShare, detailCameraKey, displayedRoute, editing, handleRoutePanelHeight, items.length, listItems, presentation, routeBusy, routeCamera, routeControlBottom, selectedPlaceId, setAtlasMapState, toggleRoute]);
+  }, [activePresentation, atlas, capturingShare, detailCameraKey, displayedRoute, editing, editorSavedMapPresentation?.routeGeoJSON, handleRoutePanelHeight, listItems, routeBusy, routeCamera, routeControlBottom, selectedPlaceId, setAtlasMapState, toggleRoute]);
 
   useEffect(() => {
     if (!atlasId) setEditing(false);
@@ -366,7 +385,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
-    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => { if (mapView) setRouteCamera({ ...mapView, bounds: undefined, cameraAnimationDurationMs: 0, cameraKey: `${detailCameraKey}-saved-${Date.now()}` }); setEditing(false); }} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => { if (mapView) { setEditorSavedMapPresentation(mapView); if (mapView.routeGeoJSON) { setRouteFeature(mapView.routeGeoJSON); setDisplayedRoute(mapView.routeGeoJSON); } setRouteCamera({ centerCoordinate: mapView.centerCoordinate, zoomLevel: mapView.zoomLevel, bounds: undefined, cameraAnimationDurationMs: 0, cameraKey: `${detailCameraKey}-${atlas.id}-saved-${Date.now()}` }); } setEditing(false); }} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
       <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
@@ -399,7 +418,7 @@ function ItineraryRow({ item, index, nextItem, selected, onPress, onShare, onNav
   </TouchableOpacity> : null;
   return <View style={styles.itineraryItem}>
     {index === 0 ? <ItineraryMetadata item={item} onShare={onShare} /> : null}
-    <TouchableOpacity onPress={onPress} activeOpacity={0.76} style={[styles.row, selected && styles.rowSelected]}>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.76} style={[styles.row, selected && styles.rowSelected, selected && styles.rowSelectedSurface]}>
       <View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>
       {item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.image} /> : <View style={[styles.image, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}
       <View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text>{item.note ? <Text numberOfLines={2} style={styles.note}>{item.note}</Text> : null}</View>
@@ -424,6 +443,7 @@ function ItineraryMetadata({ item, connector = false, onShare }: { item: Itinera
 }
 
 const styles = StyleSheet.create({
+  rowSelectedSurface: { backgroundColor: '#F1F3F4', borderColor: '#E1E4E7' },
   routeMapOverlay: { ...StyleSheet.absoluteFill },
   floatingRouteButton: { position: 'absolute', right: 16, minHeight: 30, borderRadius: 12, backgroundColor: '#FFF8F3', borderWidth: StyleSheet.hairlineWidth, borderColor: '#F0CDB9', shadowColor: '#8B4E2A', shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4 },
   floatingRouteButtonInner: { minHeight: 30, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5 },
