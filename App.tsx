@@ -844,20 +844,32 @@ function AppContent() {
           }}
 
           onSaveAndAskAI={async (ids) => {
-            try {
-              const selected = parseResult.places.filter((p) => ids.includes(p.id));
-              const deselected = parseResult.places.filter((p) => !ids.includes(p.id));
-              await savePlaces(selected, {
-                region: parseResult.region,
-                url: importMeta?.sourceUrl || importText,
-              });
+            const selected = parseResult.places.filter((p) => ids.includes(p.id));
+            const deselected = parseResult.places.filter((p) => !ids.includes(p.id));
+            const sourceUrl = importMeta?.sourceUrl || importText;
+            const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
+            const sourceType = chatSourceTypeForImport(importMeta, importText);
 
-              const sourceUrl = importMeta?.sourceUrl || importText;
-              const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
+            // The cache is updated optimistically by savePlaces. Let its remote
+            // write continue while the chat session is created so this action
+            // does not hold the results screen open on a slow connection.
+            const savePromise = savePlaces(selected, {
+              region: parseResult.region,
+              url: sourceUrl,
+            });
+            void savePromise.catch((error) => {
+              console.error('Background place save failed:', error);
+              showDialog({
+                title: 'Chat started, but places were not saved',
+                message: 'Please retry saving these places from the chat map or My Places.',
+                tone: 'warning',
+              });
+            });
+            try {
               const created = await createChatSession({
                 title: effectiveTitle,
                 source_url: sourceUrl,
-                source_type: chatSourceTypeForImport(importMeta, importText),
+                source_type: sourceType,
                 locations: selected.map((place) => ({
                   name: place.name,
                   latitude: place.latitude,
@@ -873,7 +885,7 @@ function AppContent() {
               const temporaryId = addChatHistoryItem({
                 title: effectiveTitle,
                 sourceUrl,
-                sourceType: chatSourceTypeForImport(importMeta, importText),
+                sourceType,
                 locationCount: selected.length,
                 messageCount: 0,
                 places: selected,
@@ -883,7 +895,7 @@ function AppContent() {
                 id: conversationId,
                 title: effectiveTitle,
                 sourceUrl,
-                sourceType: chatSourceTypeForImport(importMeta, importText),
+                sourceType,
                 locationCount: selected.length,
                 messageCount: 0,
                 places: selected,
@@ -896,7 +908,7 @@ function AppContent() {
                 id: conversationId,
                 title: effectiveTitle,
                 sourceUrl,
-                sourceType: chatSourceTypeForImport(importMeta, importText),
+                sourceType,
                 locationCount: selected.length,
                 messageCount: 0,
                 places: selected,

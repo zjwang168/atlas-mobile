@@ -1342,10 +1342,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       // Persistence is local-first, so the map transition never waits for a
       // round trip or for atlas_places subscribers to hydrate the detail.
       preserveMapOnUnmountRef.current = true;
-      // Regular saves keep their current instant map handoff. Ask AI waits for
-      // the Atlas write to finish so the conversation is based on committed
-      // orange-pin order and itinerary metadata.
-      if (!askAI) onSaved(atlas.id, false, savedMapView);
+      // The chat receives the exact editor snapshot, so it does not need to
+      // wait for the remote Atlas writes below. Those writes have already
+      // applied their optimistic local state and continue in the background.
+      onSaved(atlas.id, askAI, savedMapView);
       const hasPendingRows = Boolean(atlasId) && items.some((item) => !item.joinId);
       if (atlasId && !hasPendingRows) {
         await updateAtlasPlaces(items.map((item, index) => ({ joinRowId: item.joinId!, patch: {
@@ -1356,7 +1356,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           timeline_time: item.timeline_time ?? null,
         } })));
         await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
-        if (askAI) onSaved(atlas.id, true, savedMapView);
         return;
       }
       const existingRows = atlasPlaces.filter((row) => row.atlas_id === atlas.id);
@@ -1380,7 +1379,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         } }] : [];
       }));
       await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
-      if (askAI) onSaved(atlas.id, true, savedMapView);
     } catch (error) {
       console.warn('[AtlasBuilder] saving failed', error);
       showDialog({ title: 'Atlas was not saved', message: 'Please check your connection and try again.', tone: 'warning' });

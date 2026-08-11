@@ -1,10 +1,9 @@
 import MapboxMap, { type MapMarker } from '@/features/map/MapboxMap';
-import type { AtlasChatPresentation, AtlasTransportMode } from '@/services/api/apiService';
+import type { AtlasChatPresentation } from '@/services/api/apiService';
 import { CheckIcon } from 'phosphor-react-native/src/icons/Check';
 import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image, Linking, Pressable, StyleSheet, View, type ImageStyle } from 'react-native';
 import { Text } from '@/components/ui/text';
 
@@ -28,19 +27,6 @@ const PLACE_IMAGE_STYLE: ImageStyle = {
   height: 56,
   borderRadius: 16,
   backgroundColor: '#E7E7E7',
-};
-
-const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
-  walk: { label: 'Walk', icon: 'walk-outline' },
-  bike: { label: 'Bike', icon: 'bicycle-outline' },
-  drive: { label: 'Drive', icon: 'car-outline' },
-  taxi: { label: 'Taxi', icon: 'car-sport-outline' },
-  bus: { label: 'Bus', icon: 'bus-outline' },
-  coach: { label: 'Coach', icon: 'bus-outline' },
-  subway: { label: 'Subway', icon: 'train-outline' },
-  train: { label: 'Train', icon: 'train-outline' },
-  ferry: { label: 'Ferry', icon: 'boat-outline' },
-  flight: { label: 'Flight', icon: 'airplane-outline' },
 };
 
 function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?: AtlasChatPresentation['user_location']) {
@@ -70,39 +56,6 @@ function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?:
   const lngPad = Math.max(0.003, (east - west) * 0.24);
   const latPad = Math.max(0.003, (north - south) * 0.24);
   return { ne: [east + lngPad, north + latPad] as [number, number], sw: [west - lngPad, south - latPad] as [number, number] };
-}
-
-function AtlasItineraryPreview({ presentation }: { presentation: AtlasChatPresentation }) {
-  if (presentation.kind !== 'atlas_draft' || !presentation.places.length) return null;
-  return <View style={styles.itineraryPreview}>
-    <View style={styles.itineraryHeader}>
-      <Text style={styles.itineraryTitle}>Itinerary preview</Text>
-      <Text style={styles.itineraryCount}>{presentation.places.length} stops</Text>
-    </View>
-    {presentation.planning_note ? <Text style={styles.planningNote}>{presentation.planning_note}</Text> : null}
-    {presentation.places.map((place, index) => {
-      const transport = place.transport ? TRANSPORT_PRESENTATION[place.transport] : null;
-      const nextPlace = presentation.places[index + 1];
-      const legTransport = nextPlace?.transport ? TRANSPORT_PRESENTATION[nextPlace.transport] : null;
-      return <View key={place.external_id || `${place.name}-${index}`} style={styles.itineraryEntry}>
-        <View style={styles.itineraryEntryRow}>
-          <View style={styles.itineraryNumber}><Text style={styles.itineraryNumberText}>{index + 1}</Text></View>
-          <View style={styles.itineraryEntryCopy}>
-            {(place.timeline_time || transport) ? <View style={styles.itineraryMeta}>
-              {place.timeline_time ? <View style={styles.timeTag}><Ionicons name="time-outline" size={12} color="#2677B5" /><Text style={styles.timeTagText}>{place.timeline_day ? `Day ${place.timeline_day} · ` : ''}{place.timeline_time}</Text></View> : null}
-              {transport ? <View style={styles.transportTag}><Ionicons name={transport.icon} size={12} color="#64748B" /><Text style={styles.transportTagText}>{transport.label}</Text></View> : null}
-            </View> : null}
-            <Text numberOfLines={1} style={styles.itineraryPlaceName}>{place.name}</Text>
-            {place.full_address ? <Text numberOfLines={1} style={styles.itineraryAddress}>{place.full_address}</Text> : null}
-          </View>
-        </View>
-        {nextPlace && (legTransport || nextPlace.travel_duration_minutes != null) ? <View style={styles.itineraryLeg}>
-          <View style={styles.itineraryLegLine} />
-          <Text style={styles.itineraryLegText}>{legTransport?.label ?? 'Travel'}{nextPlace.travel_duration_minutes != null ? ` · ${nextPlace.travel_duration_minutes} min` : ''} to next stop</Text>
-        </View> : null}
-      </View>;
-    })}
-  </View>;
 }
 
 export default function AtlasChatResultCard({ presentation, pendingAction, onConfirm, onCancel, onOpenMap }: Props) {
@@ -193,7 +146,6 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
           </View>
         ) : null}
       </View>
-      <AtlasItineraryPreview presentation={presentation} />
       {hasPendingAction ? (
         <View style={styles.confirmRow}>
           <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : 'Ready to add these places?'}</Text>
@@ -262,25 +214,5 @@ const styles = StyleSheet.create({
   googleMapsViewAction: { backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DADCE0' },
   googleMapsNavigateAction: { backgroundColor: '#16A34A' },
   googleMapsIcon: { width: 26, height: 26, resizeMode: 'contain' },
-  itineraryPreview: { marginTop: 12, paddingHorizontal: 2 },
-  itineraryHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingHorizontal: 2, marginBottom: 8 },
-  itineraryTitle: { color: '#18181B', fontSize: 15, lineHeight: 20, fontWeight: '800' },
-  itineraryCount: { color: '#8A8A91', fontSize: 12, lineHeight: 17 },
-  planningNote: { color: '#667085', fontSize: 12, lineHeight: 17, marginBottom: 8, paddingHorizontal: 2 },
-  itineraryEntry: { position: 'relative' },
-  itineraryEntryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 9 },
-  itineraryNumber: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E77B32', marginTop: 1 },
-  itineraryNumberText: { color: '#FFFFFF', fontSize: 11, lineHeight: 14, fontWeight: '800' },
-  itineraryEntryCopy: { flex: 1, minWidth: 0, paddingBottom: 3 },
-  itineraryMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5, marginBottom: 3 },
-  timeTag: { minHeight: 23, paddingHorizontal: 7, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EAF4FF' },
-  timeTagText: { color: '#2677B5', fontSize: 11, lineHeight: 15, fontWeight: '700' },
-  transportTag: { minHeight: 23, paddingHorizontal: 7, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F1F4F5' },
-  transportTagText: { color: '#64748B', fontSize: 11, lineHeight: 15, fontWeight: '700' },
-  itineraryPlaceName: { color: '#202024', fontSize: 14, lineHeight: 19, fontWeight: '700' },
-  itineraryAddress: { color: '#85858C', fontSize: 11, lineHeight: 16, marginTop: 1 },
-  itineraryLeg: { minHeight: 26, marginLeft: 11, paddingLeft: 22, paddingTop: 4, paddingBottom: 4, justifyContent: 'center' },
-  itineraryLegLine: { position: 'absolute', left: 0, top: 0, bottom: 0, width: StyleSheet.hairlineWidth, backgroundColor: '#DDE2E7' },
-  itineraryLegText: { color: '#8A8A91', fontSize: 10, lineHeight: 14 },
   actionPressed: { transform: [{ scale: 0.95 }], opacity: 0.86 },
 });

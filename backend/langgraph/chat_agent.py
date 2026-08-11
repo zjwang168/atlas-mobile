@@ -217,30 +217,10 @@ async def generate_import_welcome(session_id: str, deselected_locations: list[di
         for place in (deselected_locations or [])[:50]
         if isinstance(place, dict) and str(place.get("name") or "").strip()
     ]
-    excluded_context = ", ".join(deselected_names[:12]) or "none"
-    prompt = (
-        "The user has just confirmed saving the explicit places attached to this chat. "
-        "Write the first visible assistant message now. Open with a warm, natural greeting, "
-        "briefly acknowledge the saved collection, and say the map below contains those saved places. "
-        f"The user did not select these parsed places: {excluded_context}. "
-        "Do not list unselected places unless it is useful to clarify the scope. "
-        "Offer exactly three concise next things the user can ask or do, as bullets, then ask one inviting question. "
-        "Do not call tools, do not claim any new write, and keep the message under 140 words."
-    )
     started_at = time.perf_counter()
-    answer = ""
-    try:
-        model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
-        model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
-        response = await model.ainvoke([
-            SystemMessage(content=_system_prompt(session)),
-            *_history_messages(session),
-            HumanMessage(content=prompt),
-        ])
-        answer = _content_to_text(getattr(response, "content", response))
-    except Exception as error:
-        print(f"[Chat] Import welcome generation failed: {error}")
-    answer = answer or _import_welcome_fallback(session, deselected_names)
+    # This opening is product copy, not a question that needs model reasoning.
+    # Generating it locally removes a full LLM round trip from Save and Ask AI.
+    answer = _import_welcome_fallback(session, deselected_names)
     presentation = {
         "kind": "places_map",
         "title": f"{len(selected)} saved place{'s' if len(selected) != 1 else ''}",
@@ -298,26 +278,10 @@ async def generate_atlas_welcome(session_id: str) -> dict[str, Any]:
     places = _dedupe_places(getattr(session, "locations", []) or [], limit=50)
     session.locations = places
     title = str(getattr(session, "title", "") or "your Atlas").strip()[:100]
-    prompt = (
-        f"The user has just saved edits to the Atlas named '{title}'. The explicit places are in their confirmed route order. "
-        "Write the first visible assistant message now. Start with a warm greeting, acknowledge that the Atlas is ready, "
-        "and say the orange numbered map below follows the saved order. Offer exactly three concise next things the user "
-        "can ask or do, as bullets, then ask one inviting question. Do not call tools, do not claim any new write, and keep it under 140 words."
-    )
     started_at = time.perf_counter()
-    answer = ""
-    try:
-        model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
-        model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
-        response = await model.ainvoke([
-            SystemMessage(content=_system_prompt(session)),
-            *_history_messages(session),
-            HumanMessage(content=prompt),
-        ])
-        answer = _content_to_text(getattr(response, "content", response))
-    except Exception as error:
-        print(f"[Chat] Atlas welcome generation failed: {error}")
-    answer = answer or (
+    # The opening map card and suggested actions are known at save time. Avoid
+    # an LLM request here so the Atlas editor can enter chat immediately.
+    answer = (
         f"Hi, {title} is saved and ready to explore. The orange numbered map below follows your current stop order.\n\n"
         "We can:\n- tighten the route and travel times\n- add or adjust a day-by-day schedule\n- find a useful stop near any point\n\n"
         "What would you like to refine first?"

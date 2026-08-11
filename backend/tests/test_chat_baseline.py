@@ -113,9 +113,8 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
             "full_address": "Seattle, WA",
             "category": "Market",
         }]
-        model = _FakeChatModel()
-        with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
-             patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
+        with patch("backend.langgraph.chat_agent.get_chat_model") as get_model, \
+            patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
             result = await generate_import_welcome("baseline-test-session", [{
                 "name": "Kerry Park",
                 "latitude": 47.6295,
@@ -125,8 +124,8 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["presentation"]["kind"], "places_map")
         self.assertEqual([place["name"] for place in result["presentation"]["places"]], ["Pike Place Market"])
         self.assertEqual([message["role"] for message in self.session.messages], ["assistant"])
-        self.assertIn("Kerry Park", str(model.calls[0][-1].content))
-        self.assertIn("Pike Place Market", str(model.calls[0][0].content))
+        self.assertIn("1 unselected place", result["response"])
+        get_model.assert_not_called()
         save.assert_awaited_once()
 
     async def test_atlas_welcome_keeps_ordered_orange_pin_presentation(self):
@@ -136,16 +135,16 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
             {"name": "Pike Place Market", "latitude": 47.6097, "longitude": -122.3425, "timeline_day": 1, "timeline_time": "10am"},
             {"name": "Seattle Art Museum", "latitude": 47.6073, "longitude": -122.3381, "transport": "walk"},
         ]
-        model = _FakeChatModel()
-        with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
-             patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
+        with patch("backend.langgraph.chat_agent.get_chat_model") as get_model, \
+            patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
             result = await generate_atlas_welcome("baseline-test-session")
 
         self.assertEqual(result["presentation"]["kind"], "atlas_draft")
         self.assertEqual(result["presentation"]["title"], "Seattle Saturday")
         self.assertEqual([place["name"] for place in result["presentation"]["places"]], ["Pike Place Market", "Seattle Art Museum"])
         self.assertEqual([message["role"] for message in self.session.messages], ["assistant"])
-        self.assertIn("Seattle Saturday", str(model.calls[0][-1].content))
+        self.assertIn("Seattle Saturday", result["response"])
+        get_model.assert_not_called()
         save.assert_awaited_once()
 
 

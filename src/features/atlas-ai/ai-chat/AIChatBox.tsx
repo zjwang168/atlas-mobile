@@ -47,7 +47,7 @@ import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import TopBlurFade from '@/components/ui/top-blur-fade';
 import AtlasChatResultCard from './AtlasChatResultCard';
-import { AtlasChatMapControls, AtlasChatMapPlacePopup } from './AtlasChatMapOverlay';
+import { AtlasChatMapControls, AtlasChatMapItinerary, AtlasChatMapPlacePopup } from './AtlasChatMapOverlay';
 import {
   chatWithAtlasStream,
   confirmAtlasChatAction,
@@ -958,8 +958,9 @@ export default function AIChatBox({
     onReturn={returnFromPresentationMap}
     onClose={closePresentationMap}
     placePopup={chatMapPopup}
+    atlasItinerary={chatMapPresentation?.kind === 'atlas_draft' ? <AtlasChatMapItinerary presentation={chatMapPresentation} /> : null}
     notice={chatMapNotice}
-  />, [chatMapNotice, chatMapPopup, closePresentationMap, insets.top, returnFromPresentationMap]);
+  />, [chatMapNotice, chatMapPopup, chatMapPresentation, closePresentationMap, insets.top, returnFromPresentationMap]);
   const chatMapStateKey = [
     chatMapCameraKey,
     chatMapPresentation?.kind ?? 'none',
