@@ -148,7 +148,8 @@ export function requestAtlasRoute(coordinates: Array<[number, number]>): Promise
 
 type MapboxRouteResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; code?: string };
 type MapboxOptimizationResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; waypoints?: Array<{ waypoint_index: number; trips_index: number; location: [number, number] }>; code?: string };
-type MapboxGeocodingResponse = { features?: Array<{ center?: [number, number] }> };
+type MapboxGeocodingResponse = { features?: Array<{ center?: [number, number]; bbox?: [number, number, number, number] }> };
+export type AtlasAreaGeocode = { center: [number, number]; bounds?: { ne: [number, number]; sw: [number, number] } };
 
 async function mapboxRequest<T>(path: string): Promise<T> {
   if (!MAPBOX_ACCESS_TOKEN) throw new Error('Mapbox access token is not configured');
@@ -158,14 +159,20 @@ async function mapboxRequest<T>(path: string): Promise<T> {
 }
 
 /** Resolves a named Focus area before the Atlas editor builds its camera. */
-export async function geocodeAtlasArea(query: string): Promise<[number, number] | null> {
+export async function geocodeAtlasArea(query: string): Promise<AtlasAreaGeocode | null> {
   if (!query.trim()) return null;
   try {
     const result = await mapboxRequest<MapboxGeocodingResponse>(
       `/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?types=place,region,country&limit=1`,
     );
-    const center = result.features?.[0]?.center;
-    return center && Number.isFinite(center[0]) && Number.isFinite(center[1]) ? center : null;
+    const feature = result.features?.[0];
+    const center = feature?.center;
+    if (!center || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) return null;
+    const bbox = feature?.bbox;
+    const bounds = bbox && bbox.every(Number.isFinite)
+      ? { ne: [bbox[2], bbox[3]] as [number, number], sw: [bbox[0], bbox[1]] as [number, number] }
+      : undefined;
+    return { center, bounds };
   } catch (error) {
     console.warn('[apiService] Focus-area geocoding failed', error);
     return null;

@@ -1,11 +1,12 @@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
+import { atlasCameraFromStops } from '@/features/map/atlasCamera';
 import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import AtlasBuilder from './atlas-builder/AtlasBuilder';
 import type { DraftPlace } from './atlas-builder/AtlasBuilder';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { TouchableOpacity, View } from 'react-native';
 
 type MyPlanProps = {
@@ -17,7 +18,7 @@ type MyPlanProps = {
 };
 
 function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit }: MyPlanProps) {
-  const { setOverlay, setActiveSidekick } = useHome();
+  const { setAtlasMapState, setOverlay, setActiveSidekick } = useHome();
   const [builderVisible, setBuilderVisible] = useState(false);
   const [buildSeed, setBuildSeed] = useState<DraftPlace[] | null>(null);
   const [draftItems, setDraftItems] = useState<DraftPlace[]>([]);
@@ -25,6 +26,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   const [buildBounds, setBuildBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>();
   const [buildLocation, setBuildLocation] = useState<string | undefined>();
   const [builderKey, setBuilderKey] = useState(0);
+  const editorWasEligibleRef = useRef(false);
 
   const openBuilder = useCallback(() => {
     // Keep the shared map visible above the Atlas editor rather than turning
@@ -56,16 +58,47 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setBuilderVisible(true);
   }, []);
   useEffect(() => {
-    if (!compact && active && !builderVisible) openBuilder();
-  }, [active, builderVisible, compact, openBuilder]);
+    const editorEligible = !compact && active;
+    const justBecameEligible = editorEligible && !editorWasEligibleRef.current;
+    editorWasEligibleRef.current = editorEligible;
+    if (justBecameEligible) openBuilder();
+  }, [active, compact, openBuilder]);
 
   if (compact) {
     return <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8 }}><Text style={{ fontSize: 18, fontWeight: '600', color: '#09090b' }}>Atlas</Text><TouchableOpacity onPress={onAvatarPress}><Avatar alt={mockUser.avatarFallback} style={{ width: 32, height: 32 }}>{mockUser.avatarUri ? <AvatarImage source={{ uri: mockUser.avatarUri }} /> : null}<AvatarFallback><Text style={{ fontSize: 11 }}>{mockUser.avatarFallback}</Text></AvatarFallback></Avatar></TouchableOpacity></View>;
   }
 
   if (builderVisible) {
-    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI) => {
-      closeBuilder();
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI, mapView) => {
+      // Saving transitions directly into the completed Atlas. Do not use
+      // closeBuilder here: it calls onExit and visibly returns to My Places.
+      const completedCamera = mapView ? atlasCameraFromStops(mapView.markers.map((marker) => ({
+        id: marker.id,
+        latitude: marker.latitude,
+        longitude: marker.longitude,
+        title: marker.title,
+        description: marker.description,
+      }))) : undefined;
+      if (mapView && completedCamera) {
+        // Keep only the final Atlas orange pins from this exact synchronous
+        // state update. Mapbox derives its Web Mercator center and zoom from
+        // these bounds plus the completed sheet's live bottom padding.
+        setAtlasMapState({
+          markers: completedCamera.markers,
+          centerCoordinate: completedCamera.centerCoordinate,
+          zoomLevel: mapView.zoomLevel,
+          bounds: completedCamera.bounds,
+          cameraKey: `atlas-save-${atlasId}-${Date.now()}`,
+          cameraVerticalOffset: 28,
+          cameraAnimationDurationMs: 0,
+        });
+      }
+      setBuilderVisible(false);
+      setBuildSeed(null);
+      setDraftItems([]);
+      setBuildCenter(undefined);
+      setBuildBounds(undefined);
+      setBuildLocation(undefined);
       if (askAI) setActiveSidekick('aiChat');
       else setOverlay({ kind: 'atlasDetail', atlasId });
     }} />;

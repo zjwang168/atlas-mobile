@@ -110,6 +110,43 @@ function offsetCameraCenter([longitude, latitude]: [number, number], zoom: numbe
   return [longitude, nextLatitude];
 }
 
+function mercatorY(latitude: number): number {
+  const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  const radians = clampedLatitude * Math.PI / 180;
+  return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
+}
+
+function latitudeFromMercatorY(y: number): number {
+  return Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI;
+}
+
+function cameraForBounds(
+  bounds: NonNullable<MapboxMapProps['bounds']>,
+  width: number,
+  height: number,
+  padding: [number, number, number, number],
+): { centerCoordinate: [number, number]; zoomLevel: number } {
+  const [west, south] = bounds.sw;
+  const [east, north] = bounds.ne;
+  const longitudeSpan = Math.max(0.00001, east - west);
+  const northY = mercatorY(north);
+  const southY = mercatorY(south);
+  const latitudeSpan = Math.max(0.00000001, Math.abs(southY - northY));
+  const availableWidth = Math.max(1, width - padding[1] - padding[3]);
+  const availableHeight = Math.max(1, height - padding[0] - padding[2]);
+  const longitudeZoom = Math.log2((availableWidth * 360) / (512 * longitudeSpan));
+  const latitudeZoom = Math.log2(availableHeight / (512 * latitudeSpan));
+  const zoomLevel = Math.max(1, Math.min(20, Math.min(longitudeZoom, latitudeZoom)));
+
+  return {
+    // Camera padding already places this coordinate at the center of the
+    // unoccluded map rectangle. Applying the padding offset here as well moves
+    // Atlas pins too close to the Dynamic Island.
+    centerCoordinate: [(west + east) / 2, latitudeFromMercatorY((northY + southY) / 2)],
+    zoomLevel,
+  };
+}
+
 function overlaps(a: ScreenRect, b: ScreenRect): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
@@ -147,7 +184,6 @@ function viewportFromCamera(state: CameraState): MapViewport {
 }
 
 function screenMarkers(markers: MapMarker[], viewport: MapViewport, width: number, height: number): ScreenMarker[] {
-  if (!viewport.bounds) return [];
   const center = projectToWorld(viewport.center, viewport.zoom);
   return markers.map((marker) => {
     const point = projectToWorld([marker.longitude, marker.latitude], viewport.zoom);
@@ -164,7 +200,7 @@ function labelOwnerPoints(points: ScreenMarker[], width: number, height: number,
       (point.marker.id === popupMarkerId ? 3000 : 0) +
       (point.marker.id === selectedMarkerId ? 2000 : 0) +
       (point.marker.id === deletingMarkerId ? 1000 : 0) +
-      (point.marker.tone === 'focused' ? 800 : 0) +
+      (point.marker.tone === 'focused' ? 2200 : 0) +
       (point.marker.tone === 'atlas' ? 700 : 0);
     return score(b) - score(a) ||
       Math.abs(a.x - width / 2) + Math.abs(a.y - height / 2) - (Math.abs(b.x - width / 2) + Math.abs(b.y - height / 2)) ||
@@ -195,7 +231,7 @@ function labelOwnerPoints(points: ScreenMarker[], width: number, height: number,
   return visible;
 }
 
-/** Labels stay above their marker; label-to-label overlap remains permitted. */
+/** Labels stay above their marker and never overlap one another. */
 function visibleLabelIds(
   labelOwners: ReadonlyMap<string, ScreenMarker[]>,
   viewport: MapViewport,
@@ -207,6 +243,7 @@ function visibleLabelIds(
   if (!viewportIsLocal(viewport)) return new Set();
   const labels = new Set<string>();
   const representatives = new Map(Array.from(labelOwners.entries()).map(([id, group]) => [id, group[0]]));
+  const placedLabelRects: ScreenRect[] = [];
   for (const [id, point] of representatives) {
     const title = point.marker.title;
     if (!title || id === popupMarkerId || point.x < 0 || point.x > width || point.y < 0 || point.y > height) continue;
@@ -215,12 +252,12 @@ function visibleLabelIds(
     const group = labelOwners.get(id) ?? [];
     if (labelRect.left < 0 || labelRect.right > width || labelRect.top < 0 || labelRect.bottom > height) continue;
     if (Array.from(representatives.values()).some((other) => other.marker.id !== id && overlaps(labelRect, expandRect(other.dotRect, LABEL_POINT_CLEARANCE)))) continue;
-    group.forEach((member) => labels.add(member.marker.id));
+    if (placedLabelRects.some((placed) => overlaps(labelRect, placed))) continue;
+    // A collision group has a single representative. Showing every group
+    // member was the source of stacked labels for clustered AI suggestions.
+    if (group.length) labels.add(id);
+    placedLabelRects.push(labelRect);
   }
-  // A point the user deliberately tapped must always retain its identifying
-  // label, even when its normal collision candidate would be rejected.
-  const selected = Array.from(labelOwners.values()).flat().find((point) => point.marker.id === selectedMarkerId);
-  if (selected?.marker.title && selected.marker.id !== popupMarkerId) labels.add(selected.marker.id);
   return labels;
 }
 
@@ -307,10 +344,15 @@ function MarkerDot({
     selectedProgress.value = withTiming(isFocused ? 1 : 0, { duration });
   }, [hasActiveSelection, selected, selectedProgress, tone]);
   const animatedStyle = useAnimatedStyle(() => {
+    const atlasPin = tone === 'atlas';
     const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : '#007AFF';
-    const selectedColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : '#12C170';
+    // Green is the explicit current-choice state in the editor. AI pins stay
+    // purple only while unselected; an orange Atlas pin keeps its route color.
+    const selectedColor = tone === 'atlas' ? '#E77B32' : '#12C170';
     return {
-    opacity: (1 - exit.value) * entry.value,
+    // Atlas pins are the active itinerary itself. They never participate in
+    // add/focus remount fades; only an explicit delete is allowed to fade one.
+    opacity: (1 - exit.value) * (atlasPin ? 1 : entry.value),
     backgroundColor: interpolateColor(
       exit.value,
       [0, 1],
@@ -319,7 +361,7 @@ function MarkerDot({
         '#DC2626',
       ],
     ),
-    transform: [{ scale: (1 + selectedProgress.value * 0.5) * (1 - exit.value * 0.76) * (0.82 + entry.value * 0.18) }],
+    transform: [{ scale: (1 + selectedProgress.value * 0.5) * (1 - exit.value * 0.76) * (atlasPin ? 1 : (0.82 + entry.value * 0.18)) }],
     };
   });
   const pulseStyle = useAnimatedStyle(() => ({
@@ -330,8 +372,8 @@ function MarkerDot({
     transform: [{ scale: pulsing ? interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
   }));
   return (
-    <View style={styles.markerDotWrap}>
-      {pulsing && tone === 'atlas' ? <Reanimated.View pointerEvents="none" style={[styles.markerSavingPulse, pulseStyle]} /> : null}
+    <View style={[styles.markerDotWrap, tone === 'atlas' && styles.markerDotWrapAtlas]}>
+      {pulsing && tone === 'atlas' ? <Reanimated.View pointerEvents="none" style={[styles.markerSavingPulse, styles.markerSavingPulseAtlas, pulseStyle]} /> : null}
       <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
         {order ? <Text style={styles.markerOrder}>{order}</Text> : null}
       </Reanimated.View>
@@ -385,7 +427,12 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       const unique = new Map<string, MapMarker>();
       displayMarkers.forEach((marker) => unique.set(marker.id, marker));
       const list = [...unique.values()];
-      const markerPriority = (marker: MapMarker) => (marker.tone === 'atlas' ? 30 : marker.id === selectedMarkerId ? 20 : marker.tone === 'recommended' ? 10 : 0);
+      const markerPriority = (marker: MapMarker) => (
+        marker.tone === 'atlas' ? 30
+          : marker.tone === 'focused' || marker.id === selectedMarkerId ? 20
+            : marker.tone === 'recommended' ? 10
+              : 0
+      );
       return list.sort((a, b) => markerPriority(a) - markerPriority(b));
     },
     [displayMarkers, selectedMarkerId],
@@ -396,6 +443,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const compassTop = safeTop + 48;
   const cameraRef = useRef<MapboxGL.Camera>(null);
   const [isReady, setIsReady] = useState(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewport>({ center: cameraCenterCoordinate, zoom: zoomLevel });
   const pendingViewportRef = useRef<MapViewport | null>(null);
@@ -406,6 +454,22 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     () => screenMarkers(renderedMarkers, viewport, width, height),
     [height, renderedMarkers, viewport, width],
   );
+  const nativeMarkers = useMemo(() => {
+    // MarkerView is a React/native view for every point. Keep the active Atlas
+    // pins and selected point, but cull distant saved/recommended views to the
+    // current viewport and cap the remainder. This avoids reconciling an
+    // entire country's saved places while a local Atlas sheet opens.
+    const visibleIds = new Set(screenMarkerPoints.map((point) => point.marker.id));
+    const atlas = renderedMarkers.filter((marker) => marker.tone === 'atlas');
+    const selected = renderedMarkers.filter((marker) => marker.id === selectedMarkerId && marker.tone !== 'atlas');
+    const nearby = screenMarkerPoints
+      .filter((point) => point.marker.tone !== 'atlas' && point.marker.id !== selectedMarkerId)
+      .sort((a, b) => Math.hypot(a.x - width / 2, a.y - height / 2) - Math.hypot(b.x - width / 2, b.y - height / 2))
+      .slice(0, 96)
+      .map((point) => point.marker)
+      .filter((marker) => visibleIds.has(marker.id));
+    return [...new Map([...atlas, ...selected, ...nearby].map((marker) => [marker.id, marker])).values()];
+  }, [height, renderedMarkers, screenMarkerPoints, selectedMarkerId, width]);
   const labelOwnerMarkerPoints = useMemo(
     () => labelOwnerPoints(screenMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
     [deletingMarkerId, height, markerPopup?.markerId, screenMarkerPoints, selectedMarkerId, width],
@@ -414,10 +478,18 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     () => visibleLabelIds(labelOwnerMarkerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
     [height, labelOwnerMarkerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
   );
-  const routeDistanceGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
-    type: 'FeatureCollection',
-    features: (routeDistanceLabels ?? []).map((label) => ({ type: 'Feature', properties: { label: label.text }, geometry: { type: 'Point', coordinates: label.coordinate } })),
-  }), [routeDistanceLabels]);
+  const routeDistanceGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
+    const seen = new Set<string>();
+    return {
+      type: 'FeatureCollection',
+      features: (routeDistanceLabels ?? []).flatMap((label) => {
+        const key = `${label.id}:${label.coordinate[0].toFixed(6)}:${label.coordinate[1].toFixed(6)}:${label.text}`;
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [{ id: label.id, type: 'Feature' as const, properties: { label: label.text }, geometry: { type: 'Point' as const, coordinates: label.coordinate } }];
+      }),
+    };
+  }, [routeDistanceLabels]);
 
   const handleMapPress = () => {
     if (Date.now() - markerPressTimestampRef.current < 180) return;
@@ -474,22 +546,31 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       previousBoundsRef.current = null;
       return;
     }
-    if (!isReady) return;
-    // A panel can report many height changes while entering. Re-fitting the
-    // same geographic bounds for every padding update repeatedly restarts the
-    // camera animation and makes an Atlas feel slow to open. Bounds changes
-    // own zoom; padding-only changes are handled by the camera effect below.
-    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}`;
-    if (nextBounds === previousBoundsRef.current) return;
-    previousBoundsRef.current = nextBounds;
+    if (!isReady || !mapLoaded || !cameraRef.current) return;
     const fitPadding: [number, number, number, number] = [
       Math.max(48, padding?.paddingTop ?? 0),
       Math.max(24, padding?.paddingRight ?? 0),
       Math.max(24, padding?.paddingBottom ?? 0),
       Math.max(24, padding?.paddingLeft ?? 0),
     ];
-    cameraRef.current?.fitBounds(bounds.ne, bounds.sw, fitPadding, cameraAnimationDurationMs);
-  }, [bounds, cameraAnimationDurationMs, cameraKey, isReady, padding]);
+    // Bounds own both center and zoom. Compute the Web Mercator camera here
+    // from the orange-pin bounds and the real remaining map viewport rather
+    // than accepting a native fit result that can be superseded by padding.
+    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}:${fitPadding.join(',')}`;
+    if (nextBounds === previousBoundsRef.current) return;
+    const camera = cameraForBounds(bounds, width, height, fitPadding);
+    cameraRef.current.setCamera({
+      ...camera,
+      padding: {
+        paddingTop: fitPadding[0],
+        paddingRight: fitPadding[1],
+        paddingBottom: fitPadding[2],
+        paddingLeft: fitPadding[3],
+      },
+      animationDuration: cameraAnimationDurationMs,
+    });
+    previousBoundsRef.current = nextBounds;
+  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, padding, width]);
   useEffect(() => {
     const [lng, lat] = cameraCenterCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;
@@ -506,9 +587,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       prevZoomRef.current = zoomLevel;
       prevPaddingRef.current = padding;
       prevCameraKeyRef.current = cameraKey;
-      if (paddingChanged) cameraRef.current?.setCamera({ padding, animationDuration: cameraAnimationDurationMs });
       return;
     }
+    if (!isReady || !mapLoaded || !cameraRef.current) return;
     if (!centerChanged && !zoomChanged && !paddingChanged && !cameraKeyChanged) return;
     prevCenterRef.current = cameraCenterCoordinate;
     prevZoomRef.current = zoomLevel;
@@ -520,7 +601,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       animationDuration: cameraAnimationDurationMs,
       padding,
     });
-  }, [bounds, cameraAnimationDurationMs, cameraCenterCoordinate, zoomLevel, padding]);
+  }, [bounds, cameraAnimationDurationMs, cameraCenterCoordinate, zoomLevel, padding, isReady, mapLoaded, cameraKey]);
 
   useImperativeHandle(ref, () => ({
     setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
@@ -573,6 +654,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         onPress={handleMapPress}
         onCameraChanged={queueViewportUpdate}
         onMapIdle={queueViewportUpdate}
+        onDidFinishLoadingMap={() => setMapLoaded(true)}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -605,15 +687,25 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             />
           </MapboxGL.ShapeSource>
         )}
-        {routeDistanceLabels?.length ? <MapboxGL.ShapeSource id="routeDistanceSource" shape={routeDistanceGeoJSON}><MapboxGL.SymbolLayer id="routeDistanceLabels" style={{ textField: ['get', 'label'], textSize: 10, textColor: '#475569', textHaloColor: 'rgba(255,255,255,0.99)', textHaloWidth: 2.5, textOffset: [0, -0.9], textAllowOverlap: true, textIgnorePlacement: true, textAnchor: 'center' }} /></MapboxGL.ShapeSource> : null}
+        <MapboxGL.ShapeSource id="routeDistanceSource" shape={routeDistanceGeoJSON}>
+          <MapboxGL.SymbolLayer id="routeDistanceLabels" style={{ textField: ['get', 'label'], textSize: 10, textColor: '#475569', textHaloColor: 'rgba(255,255,255,0.99)', textHaloWidth: 2.5, textOffset: [0, -0.9], textAllowOverlap: false, textIgnorePlacement: false, textOptional: true, textAnchor: 'center' }} />
+        </MapboxGL.ShapeSource>
 
-        {renderedMarkers.map((marker) => (
+        {nativeMarkers.map((marker) => (
           <MapboxGL.MarkerView
             // MarkerView does not reliably re-evaluate native collision after
             // allowOverlap changes. Remount only the marker whose focused
             // state changed so a deselected green pin immediately returns to
             // the normal blue-pin collision set without requiring a pan/zoom.
-            key={`${marker.id}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
+            // MarkerView holds a native child tree. Remount when its visual
+            // role changes so a saved blue marker cannot survive into an Atlas
+            // orange marker while Mapbox catches up with a prop update.
+            // Orange itinerary markers keep a stable native identity. Their
+            // number or focus state may change, but neither should unmount a
+            // MarkerView and make an active Atlas pin flash or disappear.
+            key={marker.tone === 'atlas'
+              ? `${marker.id}:atlas`
+              : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
             style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas]}
             // A focused point is an explicit user choice. Let its annotation
@@ -622,7 +714,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             // AI recommendations must remain discoverable even when they sit
             // near a saved point; native MarkerView collision would otherwise
             // hide the purple pin before the user can select it.
-            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'recommended' || marker.tone === 'atlas'}
+            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'focused' || marker.tone === 'recommended' || marker.tone === 'atlas'}
           >
             <View
               style={styles.markerContainer}
@@ -680,6 +772,8 @@ const styles = StyleSheet.create({
     elevation: 70,
   },
   markerAnnotationAtlas: {
+    width: 30,
+    height: 30,
     zIndex: 140,
     elevation: 140,
   },
@@ -762,6 +856,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  markerDotWrapAtlas: {
+    width: 30,
+    height: 30,
+  },
   markerSavingPulse: {
     position: 'absolute',
     width: 20,
@@ -769,6 +867,12 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 3,
     borderColor: '#FFFFFF',
+  },
+  markerSavingPulseAtlas: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 4,
   },
   markerSelectedLayer: {
     zIndex: 100,
@@ -782,6 +886,10 @@ const styles = StyleSheet.create({
     borderWidth: 4,
   },
   markerAtlas: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 4,
     backgroundColor: '#E77B32',
   },
   markerRecommended: {
@@ -792,7 +900,7 @@ const styles = StyleSheet.create({
   },
   markerOrder: {
     color: '#FFFFFF',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
   },
   errorIcon: {

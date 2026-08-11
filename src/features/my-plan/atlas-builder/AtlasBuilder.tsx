@@ -5,14 +5,14 @@ import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import { discoverAtlasPlaces, geocodeAtlasArea, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
-import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlace, type AtlasPlaceSnapshot } from '@/services/atlas/atlasPlacesService';
+import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace, type AtlasPlaceSnapshot } from '@/services/atlas/atlasPlacesService';
 import { decodeAtlasPlaceMetadata, encodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
 import { createSearchSession, isAbortError, resolvePlace, suggestPlaces } from '@/services/place/placeSearchService';
 import type { SavedPlace } from '@/services/place/placeService';
 import type { AtlasPlace } from '@/types/place';
 import type { GeocodedLocation } from '@/types/route';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -66,6 +66,7 @@ type SearchResult =
 
 type FocusArea = {
   label: string;
+  scope: 'city' | 'region' | 'country';
   coordinate: [number, number];
   count: number;
   photoUrl?: string | null;
@@ -119,12 +120,21 @@ function boundsFromRadius([longitude, latitude]: [number, number], radiusKm: num
   };
 }
 
-function zoomForBounds(bounds: { ne: [number, number]; sw: [number, number] }) {
+function expandBounds(bounds: { ne: [number, number]; sw: [number, number] }, fraction = 0.1) {
+  const longitudeSpan = Math.max(0.05, Math.abs(bounds.ne[0] - bounds.sw[0]));
+  const latitudeSpan = Math.max(0.05, Math.abs(bounds.ne[1] - bounds.sw[1]));
+  return {
+    ne: [Math.min(180, bounds.ne[0] + longitudeSpan * fraction), Math.min(85, bounds.ne[1] + latitudeSpan * fraction)] as [number, number],
+    sw: [Math.max(-180, bounds.sw[0] - longitudeSpan * fraction), Math.max(-85, bounds.sw[1] - latitudeSpan * fraction)] as [number, number],
+  };
+}
+
+function zoomForBounds(bounds: { ne: [number, number]; sw: [number, number] }, minimumZoom = 1.9) {
   const longitudeSpan = Math.max(0.05, Math.abs(bounds.ne[0] - bounds.sw[0]));
   const latitudeSpan = Math.max(0.05, Math.abs(bounds.ne[1] - bounds.sw[1]));
   const widthZoom = Math.log2((360 * 390) / (512 * longitudeSpan));
   const heightZoom = Math.log2((170 * 360) / (512 * latitudeSpan));
-  return Math.max(1.9, Math.min(14, Math.min(widthZoom, heightZoom) - 0.25));
+  return Math.max(minimumZoom, Math.min(14, Math.min(widthZoom, heightZoom) - 0.25));
 }
 
 function acceptAiDescription(value?: string | null) {
@@ -140,7 +150,11 @@ const EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y = 80;
 const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const timeRank = (day: number, time: string) => day * 24 + Math.max(0, PLANNING_HOURS.indexOf(time) + 7);
 const timeOfDayRank = (time: string) => Math.max(0, PLANNING_HOURS.indexOf(time));
-const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+// Let the editor commit its initial UI and Mapbox markers before kicking off
+// location services or recommendation work on the native/JS bridge.
+const waitForFirstAtlasPaint = () => new Promise<void>((resolve) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+});
 
 function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
   const metadata = decodeAtlasPlaceMetadata(row?.note);
@@ -277,20 +291,23 @@ function deriveFocusAreas(places: SavedPlace[]): FocusArea[] {
     areas.set(key, [...(areas.get(key) ?? []), place]);
   });
   return [...areas.values()]
-    .map((group) => ({
-      label: group[0].city || group[0].region || group[0].country || '',
-      photoUrl: group.find((place) => Boolean(place.photo_url))?.photo_url,
-      places: group,
-      coordinate: [
+    .map((group) => {
+      const first = group[0];
+      const scope: FocusArea['scope'] = first.city?.trim() ? 'city' : first.region?.trim() ? 'region' : 'country';
+      const coordinate: [number, number] = [
         group.reduce((sum, place) => sum + place.longitude, 0) / group.length,
         group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
-      ] as [number, number],
-      count: group.length,
-      bounds: focusBoundsForSavedPlaces([
-        group.reduce((sum, place) => sum + place.longitude, 0) / group.length,
-        group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
-      ], group),
-    }))
+      ];
+      return {
+        label: first.city || first.region || first.country || '',
+        scope,
+        photoUrl: group.find((place) => Boolean(place.photo_url))?.photo_url,
+        places: group,
+        coordinate,
+        count: group.length,
+        bounds: focusBoundsForSavedPlaces(coordinate, group),
+      };
+    })
     .filter((area) => Boolean(area.label))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
@@ -324,7 +341,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [focused, setFocused] = useState<DraftPlace | null>(null);
   const [popupVisible, setPopupVisible] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>(initialCenter ?? CONTINENTAL_US_CENTER);
-  const [mapZoom, setMapZoom] = useState(initialBounds ? zoomForBounds(initialBounds) : CONTINENTAL_US_ZOOM);
+  const [mapZoom, setMapZoom] = useState(initialBounds ? zoomForBounds(initialBounds, 1.2) : CONTINENTAL_US_ZOOM);
   const [mapBounds, setMapBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>(initialBounds);
   const [route, setRoute] = useState<AtlasRouteResponse | null>(null);
   const [generatingRoute, setGeneratingRoute] = useState(false);
@@ -358,6 +375,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   // pins are allowed to trigger the local-must-sees note.
   const pinnedAiPlaceIdsRef = useRef(new Set((initialCandidates ?? []).filter((place) => place.source === 'recommended').map((place) => place.id)));
   const viewportCenterRef = useRef<[number, number]>(initialCenter ?? CONTINENTAL_US_CENTER);
+  const viewportZoomRef = useRef(initialBounds ? zoomForBounds(initialBounds, 1.2) : CONTINENTAL_US_ZOOM);
   const nearbyIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearbyAfterLocalNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearbyPromptDismissedRef = useRef(false);
@@ -369,6 +387,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [cameraKey, setCameraKey] = useState(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const initialPlaceSelected = useRef(false);
   const timeConflictTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Saving hands the shared map directly to the completed Atlas. Its unmount
+  // must not clear that handoff before the detail page has hydrated its rows.
+  const preserveMapOnUnmountRef = useRef(false);
 
   const showTimeConflict = useCallback((message: string) => {
     if (timeConflictTimer.current) clearTimeout(timeConflictTimer.current);
@@ -409,10 +430,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   useEffect(() => {
     if (!started) return;
-    if (initialCenter) setMapCenter(initialCenter);
+    if (initialCenter) {
+      viewportCenterRef.current = initialCenter;
+      setMapCenter(initialCenter);
+    }
     if (initialBounds) {
+      viewportZoomRef.current = zoomForBounds(initialBounds, 1.2);
       setMapBounds(initialBounds);
-      setMapZoom(zoomForBounds(initialBounds));
+      setMapZoom(zoomForBounds(initialBounds, 1.2));
     }
     // The map is shared between the Create screen and the editor. A fresh key
     // forces Mapbox to apply the incoming Focus-area camera rather than retain
@@ -682,38 +707,71 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [onBuildPlan]);
 
   const focusArea = useCallback(async (area: FocusArea) => {
-    const isBroadArea = !area.places.some((place) => Boolean(place.city?.trim()));
+    const isCountry = area.scope === 'country';
     const clusterLocations = clusterLocationNames(area.places);
-    const isMultiLocationCluster = clusterLocations.size > 1;
-    let focusCoordinate = area.coordinate;
-    if (!isBroadArea) {
-      try {
-        const areaQuery = [area.label, area.places[0]?.country].filter(Boolean).join(', ');
-        const resolvedArea = await geocodeAtlasArea(areaQuery);
-        if (resolvedArea) focusCoordinate = resolvedArea;
-        else {
-          const [deviceResolvedArea] = await Location.geocodeAsync(areaQuery);
-          if (deviceResolvedArea) focusCoordinate = [deviceResolvedArea.longitude, deviceResolvedArea.latitude];
-        }
-      } catch (error) {
-        console.warn('[AtlasBuilder] focus-area geocoding failed', error);
-      }
-    }
-    const localSaved = uniquePlaces([
-      ...area.places.filter((place) => isMultiLocationCluster || isBroadArea || isNearCoordinate(place, focusCoordinate)),
+    const isMultiLocationCluster = !isCountry && clusterLocations.size > 1;
+    // The saved-place cluster already gives us a valid first camera. Do not
+    // wait for remote geocoding before mounting Edit Atlas: that starved the
+    // typewriter and delayed both pins and their + popups on slow networks.
+    const initialCoordinate = area.coordinate;
+    const initialLocalSaved = uniquePlaces([
+      ...area.places.filter((place) => isCountry || isMultiLocationCluster || isNearCoordinate(place, initialCoordinate)),
       ...savedPlaces.filter((place) => (
-        isMultiLocationCluster
-          ? clusterLocations.has(normalize(place.city ?? place.region ?? place.country ?? ''))
-          : isBroadArea || isNearCoordinate(place, focusCoordinate)
+        isCountry
+          ? normalize(place.country ?? '') === normalize(area.label)
+          : isMultiLocationCluster
+            ? clusterLocations.has(normalize(place.city ?? place.region ?? place.country ?? ''))
+            : isNearCoordinate(place, initialCoordinate)
       )),
     ]);
-    const initial = localSaved.map((item) => toDraft(item));
-    const bounds = isMultiLocationCluster && localSaved.length > 1
-      ? focusBoundsForSavedPlaces(focusCoordinate, localSaved)
-      : boundsFromRadius(focusCoordinate, FOCUS_SAVED_PLACES_RADIUS_KM);
-    handoffToPlan(area.label, initial, focusCoordinate, bounds);
+    const initialBounds = isCountry
+      ? expandBounds(area.bounds)
+      : isMultiLocationCluster && initialLocalSaved.length > 1
+        ? focusBoundsForSavedPlaces(initialCoordinate, initialLocalSaved)
+        : boundsFromRadius(initialCoordinate, FOCUS_SAVED_PLACES_RADIUS_KM);
+    handoffToPlan(area.label, initialLocalSaved.map((item) => toDraft(item)), initialCoordinate, initialBounds);
+    setFocusLabel(area.label);
+
+    // Yield two frames so the initial editor, tutorial text, and first pin
+    // popup are visible before any asynchronous location work begins.
+    await waitForFirstAtlasPaint();
+
+    let focusCoordinate = initialCoordinate;
+    let countryBounds: FocusArea['bounds'] | undefined;
     try {
-      const recommendations = await discoverDeepSeekPlaces(area.label, 6, isBroadArea ? undefined : focusCoordinate);
+      const areaQuery = isCountry ? area.label : [area.label, area.places[0]?.country].filter(Boolean).join(', ');
+      const resolvedArea = await geocodeAtlasArea(areaQuery);
+      if (resolvedArea) {
+        focusCoordinate = resolvedArea.center;
+        if (isCountry) countryBounds = resolvedArea.bounds;
+      } else if (!isCountry) {
+        const [deviceResolvedArea] = await Location.geocodeAsync(areaQuery);
+        if (deviceResolvedArea) focusCoordinate = [deviceResolvedArea.longitude, deviceResolvedArea.latitude];
+      }
+    } catch (error) {
+      console.warn('[AtlasBuilder] focus-area geocoding failed', error);
+    }
+    const localSaved = uniquePlaces([
+      ...area.places.filter((place) => isCountry || isMultiLocationCluster || isNearCoordinate(place, focusCoordinate)),
+      ...savedPlaces.filter((place) => (
+        isCountry
+          ? normalize(place.country ?? '') === normalize(area.label)
+          : isMultiLocationCluster
+          ? clusterLocations.has(normalize(place.city ?? place.region ?? place.country ?? ''))
+          : isNearCoordinate(place, focusCoordinate)
+      )),
+    ]);
+    const bounds = isCountry
+      ? expandBounds(countryBounds ?? focusBoundsForSavedPlaces(focusCoordinate, localSaved))
+      : isMultiLocationCluster && localSaved.length > 1
+        ? focusBoundsForSavedPlaces(focusCoordinate, localSaved)
+        : boundsFromRadius(focusCoordinate, FOCUS_SAVED_PLACES_RADIUS_KM);
+    // Refine only the already-visible editor camera once geocoding returns.
+    setMapCenter(centerOfBounds(bounds));
+    setMapBounds(bounds);
+    setMapZoom(zoomForBounds(bounds, isCountry ? 1.2 : 1.9));
+    try {
+      const recommendations = await discoverDeepSeekPlaces(area.label, 6, isCountry ? undefined : focusCoordinate);
       setRecommendedPlaces(recommendations);
     } catch (error) {
       console.warn('[AtlasBuilder] plan discovery failed', error);
@@ -728,6 +786,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // improve the map after it opens, never block the transition.
     const initialCity = nearbySaved.find((place) => place.city)?.city ?? 'San Francisco';
     handoffToPlan(initialCity, nearbySaved, userLocation, localBounds);
+    await waitForFirstAtlasPaint();
 
     let city = initialCity;
     try {
@@ -806,10 +865,16 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         ? savedPlacesMatchingAdministrativeFocus(place, savedPlaces, result.featureType)
         : [];
       const placesInView = scopedSaved.length ? scopedSaved : nearbySaved;
-      const bounds = focusBoundsForSavedPlaces([place.longitude, place.latitude], placesInView);
+      const isCountrySearch = result.kind === 'remote' && result.featureType === 'country';
+      const resolvedCountry = isCountrySearch
+        ? await geocodeAtlasArea(place.country ?? place.name)
+        : null;
+      const bounds = isCountrySearch && resolvedCountry?.bounds
+        ? expandBounds(resolvedCountry.bounds)
+        : focusBoundsForSavedPlaces([place.longitude, place.latitude], placesInView);
       setMapCenter(centerOfBounds(bounds));
       setMapBounds(bounds);
-      setMapZoom(zoomForBounds(bounds));
+      setMapZoom(zoomForBounds(bounds, isCountrySearch ? 1.2 : 1.9));
       setFocused(null);
       setPopupVisible(false);
       setFocusLabel(place.city ?? place.region ?? place.name);
@@ -1069,22 +1134,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       showDialog({ title: 'Location verification in progress', message: 'Wait for AI map positions to be verified before saving this Atlas.', tone: 'warning' });
       return;
     }
-    const overviewBounds = boundsFromPolygon(items.map((item) => [item.longitude, item.latitude] as [number, number]), 0.08);
-    const overviewCenter: [number, number] = [
-      items.reduce((sum, item) => sum + item.longitude, 0) / items.length,
-      items.reduce((sum, item) => sum + item.latitude, 0) / items.length,
-    ];
-    const overviewZoom = zoomForBounds(overviewBounds);
-    // A new Atlas resolves into its complete overview as it saves. Existing
-    // Atlases deliberately retain the editor's exact current camera.
-    if (!atlasId) {
-      setMapBounds(undefined);
-      setMapCenter(overviewCenter);
-      setMapZoom(overviewZoom);
-    }
+    // Saving must never move the map. The completed Atlas receives this exact
+    // editor presentation and keeps it until its close button is used.
     const savedMapView = {
-      centerCoordinate: atlasId ? mapCenter : overviewCenter,
-      zoomLevel: atlasId ? mapZoom : overviewZoom,
+      centerCoordinate: viewportCenterRef.current,
+      zoomLevel: viewportZoomRef.current,
       markers: items.map((item, index) => ({
         id: item.id,
         title: item.name,
@@ -1098,23 +1152,24 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     };
     setSavingKind(askAI ? 'ai' : 'atlas');
     try {
-      // Keep the save indicator and white marker breath on screen long enough
-      // to be perceived before the editor hands its map state to the detail.
-      await wait(460);
       const title = atlasId ? (atlasTitle.trim() || existingAtlas?.title || buildAtlasTitle(items)) : buildAtlasTitle(items);
       const atlas = atlasId ? existingAtlas : await createAtlas(title);
       if (!atlas) throw new Error('Atlas could not be created');
+      // Hand the completed page its orange pins before cache/network writes.
+      // Persistence is local-first, so the map transition never waits for a
+      // round trip or for atlas_places subscribers to hydrate the detail.
+      preserveMapOnUnmountRef.current = true;
+      onSaved(atlas.id, askAI, savedMapView);
       const hasPendingRows = Boolean(atlasId) && items.some((item) => !item.joinId);
       if (atlasId && !hasPendingRows) {
-        await Promise.all(items.map((item, index) => updateAtlasPlace(item.joinId!, {
+        await updateAtlasPlaces(items.map((item, index) => ({ joinRowId: item.joinId!, patch: {
           ...atlasPlaceSnapshot(item),
           sort_order: index,
           note: encodeAtlasPlaceMetadata(item.note, item.transport),
           timeline_day: item.timeline_day ?? null,
           timeline_time: item.timeline_time ?? null,
-        })));
+        } })));
         await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
-        onSaved(atlas.id, askAI, savedMapView);
         return;
       }
       const existingRows = atlasPlaces.filter((row) => row.atlas_id === atlas.id);
@@ -1127,18 +1182,17 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         addAtlasOwnedPlaces(atlas.id, newOwned.map((item) => ({ ...item, external_place_id: item.id }))),
       ]);
       const joins = new Map([...existingRows, ...savedRows, ...ownedRows].map((row) => [row.place_id ?? row.external_place_id, row]));
-      await Promise.all(items.map((item, index) => {
+      await updateAtlasPlaces(items.flatMap((item, index) => {
         const join = item.joinId ? { id: item.joinId } : joins.get(item.id);
-        return join ? updateAtlasPlace(join.id, {
+        return join ? [{ joinRowId: join.id, patch: {
           ...atlasPlaceSnapshot(item),
           sort_order: index,
           note: encodeAtlasPlaceMetadata(item.note, item.transport),
           timeline_day: item.timeline_day ?? null,
           timeline_time: item.timeline_time ?? null,
-        }) : Promise.resolve();
+        } }] : [];
       }));
       await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
-      onSaved(atlas.id, askAI, savedMapView);
     } catch (error) {
       console.warn('[AtlasBuilder] saving failed', error);
       showDialog({ title: 'Atlas was not saved', message: 'Please check your connection and try again.', tone: 'warning' });
@@ -1155,11 +1209,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       longitude: place.longitude,
       title: place.name,
       description: place.subtitle,
-      tone: 'saved' as const,
+      tone: focused?.id === place.id ? 'focused' as const : 'saved' as const,
     }));
     const recommended = recommendedPlaces
       .filter((place) => !savedPlaces.some((savedPlace) => savedPlace.id === place.id) && !selected.has(place.id))
-      .map((place) => ({ id: place.id, latitude: place.latitude, longitude: place.longitude, title: place.name, description: place.subtitle, labelHint: place.aiDescription ?? undefined, ai: true, tone: 'recommended' as const }));
+      .map((place) => ({ id: place.id, latitude: place.latitude, longitude: place.longitude, title: place.name, description: place.subtitle, labelHint: place.aiDescription ?? undefined, ai: true, tone: focused?.id === place.id ? 'focused' as const : 'recommended' as const }));
     const atlasItems = [...items, ...(removingPlace && !items.some((item) => item.id === removingPlace.id) ? [removingPlace] : [])]
       .map((item, index) => ({
         id: item.id,
@@ -1175,7 +1229,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     const focusedSearch = focused && !selected.has(focused.id)
       && !savedPlaces.some((place) => place.id === focused.id)
       && !recommendedPlaces.some((place) => place.id === focused.id)
-      ? [{ id: focused.id, latitude: focused.latitude, longitude: focused.longitude, title: focused.name, description: focused.subtitle, labelHint: focused.aiDescription ?? undefined, ai: focused.source === 'recommended', tone: focused.source === 'recommended' ? 'recommended' as const : 'atlas' as const }]
+      ? [{ id: focused.id, latitude: focused.latitude, longitude: focused.longitude, title: focused.name, description: focused.subtitle, labelHint: focused.aiDescription ?? undefined, ai: focused.source === 'recommended', tone: 'focused' as const }]
       : [];
     const byId = new Map<string, MapMarker>();
     saved.forEach((marker) => byId.set(marker.id, marker));
@@ -1211,16 +1265,17 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     {!savingKind && popupVisible && focused ? <View pointerEvents="box-none" style={[styles.mapCandidateLayer, { bottom: popupBottom }]}><Animated.View style={{ opacity: popupOpacity, transform: [{ scale: popupScale }] }}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View></View> : null}
   </>, [addPlace, atlasId, focused, items, mapSearchOverlay, popupBottom, popupOpacity, popupScale, popupVisible, recommendedPlaces.length, savingKind, started]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setAtlasMapState({
       markers: mapMarkers,
       cameraVerticalOffset: 0,
       cameraScreenOffsetY: atlasId ? EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y : 0,
       centerCoordinate: mapCenter,
       zoomLevel: mapZoom,
-      // Polygon bounds are used to derive mapZoom above. Passing bounds to
-      // Mapbox as well creates a competing camera update on some devices.
-      bounds: undefined,
+      // Edit mode starts with this Atlas's durable orange-pin bounds. Create
+      // mode deliberately keeps its continental overview until a focus area
+      // is chosen.
+      bounds: atlasId ? mapBounds : undefined,
       cameraKey,
       cameraAnimationDurationMs: atlasId ? 0 : undefined,
       selectedMarkerId: focused?.id ?? null,
@@ -1237,7 +1292,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         }
       },
       onMapPress: hideTransientUI,
-      onViewportChanged: scheduleNearbyPrompt,
+      onViewportChanged: (center, zoom) => {
+        viewportCenterRef.current = center;
+        viewportZoomRef.current = zoom;
+        scheduleNearbyPrompt(center);
+      },
       overlay: atlasMapOverlay,
       onPanelHeightChange: handlePanelHeightChange,
       hideTopSearchButton: true,
@@ -1245,7 +1304,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     });
   }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
 
-  useEffect(() => () => setAtlasMapState(null), [setAtlasMapState]);
+  useEffect(() => () => {
+    if (!preserveMapOnUnmountRef.current) setAtlasMapState(null);
+  }, [setAtlasMapState]);
 
   const timeTags = useMemo(() => items.filter((item) => item.timeline_day && item.timeline_time)
     .map((item) => ({ id: item.id, label: `Day ${item.timeline_day} · ${item.timeline_time}`, item })), [items]);

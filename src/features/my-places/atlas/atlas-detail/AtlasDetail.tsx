@@ -2,9 +2,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import ContentPanel, { SNAP_HEIGHTS } from '@/components/content-panel/ContentPanel';
-import { useHome } from '@/features/home/HomeContext';
+import { useHome, type AtlasMapState } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
-import AtlasBuilder from '@/features/my-plan/atlas-builder/AtlasBuilder';
+import { atlasCameraFromStops } from '@/features/map/atlasCamera';
+import AtlasBuilder, { type DraftPlace } from '@/features/my-plan/atlas-builder/AtlasBuilder';
 import { requestAtlasRoute, requestMapboxDirections, requestMapboxOptimization } from '@/services/api/apiService';
 import { decodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
 import { updateAtlas } from '@/services/atlas/atlasService';
@@ -28,14 +29,14 @@ type AtlasDisplayPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude
 type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null; transport: AtlasTransportMode | null };
 type FocusBounds = { ne: [number, number]; sw: [number, number] };
 type RouteFeature = GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
-type RouteCamera = Pick<NonNullable<ReturnType<typeof getMapPresentation>>, 'centerCoordinate' | 'zoomLevel' | 'bounds'> & { cameraAnimationDurationMs: number; cameraKey: string };
-type EditorSavedMapPresentation = {
-  centerCoordinate: [number, number];
-  zoomLevel: number;
+type MapPresentation = {
   markers: MapMarker[];
+  centerCoordinate?: [number, number];
+  zoomLevel: number;
+  bounds?: FocusBounds;
   routeGeoJSON?: RouteFeature;
 };
-
+type RouteCamera = { centerCoordinate: [number, number]; zoomLevel: number; bounds: FocusBounds; cameraAnimationDurationMs: number; cameraKey: string };
 const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   walk: { label: 'Walk', icon: 'walk-outline' },
   bike: { label: 'Bike', icon: 'bicycle-outline' },
@@ -48,37 +49,40 @@ const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: 
   ferry: { label: 'Ferry', icon: 'boat-outline' },
   flight: { label: 'Flight', icon: 'airplane-outline' },
 };
-const ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET = -80;
+// Keep the orange-pin overview above the completed Atlas sheet and its route
+// control, so the lowest stop remains fully tappable and visible.
+const ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET = 28;
+// Let the My Places surface take over before replacing the Atlas-owned map
+// markers with the full saved-places set. Updating both at once can make the
+// native Mapbox marker reconciliation block the close tap for several seconds.
+const ATLAS_MAP_RELEASE_DELAY_MS = 320;
 
-function boundsFromFocusPolygon(items: ItineraryItem[]): FocusBounds | undefined {
-  if (!items.length) return undefined;
-  const longitudes = items.map((item) => item.place.longitude);
-  const latitudes = items.map((item) => item.place.latitude);
-  const minimumLongitude = Math.min(...longitudes);
-  const maximumLongitude = Math.max(...longitudes);
-  const minimumLatitude = Math.min(...latitudes);
-  const maximumLatitude = Math.max(...latitudes);
-  const longitudePadding = Math.max(0.025, (maximumLongitude - minimumLongitude) * 0.16);
-  const latitudePadding = Math.max(0.02, (maximumLatitude - minimumLatitude) * 0.16);
+function getMapPresentation(items: ItineraryItem[], route: Atlas['route_geojson']): MapPresentation {
+  if (!items.length) return { markers: [], centerCoordinate: undefined, zoomLevel: 6 };
+  const camera = atlasCameraFromStops(items.map((item) => ({
+    id: item.place.id,
+    title: item.place.name,
+    description: item.place.subtitle,
+    latitude: item.place.latitude,
+    longitude: item.place.longitude,
+  })));
+  if (!camera) return { markers: [], centerCoordinate: undefined, zoomLevel: 6 };
   return {
-    ne: [maximumLongitude + longitudePadding, maximumLatitude + latitudePadding],
-    sw: [minimumLongitude - longitudePadding, minimumLatitude - latitudePadding],
+    ...camera,
+    zoomLevel: 10,
+    routeGeoJSON: route ?? undefined,
   };
 }
 
-function getMapPresentation(items: ItineraryItem[], route: Atlas['route_geojson']) {
-  if (!items.length) return { markers: [] as MapMarker[], centerCoordinate: undefined, zoomLevel: 6 };
-  const bounds = boundsFromFocusPolygon(items);
-  return {
-    markers: items.map((item, index) => ({ id: item.place.id, title: item.place.name, description: item.place.subtitle, latitude: item.place.latitude, longitude: item.place.longitude, tone: 'atlas' as const, order: index + 1 })),
-    centerCoordinate: [
-      items.reduce((sum, item) => sum + item.place.longitude, 0) / items.length,
-      items.reduce((sum, item) => sum + item.place.latitude, 0) / items.length,
-    ] as [number, number],
-    zoomLevel: 10,
-    bounds,
-    routeGeoJSON: route ?? undefined,
-  };
+function sameAtlasStops(left: MapMarker[], right: MapMarker[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((marker, index) => {
+    const other = right[index];
+    return other?.id === marker.id
+      && other.order === marker.order
+      && other.longitude === marker.longitude
+      && other.latitude === marker.latitude;
+  });
 }
 
 function delay(ms: number) {
@@ -156,7 +160,7 @@ function routeDistanceLabelsForItems(route: RouteFeature, items: ItineraryItem[]
 }
 
 export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightChange }: AtlasDetailProps) {
-  const { atlases, savedPlaces, atlasPlaces, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId } = useHome();
+  const { atlases, savedPlaces, atlasPlaces, atlasMapState, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId } = useHome();
   const [editing, setEditing] = useState(false);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [routeFeature, setRouteFeature] = useState<RouteFeature | null>(null);
@@ -169,7 +173,6 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   const [optimizationReview, setOptimizationReview] = useState(false);
   const [optimizationDismissed, setOptimizationDismissed] = useState(false);
   const [appliedOptimizedItems, setAppliedOptimizedItems] = useState<ItineraryItem[] | null>(null);
-  const [editorSavedMapPresentation, setEditorSavedMapPresentation] = useState<EditorSavedMapPresentation | null>(null);
   const [capturingShare, setCapturingShare] = useState(false);
   const [shareImageUri, setShareImageUri] = useState<string | null>(null);
   const shareCanvasRef = useRef<View>(null);
@@ -179,6 +182,8 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   const optimizationPromptOpacity = useRef(new Animated.Value(0)).current;
   const routePlaybackRef = useRef(0);
   const hydratedRouteAtlasRef = useRef<string | null>(null);
+  const pendingMapReleaseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestAtlasMapStateRef = useRef<AtlasMapState>(null);
   const detailCameraKey = useRef(`atlas-detail-${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
   const atlas = useMemo(() => atlases.find((item) => item.id === atlasId) ?? null, [atlasId, atlases]);
   const items = useMemo<ItineraryItem[]>(() => {
@@ -202,7 +207,45 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   }, [atlasId, atlasPlaces, savedPlaces]);
 
   const presentation = useMemo(() => getMapPresentation(items, null), [items]);
-  const activePresentation = editorSavedMapPresentation ?? presentation;
+  const editorInitialItems = useMemo<DraftPlace[]>(() => items.map((item) => ({
+    id: item.place.id,
+    name: item.place.name,
+    subtitle: item.place.subtitle,
+    latitude: item.place.latitude,
+    longitude: item.place.longitude,
+    photo_url: item.place.photo_url,
+    city: null,
+    region: null,
+    country: null,
+    category: null,
+    source: 'saved',
+    note: item.note,
+    timeline_day: item.day,
+    timeline_time: item.time,
+    transport: item.transport,
+    joinId: item.rowId,
+  })), [items]);
+  // A just-saved Atlas has an exact orange-pin map handoff before its local
+  // atlas_places rows finish hydrating. Treat that handoff as the completed
+  // page's presentation, not merely as a state to avoid clearing, so there is
+  // never an intermediate GPS or continental-US camera update.
+  const pendingSavedMapHandoff = atlasMapState?.cameraKey?.startsWith(`atlas-save-${atlasId}-`)
+    && atlasMapState.bounds
+    && !sameAtlasStops(
+      atlasMapState.markers.filter((marker) => marker.tone === 'atlas'),
+      presentation.markers,
+    )
+    ? atlasMapState
+    : null;
+  const activePresentation = pendingSavedMapHandoff
+    ? {
+      markers: pendingSavedMapHandoff.markers,
+      centerCoordinate: pendingSavedMapHandoff.centerCoordinate,
+      zoomLevel: pendingSavedMapHandoff.zoomLevel ?? presentation.zoomLevel,
+      bounds: pendingSavedMapHandoff.bounds,
+      routeGeoJSON: undefined,
+    }
+    : presentation;
   const optimizedItems = useMemo(() => optimizationOrder ? optimizationOrder.map((index) => items[index]).filter((item): item is ItineraryItem => Boolean(item)) : [], [items, optimizationOrder]);
   const listItems = optimizationReview ? optimizedItems : (appliedOptimizedItems ?? items);
 
@@ -215,9 +258,11 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     if (!atlas || hydratedRouteAtlasRef.current === atlas.id) return;
     hydratedRouteAtlasRef.current = atlas.id;
     routePlaybackRef.current += 1;
-    const persistedRoute = atlas?.route_visible ? atlas.route_geojson ?? null : null;
+    // A completed Atlas always opens as its orange-pin overview. Keep a
+    // persisted route ready for Show route, but never draw it by default.
+    const persistedRoute = atlas?.route_geojson ?? null;
     setRouteFeature(persistedRoute);
-    setDisplayedRoute(persistedRoute);
+    setDisplayedRoute(null);
     setRouteCamera(null);
     setAppliedOptimizedItems(null);
     setOptimizationOrder(null);
@@ -225,10 +270,6 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     setOptimizationReview(false);
     setOptimizationDismissed(false);
   }, [atlas, atlasId]);
-
-  useEffect(() => {
-    setEditorSavedMapPresentation(null);
-  }, [atlasId]);
 
   const openNextStopDirections = (from: ItineraryItem, to: ItineraryItem) => {
     const origin = `${from.place.latitude},${from.place.longitude}`;
@@ -240,28 +281,98 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
 
   const dismissAtlas = useCallback(() => {
     setRouteCamera(null);
-    setEditorSavedMapPresentation(null);
     setHomeSelectedPlaceId(null);
     setHomeSelectedPlaceCoordinate(null);
+
+    // Hide Atlas-owned map controls synchronously. The marker set itself stays
+    // briefly so its expensive native replacement cannot delay this close tap.
+    if (latestAtlasMapStateRef.current) {
+      const mapWithoutControls = {
+        ...latestAtlasMapStateRef.current,
+        overlay: null,
+        routeGeoJSON: undefined,
+        routeDistanceLabels: [],
+        selectedMarkerId: null,
+      };
+      latestAtlasMapStateRef.current = mapWithoutControls;
+      setAtlasMapState(mapWithoutControls);
+    }
     onDismiss();
-  }, [onDismiss, setHomeSelectedPlaceCoordinate, setHomeSelectedPlaceId]);
+
+    // The completed page is gone immediately. Defer only the expensive shared
+    // map ownership switch until its UI handoff has settled.
+    if (pendingMapReleaseRef.current) clearTimeout(pendingMapReleaseRef.current);
+    pendingMapReleaseRef.current = setTimeout(() => {
+      pendingMapReleaseRef.current = null;
+      latestAtlasMapStateRef.current = null;
+      setAtlasMapState(null);
+    }, ATLAS_MAP_RELEASE_DELAY_MS);
+  }, [onDismiss, setAtlasMapState, setHomeSelectedPlaceCoordinate, setHomeSelectedPlaceId]);
 
   const handleRoutePanelHeight = useCallback((height: number) => {
     routeControlBottom.setValue(height);
   }, [routeControlBottom]);
+
+  // Routes can take detours along roads, but they never define the Atlas
+  // overview. Every route state re-fits the polygon bounds of its orange pins.
+  const atlasOverviewCamera = useCallback((cameraKey: string, cameraAnimationDurationMs: number): RouteCamera | null => (
+    presentation.bounds && presentation.centerCoordinate
+      ? {
+        centerCoordinate: presentation.centerCoordinate,
+        zoomLevel: presentation.zoomLevel,
+        bounds: presentation.bounds,
+        cameraAnimationDurationMs,
+        cameraKey,
+      }
+      : null
+  ), [presentation.bounds, presentation.centerCoordinate, presentation.zoomLevel]);
+
+  const handleEditorSaved = useCallback((mapView?: { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature }) => {
+    if (!mapView) {
+      setEditing(false);
+      return;
+    }
+    // Edit saves use the same synchronous handoff as a newly created Atlas.
+    // The detail panel can then mount with the final orange bounds even while
+    // the atlas_places listener is still delivering the updated rows.
+    const camera = atlasCameraFromStops(mapView.markers.map((marker) => ({
+      id: marker.id,
+      title: marker.title,
+      description: marker.description,
+      latitude: marker.latitude,
+      longitude: marker.longitude,
+    })));
+    if (camera) {
+      const nextState: AtlasMapState = {
+        ...camera,
+        zoomLevel: mapView.zoomLevel,
+        cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
+        cameraKey: `atlas-save-${atlas?.id ?? atlasId}-${Date.now()}`,
+        cameraAnimationDurationMs: 0,
+        routeGeoJSON: mapView.routeGeoJSON,
+      };
+      latestAtlasMapStateRef.current = nextState;
+      setAtlasMapState(nextState);
+    }
+    if (mapView.routeGeoJSON) {
+      setRouteFeature(mapView.routeGeoJSON);
+    }
+    setDisplayedRoute(null);
+    setRouteCamera(null);
+    setEditing(false);
+  }, [atlas?.id, atlasId, setAtlasMapState]);
 
   const toggleRoute = useCallback(async () => {
     if (!atlas || routeBusy || items.length < 2) return;
     if (displayedRoute) {
       routePlaybackRef.current += 1;
       setDisplayedRoute(null);
-      setRouteCamera(presentation.bounds && presentation.centerCoordinate ? {
-        centerCoordinate: presentation.centerCoordinate,
-        zoomLevel: presentation.zoomLevel,
-        bounds: presentation.bounds,
-        cameraAnimationDurationMs: 500,
-        cameraKey: `${detailCameraKey}-${atlas.id}-hidden-${Date.now()}`,
-      } : null);
+      setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-hidden-${Date.now()}`, 500));
+      return;
+    }
+    if (routeFeature) {
+      setDisplayedRoute(routeFeature);
+      setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-stored-route-${Date.now()}`, 500));
       return;
     }
     setRouteBusy(true);
@@ -276,7 +387,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       });
       setRouteFeature(nextRoute.route);
       setDisplayedRoute(nextRoute.route);
-      setRouteCamera({ centerCoordinate: presentation.centerCoordinate, zoomLevel: presentation.zoomLevel, bounds: presentation.bounds, cameraAnimationDurationMs: 500, cameraKey: `${detailCameraKey}-${atlas.id}-route-${Date.now()}` });
+      setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-route-${Date.now()}`, 500));
       void updateAtlas(atlas.id, { route_geojson: nextRoute.route, route_visible: true }).catch((error) => console.warn('[AtlasDetail] could not save route:', error));
     } catch (error) {
       console.warn('[AtlasDetail] could not create route:', error);
@@ -288,14 +399,14 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       if (changed) { setOptimizationOrder(result.order); setOptimizedRoute(result.route.route); }
       setOptimizingRoute(false);
     }).catch(() => setOptimizingRoute(false));
-  }, [atlas, detailCameraKey, displayedRoute, items, presentation.bounds, presentation.centerCoordinate, presentation.zoomLevel, routeBusy]);
+  }, [atlas, atlasOverviewCamera, detailCameraKey, displayedRoute, items, routeBusy, routeFeature]);
 
   const openOptimizationReview = useCallback(() => {
     if (!optimizedRoute || optimizedItems.length !== items.length) return;
     setOptimizationReview(true);
     setDisplayedRoute(optimizedRoute);
-    setRouteCamera({ centerCoordinate: presentation.centerCoordinate, zoomLevel: presentation.zoomLevel, bounds: presentation.bounds, cameraAnimationDurationMs: 550, cameraKey: `${detailCameraKey}-${atlas?.id ?? 'atlas'}-optimized-review` });
-  }, [detailCameraKey, items.length, optimizedItems.length, optimizedRoute, presentation.bounds, presentation.centerCoordinate, presentation.zoomLevel]);
+    setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas?.id ?? 'atlas'}-optimized-review`, 550));
+  }, [atlas?.id, atlasOverviewCamera, detailCameraKey, items.length, optimizedItems.length, optimizedRoute]);
 
   const saveOptimizedRoute = useCallback(async () => {
     if (!atlas || !optimizedRoute || optimizedItems.length !== items.length) return;
@@ -352,10 +463,15 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
 
   useLayoutEffect(() => {
     if (!atlas || editing) return;
+    // Save can open this page before its local atlas_places subscription has
+    // delivered every newly-written row. Keep the complete synchronous
+    // orange-pin handoff until the durable Atlas rows have caught up, rather
+    // than replacing it with an incomplete or GPS-fallback map.
+    if (pendingSavedMapHandoff) return;
     const scopedRouteCamera = routeCamera?.cameraKey.includes(`-${atlas.id}-`) ? routeCamera : null;
-    const renderedRoute = displayedRoute ?? editorSavedMapPresentation?.routeGeoJSON;
+    const renderedRoute = displayedRoute;
     const overviewCameraKey = `${detailCameraKey}-${atlas.id}-${activePresentation.markers.map((marker) => `${marker.longitude.toFixed(4)},${marker.latitude.toFixed(4)}`).join('|')}`;
-    setAtlasMapState({
+    const nextMapState: AtlasMapState = {
       ...activePresentation,
       cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
       ...scopedRouteCamera,
@@ -370,22 +486,32 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       onMapPress: () => setSelectedPlaceId(null),
       onPanelHeightChange: handleRoutePanelHeight,
       overlay: !capturingShare ? <AtlasRouteControl bottom={routeControlBottom} visible={Boolean(renderedRoute)} busy={routeBusy} disabled={activePresentation.markers.length < 2} onPress={toggleRoute} /> : null,
-    });
-    return () => setAtlasMapState(null);
-  }, [activePresentation, atlas, capturingShare, detailCameraKey, displayedRoute, editing, editorSavedMapPresentation?.routeGeoJSON, handleRoutePanelHeight, listItems, routeBusy, routeCamera, routeControlBottom, selectedPlaceId, setAtlasMapState, toggleRoute]);
+    };
+    latestAtlasMapStateRef.current = nextMapState;
+    setAtlasMapState(nextMapState);
+  }, [activePresentation, atlas, capturingShare, detailCameraKey, displayedRoute, editing, handleRoutePanelHeight, items.length, listItems, pendingSavedMapHandoff, routeBusy, routeCamera, routeControlBottom, selectedPlaceId, setAtlasMapState, toggleRoute]);
 
   useEffect(() => {
     if (!atlasId) setEditing(false);
   }, [atlasId]);
 
+  useEffect(() => {
+    // A newly opened Atlas owns the map synchronously. Never allow a delayed
+    // release from the previously closed page to clear that new state.
+    if (!atlasId || !pendingMapReleaseRef.current) return;
+    clearTimeout(pendingMapReleaseRef.current);
+    pendingMapReleaseRef.current = null;
+  }, [atlasId]);
+
   useEffect(() => () => {
     routePlaybackRef.current += 1;
+    if (pendingMapReleaseRef.current) clearTimeout(pendingMapReleaseRef.current);
   }, []);
 
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
-    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => { if (mapView) { setEditorSavedMapPresentation(mapView); if (mapView.routeGeoJSON) { setRouteFeature(mapView.routeGeoJSON); setDisplayedRoute(mapView.routeGeoJSON); } setRouteCamera({ centerCoordinate: mapView.centerCoordinate, zoomLevel: mapView.zoomLevel, bounds: undefined, cameraAnimationDurationMs: 0, cameraKey: `${detailCameraKey}-${atlas.id}-saved-${Date.now()}` }); } setEditing(false); }} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => handleEditorSaved(mapView as { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature } | undefined)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
       <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
@@ -438,7 +564,7 @@ function ItineraryMetadata({ item, connector = false, onShare }: { item: Itinera
   }
   return <View style={[styles.itineraryMetaRow, connector && styles.connectorMetaRow]}>
     {item.time ? <View style={styles.dayMarker}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>{item.day ? `Day ${item.day} · ${item.time}` : item.time}</Text></View> : null}
-    {transport ? <View style={styles.transportMarker}><Ionicons name={transport.icon} size={13} color="#64748B" /><Text style={styles.transportText}>{transport.label}</Text></View> : null}
+    {transport ? <View accessibilityLabel={transport.label} style={styles.transportMarker}><Ionicons name={transport.icon} size={13} color="#64748B" /></View> : null}
   </View>;
 }
 
@@ -498,5 +624,5 @@ const styles = StyleSheet.create({
   atlasBeginsText: { color: '#242428', fontSize: 12, fontWeight: '600' },
   atlasBeginsShare: { minHeight: 26, paddingHorizontal: 8, borderRadius: 12, backgroundColor: '#FFF8F3', borderWidth: StyleSheet.hairlineWidth, borderColor: '#F0CDB9', flexDirection: 'row', alignItems: 'center', gap: 4 },
   atlasBeginsShareText: { color: '#B9683C', fontSize: 10, fontWeight: '800' },
-  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, itineraryItem: { position: 'relative' }, itineraryMetaRow: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, marginBottom: 4 }, connectorMetaRow: { width: '42%', minHeight: 48, flexWrap: 'wrap', alignContent: 'center', marginTop: 0, marginBottom: 0, paddingVertical: 7 }, metadataConnector: { position: 'relative', minHeight: 48 }, connectorLine: { position: 'absolute', top: 0, bottom: 0, left: '50%', width: StyleSheet.hairlineWidth, marginLeft: -StyleSheet.hairlineWidth / 2, backgroundColor: '#DDE2E7' }, navigationGap: { position: 'relative', height: 7 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, transportMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F1F4F5', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, transportText: { color: '#53616B', fontSize: 11, fontWeight: '700' }, connectorNavigation: { position: 'absolute', top: '50%', left: 0, right: 0, height: 18, marginTop: -9 }, navigationButton: { position: 'absolute', left: '50%', top: -8, marginLeft: -14, width: 28, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D4D9E0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 5 }, connectorNavigationButton: { top: 0 }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FCFCFD', borderWidth: 1, borderColor: '#E6E8EB' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
+  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#18181B' }, meta: { color: '#7B7B82', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFF0E6', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#202024', fontSize: 17, fontWeight: '700' }, compactClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F2F4', alignItems: 'center', justifyContent: 'center' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#808087', fontSize: 15 }, itineraryItem: { position: 'relative' }, itineraryMetaRow: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 9, marginTop: 8, marginBottom: 4 }, connectorMetaRow: { width: '42%', minHeight: 48, flexWrap: 'wrap', alignContent: 'center', marginTop: 0, marginBottom: 0, paddingVertical: 7 }, metadataConnector: { position: 'relative', minHeight: 48 }, connectorLine: { position: 'absolute', top: 0, bottom: 0, left: '50%', width: StyleSheet.hairlineWidth, marginLeft: -StyleSheet.hairlineWidth / 2, backgroundColor: '#DDE2E7' }, navigationGap: { position: 'relative', height: 7 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, transportMarker: { alignSelf: 'flex-start', width: 24, height: 24, backgroundColor: '#F1F4F5', borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, connectorNavigation: { position: 'absolute', top: '50%', left: 0, right: 0, height: 18, marginTop: -9 }, navigationButton: { position: 'absolute', left: '50%', top: -8, marginLeft: -14, width: 28, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D4D9E0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 5 }, connectorNavigationButton: { top: 0 }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FCFCFD', borderWidth: 1, borderColor: '#E6E8EB' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#E77B32', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#202024', fontSize: 14, fontWeight: '700' }, address: { color: '#85858C', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
 });

@@ -194,7 +194,12 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
-    mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + atlasCameraVerticalOffset) : 0);
+    // Bounds-owned Atlas cameras must only be moved by fitBounds. A native
+    // padding-only setCamera call after fitBounds can replace its calculated
+    // zoom with the Camera's previous state.
+    if (!atlasMapState?.bounds) {
+      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + atlasCameraVerticalOffset) : 0);
+    }
     atlasMapState?.onPanelHeightChange?.(height);
   }, [atlasCameraVerticalOffset, atlasMapState, bottomPanelActive]);
 
@@ -410,7 +415,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
 
       <AtlasDetail
         atlasId={overlay.kind === 'atlasDetail' ? overlay.atlasId : null}
-        onDismiss={() => setOverlay({ kind: 'none' })}
+        onDismiss={() => {
+          setOverlay({ kind: 'none' });
+          animateToTab(TAB_PLACES);
+        }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
       />
