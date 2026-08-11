@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from backend.langgraph.chat_agent import run_chat, stream_chat
+from backend.langchain.runtime import _base_url_for_provider
+from backend.langchain.runtime import get_chat_model
 from backend.services.conversation_manager import conversation_manager
 
 
@@ -46,7 +48,7 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_one_plain_model_call_without_memory_or_tools(self):
         model = _FakeChatModel()
-        with patch.dict(os.environ, {"OPENAI_MODEL": "atlas-chat-test"}), \
+        with patch.dict(os.environ, {"OPENAI_MODEL_MANGO": "atlas-chat-test"}), \
              patch("backend.langgraph.chat_agent.get_chat_model", return_value=model) as get_model, \
              patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
             result = await run_chat("baseline-test-session", "Which place is attached to this chat?")
@@ -64,6 +66,21 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["pending_action"])
         get_model.assert_called_once_with("openai_mango", "atlas-chat-test", temperature=0.3)
         save.assert_awaited_once()
+
+    async def test_mango_chat_uses_its_own_openai_base_url(self):
+        with patch.dict(os.environ, {
+            "OPENAI_BASE_URL": "https://yunwu.ai/v1",
+            "OPENAI_BASE_URL_MANGO": "https://api.openai.com/v1",
+        }):
+            self.assertEqual(_base_url_for_provider("openai_mango"), "https://api.openai.com/v1")
+
+    async def test_mango_chat_enables_responses_web_search(self):
+        with patch("langchain_openai.ChatOpenAI") as chat_openai:
+            get_chat_model("openai_mango", "gpt-5.6-luna")
+
+        kwargs = chat_openai.call_args.kwargs
+        self.assertTrue(kwargs["use_responses_api"])
+        self.assertEqual(kwargs["model_kwargs"], {"tools": [{"type": "web_search"}]})
 
     async def test_chat_does_not_run_memory_maintenance(self):
         model = _FakeChatModel()

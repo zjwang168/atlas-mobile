@@ -21,6 +21,7 @@ import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated as NativeAnimated,
   FlatList,
   Image,
   Keyboard,
@@ -34,7 +35,6 @@ import {
 import Markdown from 'react-native-markdown-display';
 import Animated, {
   LinearTransition,
-  FadeIn,
   SlideInDown,
   useReducedMotion,
 } from 'react-native-reanimated';
@@ -88,20 +88,74 @@ function stripActionMarkers(text: string): string {
     .trim();
 }
 
-function StreamingAssistantText({ text, reducedMotion }: { text: string; reducedMotion: boolean }) {
-  const displayTokens = text.match(/\S+\s*|\s+/g) ?? [];
+function FadingStreamToken({ token, reducedMotion }: { token: string; reducedMotion: boolean }) {
+  const progress = useRef(new NativeAnimated.Value(reducedMotion ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    progress.setValue(0);
+    const animation = NativeAnimated.timing(progress, {
+      toValue: 1,
+      duration: 360,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [progress, reducedMotion]);
 
   return (
-    <Text style={styles.streamingResponseText}>
+    <NativeAnimated.Text style={[styles.streamingToken, { opacity: progress }]}>
+      {token}
+    </NativeAnimated.Text>
+  );
+}
+
+function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const breathingOpacity = useRef(new NativeAnimated.Value(1)).current;
+
+  useEffect(() => {
+    const timer = setInterval(() => setElapsedSeconds((seconds) => seconds + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    const breathing = NativeAnimated.loop(
+      NativeAnimated.sequence([
+        NativeAnimated.timing(breathingOpacity, { toValue: 0.45, duration: 760, useNativeDriver: true }),
+        NativeAnimated.timing(breathingOpacity, { toValue: 1, duration: 760, useNativeDriver: true }),
+      ]),
+    );
+    breathing.start();
+    return () => breathing.stop();
+  }, [breathingOpacity, reducedMotion]);
+
+  return (
+    <View style={styles.thinkingRow}>
+      <NativeAnimated.Text style={[styles.assistantLabel, { opacity: breathingOpacity }]}>Atlas AI</NativeAnimated.Text>
+      <Text style={styles.thinkingText}>thinking {elapsedSeconds}s</Text>
+    </View>
+  );
+}
+
+function StreamingAssistantText({ text, reducedMotion }: { text: string; reducedMotion: boolean }) {
+  const displayTokens = Array.from(text);
+
+  return (
+    <View style={styles.streamingResponseText}>
       {displayTokens.map((token, index) => (
-        <Animated.Text
-          key={`${index}:${token}`}
-          entering={reducedMotion ? undefined : FadeIn.duration(180)}
-        >
-          {token}
-        </Animated.Text>
+        token === '\n' ? (
+          <View key={`${index}:line-break`} style={styles.streamingLineBreak} />
+        ) : (
+          <FadingStreamToken
+            key={`${index}:${token}`}
+            token={token}
+            reducedMotion={reducedMotion}
+          />
+        )
       ))}
-    </Text>
+    </View>
   );
 }
 
@@ -230,6 +284,15 @@ export default function AIChatBox({
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamCompletionRef = useRef<(() => void) | null>(null);
   const streamedTextRef = useRef(false);
+  const scrollFrameRef = useRef<number | null>(null);
+
+  const scrollToLatest = () => {
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      flatListRef.current?.scrollToEnd({ animated: false });
+    });
+  };
 
   const finishDisplayedStream = () => {
     const messageId = streamingMessageIdRef.current;
@@ -245,11 +308,12 @@ export default function AIChatBox({
 
   const flushStreamQueue = () => {
     const messageId = streamingMessageIdRef.current;
-    const nextToken = streamQueueRef.current.shift();
-    if (messageId && nextToken) {
+    const nextTokens = streamQueueRef.current.splice(0, reducedMotion ? streamQueueRef.current.length : 8).join('');
+    if (messageId && nextTokens) {
       setMessages((current) => current.map((message) => (
-        message.id === messageId ? { ...message, text: `${message.text}${nextToken}` } : message
+        message.id === messageId ? { ...message, text: `${message.text}${nextTokens}` } : message
       )));
+      scrollToLatest();
       return;
     }
 
@@ -261,13 +325,16 @@ export default function AIChatBox({
     if (complete) complete();
   };
 
-  const enqueueStreamDelta = (delta: string) => {
-    const displayTokens = delta.match(/\S+\s*|\s+/g) ?? [delta];
-    streamQueueRef.current.push(...displayTokens);
-    streamedTextRef.current = true;
+  const startStreamQueue = () => {
     if (!streamTimerRef.current) {
-      streamTimerRef.current = setInterval(flushStreamQueue, reducedMotion ? 0 : 30);
+      streamTimerRef.current = setInterval(flushStreamQueue, reducedMotion ? 0 : 16);
     }
+  };
+
+  const enqueueStreamDelta = (delta: string) => {
+    streamQueueRef.current.push(...Array.from(delta));
+    streamedTextRef.current = true;
+    startStreamQueue();
   };
 
   const completeStreamAfterDisplay = () => {
@@ -279,6 +346,7 @@ export default function AIChatBox({
 
   useEffect(() => () => {
     if (streamTimerRef.current) clearInterval(streamTimerRef.current);
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
   }, []);
 
   useEffect(() => {
@@ -424,6 +492,7 @@ export default function AIChatBox({
       { id: `user_${Date.now()}`, role: 'user', text },
       { id: assistantMessageId, role: 'assistant', text: '', streaming: true },
     ]);
+    scrollToLatest();
     setInputText('');
     setPending(true);
 
@@ -485,8 +554,9 @@ export default function AIChatBox({
         ) : (
           <View style={styles.assistantContent}>
             <View style={styles.assistantMessageText}>
-              <Text style={styles.assistantLabel}>Atlas AI</Text>
-              {item.streaming ? (
+              {item.streaming && !displayText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
+              {!item.streaming || displayText ? <Text style={styles.assistantLabel}>Atlas AI</Text> : null}
+              {item.streaming && displayText ? (
                 <StreamingAssistantText text={displayText} reducedMotion={reducedMotion} />
               ) : displayText ? (
                 <Markdown style={markdownStyles}>{displayText}</Markdown>
@@ -578,7 +648,7 @@ export default function AIChatBox({
     : 56;
   const composerEdgeGap = keyboardVisible ? 12 : 28;
   const composerBottom = keyboardHeight + composerEdgeGap;
-  const composerOverlayHeight = composerHeight + composerBottom + 56;
+  const composerOverlayHeight = composerHeight + composerBottom + 96;
   const headerMaterialHeight = headerOverlayHeight - 32;
   const composerMaterialHeight = composerHeight + composerEdgeGap + 6;
   const bottomMaterialOffset =
@@ -672,7 +742,7 @@ export default function AIChatBox({
             contentInsetAdjustmentBehavior="never"
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            onContentSizeChange={scrollToLatest}
             scrollIndicatorInsets={{
               top: headerOverlayHeight,
               bottom: composerHeight + composerBottom,
@@ -1037,12 +1107,33 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     letterSpacing: -0.16,
   },
+  thinkingRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  thinkingText: {
+    color: '#A1A1AA',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    letterSpacing: 0,
+  },
   streamingResponseText: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+  },
+  streamingToken: {
     color: '#000000',
     fontSize: 16,
     lineHeight: 24,
     fontWeight: '400',
     letterSpacing: -0.16,
+  },
+  streamingLineBreak: {
+    width: '100%',
+    height: 0,
   },
   feedbackBar: {
     minHeight: 28,

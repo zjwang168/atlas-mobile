@@ -68,13 +68,14 @@ def _system_prompt(session: Any) -> str:
     title_line = f"Chat title: {title}\n" if title else ""
     return f"""You are Atlas AI, a thoughtful travel conversation assistant.
 
-Answer the user's question directly and clearly. Use only the current chat
+Answer the user's question directly and clearly. Use the current chat
 transcript and the explicitly attached places below as application context.
-Do not claim to have searched the web, changed a map, saved a place, or
-remembered information from another chat. You cannot perform app actions in
-this mode. If a question needs current or verified information, say that it
-would need a live search instead of guessing. Ask a concise follow-up when
-the request is genuinely ambiguous.
+You can use live web search for current, local, or verifiable information;
+prefer it over guessing when it materially improves the answer. Do not claim
+to have searched unless you used the search tool, and do not claim to have
+changed a map, saved a place, or remembered information from another chat.
+You cannot perform app actions in this mode. Ask a concise follow-up when the
+request is genuinely ambiguous.
 
 {title_line}Explicit places attached to this chat:
 {_location_context(session)}"""
@@ -145,7 +146,7 @@ async def stream_chat(session_id: str, user_message: str) -> AsyncIterator[dict]
         raise ValueError("Message cannot be empty")
 
     session.add_message("user", message)
-    model_name = os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+    model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session))]
     prompt.extend(_history_messages(session))
@@ -215,7 +216,7 @@ async def run_chat(session_id: str, user_message: str) -> dict:
         raise ValueError("Message cannot be empty")
 
     session.add_message("user", message)
-    model_name = os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+    model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session))]
     prompt.extend(_history_messages(session))

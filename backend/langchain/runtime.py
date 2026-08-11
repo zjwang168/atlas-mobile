@@ -28,7 +28,7 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
 
 def _base_url_for_provider(provider: ProviderName) -> Optional[str]:
     if provider == "openai_mango":
-        return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1"
+        return os.environ.get("OPENAI_BASE_URL_MANGO", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1"
     if provider == "deepseek":
         return os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").strip() or "https://api.deepseek.com/v1"
     if provider == "qwen":
@@ -53,14 +53,21 @@ def get_chat_model(provider: ProviderName, model: str, temperature: float = 0.2)
         "qwen": "QWEN_API_KEY",
         "hunyuan": "HUNYUAN_API_KEY",
     }[provider]  # type: ignore[index]
-    return ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        max_tokens=8192,
-        api_key=os.environ.get(api_key_env, ""),
-        base_url=_base_url_for_provider(provider),  # type: ignore[arg-type]
-        streaming=True,
-    )
+    options: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": 8192,
+        "api_key": os.environ.get(api_key_env, ""),
+        "base_url": _base_url_for_provider(provider),
+        "streaming": True,
+    }
+    if provider == "openai_mango":
+        # OpenAI-hosted web search is available through the Responses API.
+        # The model decides when searching is warranted for the user's request.
+        options["use_responses_api"] = True
+        options["model_kwargs"] = {"tools": [{"type": "web_search"}]}
+
+    return ChatOpenAI(**options)
 
 
 class ProgressStreamHandler(AsyncCallbackHandler):
