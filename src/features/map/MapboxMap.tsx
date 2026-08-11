@@ -26,6 +26,8 @@ export interface MapMarker {
   entering?: boolean;
   /** Shows the small save-progress pulse around an Atlas marker. */
   pulsing?: boolean;
+  /** Keeps this marker's visual tone when it is selected. */
+  preserveToneOnSelect?: boolean;
 }
 
 export type MapPadding = {
@@ -314,6 +316,7 @@ function MarkerDot({
   hasActiveSelection,
   entering = false,
   pulsing = false,
+  preserveToneOnSelect = false,
 }: {
   selected: boolean;
   deleting: boolean;
@@ -322,6 +325,7 @@ function MarkerDot({
   hasActiveSelection: boolean;
   entering?: boolean;
   pulsing?: boolean;
+  preserveToneOnSelect?: boolean;
 }) {
   const exit = useSharedValue(0);
   const entry = useSharedValue(entering ? 0 : 1);
@@ -335,7 +339,7 @@ function MarkerDot({
   }, [entering, entry]);
   useEffect(() => {
     pulse.value = pulsing
-      ? withRepeat(withTiming(1, { duration: tone === 'location' ? 4600 : 3600 }), -1, false)
+      ? withRepeat(withTiming(1, { duration: tone === 'location' ? 900 : 3600 }), -1, tone === 'location')
       : withTiming(0, { duration: 280 });
   }, [pulse, pulsing, tone]);
   useEffect(() => {
@@ -350,7 +354,11 @@ function MarkerDot({
     const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : '#007AFF';
     // Green is the explicit current-choice state in the editor. AI pins stay
     // purple only while unselected; an orange Atlas pin keeps its route color.
-    const selectedColor = tone === 'atlas' ? '#E77B32' : '#12C170';
+    const selectedColor = tone === 'atlas'
+      ? '#E77B32'
+      : tone === 'recommended' && preserveToneOnSelect
+        ? '#885CF6'
+        : '#12C170';
     return {
     // Atlas pins are the active itinerary itself. They never participate in
     // add/focus remount fades; only an explicit delete is allowed to fade one.
@@ -367,11 +375,12 @@ function MarkerDot({
     };
   });
   const pulseStyle = useAnimatedStyle(() => ({
-    // Range control: 3.56 is twice the previous 1.78 maximum scale.
-    // Keep the ring solid white through its expansion, then clear it only as
-    // the next breath starts so it reads as white padding rather than a glow.
-    opacity: pulsing ? interpolate(pulse.value, [0, 0.88, 1], [1, 1, 0]) : 0,
-    transform: [{ scale: pulsing ? interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
+    opacity: pulsing
+      ? tone === 'location'
+        ? interpolate(pulse.value, [0, 0.5, 1], [0.86, 0.48, 0.86])
+        : interpolate(pulse.value, [0, 0.88, 1], [1, 1, 0])
+      : 0,
+    transform: [{ scale: pulsing ? tone === 'location' ? interpolate(pulse.value, [0, 1], [1, 1.2]) : interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
   }));
   return (
     <View style={[styles.markerDotWrap, tone === 'atlas' && styles.markerDotWrapAtlas, tone === 'location' && styles.markerDotWrapLocation]}>
@@ -746,6 +755,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 hasActiveSelection={Boolean(selectedMarkerId)}
                 entering={marker.entering}
                 pulsing={marker.pulsing}
+                preserveToneOnSelect={marker.preserveToneOnSelect}
               />
               {marker.title ? (
                 <MarkerLabel
@@ -900,11 +910,12 @@ const styles = StyleSheet.create({
     borderWidth: 4,
   },
   markerLocationPulse: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     borderWidth: 3,
-    borderColor: 'rgba(18,193,112,0.55)',
+    borderColor: 'rgba(255,255,255,0.96)',
+    backgroundColor: 'rgba(255,255,255,0.22)',
   },
   markerSelectedLayer: {
     zIndex: 100,

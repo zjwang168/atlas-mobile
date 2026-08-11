@@ -1232,6 +1232,14 @@ async def region_photo(query: str = Query(..., min_length=1, max_length=160)) ->
     }
 
 
+@app.get("/place_photo")
+async def place_photo(name: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """Return one cached, best-effort thumbnail for a saved place."""
+    place_name = name.strip()
+    photo_url = (await fetch_photos_for_places([place_name]))[0]
+    return {"name": place_name, "photo_url": photo_url}
+
+
 # ---- Find Image Places ----
 
 class FindImagePlaceRequest(BaseModel):

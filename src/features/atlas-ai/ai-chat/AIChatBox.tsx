@@ -58,7 +58,7 @@ import {
 } from '@/services/api/apiService';
 import { addAtlasOwnedPlaces } from '@/services/atlas/atlasPlacesService';
 import { createAtlas } from '@/services/atlas/atlasService';
-import { savePlaces } from '@/services/place/placeService';
+import { isSamePlace, queueSavedPlacePhotoBackfill, savePlaces } from '@/services/place/placeService';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
 
@@ -109,6 +109,30 @@ function stripActionMarkers(text: string): string {
     .replace(/\[\[PLACE_ACTION_CARD:[\s\S]*?\]\]/g, '')
     .replace(/\[\[CONFIRM_ADD_PLACES:[\s\S]*?\]\]/g, '')
     .trim();
+}
+
+function normalizeAssistantText(text: string): string {
+  const latexSymbol: Record<string, string> = {
+    alpha: 'alpha', beta: 'beta', gamma: 'gamma', delta: 'delta', theta: 'theta',
+    pi: 'pi', sigma: 'sigma', omega: 'omega', times: 'x', cdot: 'x',
+    leq: '<=', geq: '>=', neq: '!=', approx: '~', pm: '+/-', degree: 'deg',
+  };
+  return text
+    // Some model responses put a space before the closing bold marker, which
+    // CommonMark correctly treats as literal source instead of bold text.
+    .replace(/\*\*([^*\n]+?):\s*\*\*/g, '**$1:** ')
+    .replace(/\\\[([\s\S]*?)\\\]/g, '$1')
+    .replace(/\\\(([\s\S]*?)\\\)/g, '$1')
+    .replace(/\$\$([\s\S]*?)\$\$/g, '$1')
+    .replace(/\$([^$\n]+)\$/g, '$1')
+    .replace(/\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
+    .replace(/\\(?:text|mathrm|mathbf|mathit|operatorname)\s*\{([^{}]+)\}/g, '$1')
+    .replace(/\\([a-zA-Z]+)/g, (_match, command: string) => latexSymbol[command] ?? command)
+    .replace(/\{\s*([^{}]+)\s*\}/g, '$1')
+    // Do not pass emphasis markers through the mobile Markdown implementation:
+    // some valid Chinese-label variants still render the source asterisks.
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1');
 }
 
 function parseStoredToolResults(value: unknown): Array<Record<string, unknown>> {
@@ -338,6 +362,8 @@ export default function AIChatBox({
   const {
     addChatHistoryItem,
     replaceChatHistoryItem,
+    savedPlaces,
+    deleteSavedPlace,
     setAtlasMapState,
     setOverlay,
     userLocation,
@@ -362,6 +388,9 @@ export default function AIChatBox({
   const [chatMapOverviewRouteVisible, setChatMapOverviewRouteVisible] = useState(false);
   const [chatMapRouteLoading, setChatMapRouteLoading] = useState(false);
   const [chatMapCameraKey, setChatMapCameraKey] = useState(0);
+  const [chatMapSaveBusy, setChatMapSaveBusy] = useState(false);
+  const [chatMapSavedMarkerId, setChatMapSavedMarkerId] = useState<string | null>(null);
+  const [chatMapNotice, setChatMapNotice] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const hydratedConversationIdRef = useRef<string | null>(null);
@@ -376,6 +405,9 @@ export default function AIChatBox({
   const historyItemIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const chatMapRouteRequestRef = useRef(0);
+  const chatMapNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestChatMapStateKeyRef = useRef<string | null>(null);
+  const resolvingActionIdsRef = useRef(new Set<string>());
 
   const scrollToLatest = useCallback(() => {
     if (scrollFrameRef.current !== null) return;
@@ -447,6 +479,7 @@ export default function AIChatBox({
   useEffect(() => () => {
     if (streamTimerRef.current) clearInterval(streamTimerRef.current);
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    if (chatMapNoticeTimerRef.current) clearTimeout(chatMapNoticeTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -660,8 +693,10 @@ export default function AIChatBox({
       id: place.markerId,
       latitude: place.latitude,
       longitude: place.longitude,
+      title: place.name,
       description: place.full_address || place.description || undefined,
       tone: chatMapPresentation?.kind === 'atlas_draft' ? 'atlas' as const : 'recommended' as const,
+      preserveToneOnSelect: chatMapPresentation?.kind !== 'atlas_draft',
       order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
     })),
   ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind]);
@@ -671,11 +706,68 @@ export default function AIChatBox({
     [chatMapPlaces, chatMapSelectedId],
   );
 
+  const savedChatMapPlace = useMemo(() => selectedChatMapPlace
+    ? savedPlaces.find((place) => isSamePlace(place, selectedChatMapPlace)) ?? null
+    : null, [savedPlaces, selectedChatMapPlace]);
+  const chatMapPlaceSaved = Boolean(savedChatMapPlace)
+    || chatMapSavedMarkerId === selectedChatMapPlace?.markerId;
+
+  const showChatMapNotice = useCallback((notice: string) => {
+    setChatMapNotice(notice);
+    if (chatMapNoticeTimerRef.current) clearTimeout(chatMapNoticeTimerRef.current);
+    chatMapNoticeTimerRef.current = setTimeout(() => {
+      chatMapNoticeTimerRef.current = null;
+      setChatMapNotice(null);
+    }, 4000);
+  }, []);
+
   const clearChatMapSelection = useCallback(() => {
     chatMapRouteRequestRef.current += 1;
     setChatMapSelectedId(null);
     setChatMapSelectedRoute(null);
   }, []);
+
+  const toggleChatMapSavedPlace = useCallback(async () => {
+    if (!selectedChatMapPlace || chatMapSaveBusy) return;
+    setChatMapSaveBusy(true);
+    try {
+      if (chatMapPlaceSaved) {
+        if (!savedChatMapPlace) return;
+        await deleteSavedPlace(savedChatMapPlace.id);
+        setChatMapSavedMarkerId(null);
+        showChatMapNotice('Removed from My Places');
+        return;
+      }
+      // Saving performs queue reconciliation and a server-side dedupe check.
+      // Reflect the user's choice before those network round trips complete.
+      setChatMapSavedMarkerId(selectedChatMapPlace.markerId);
+      showChatMapNotice('Saved to My Places');
+      const savedRows = await savePlaces([{
+        id: selectedChatMapPlace.external_id || selectedChatMapPlace.markerId,
+        name: selectedChatMapPlace.name,
+        subtitle: selectedChatMapPlace.full_address || selectedChatMapPlace.description || '',
+        type: selectedChatMapPlace.category || 'Place',
+        latitude: selectedChatMapPlace.latitude,
+        longitude: selectedChatMapPlace.longitude,
+        imageUri: selectedChatMapPlace.photo_url || undefined,
+        externalId: selectedChatMapPlace.external_id || undefined,
+        externalSource: 'atlas_ai',
+        city: selectedChatMapPlace.city || undefined,
+        country: selectedChatMapPlace.country || undefined,
+      }]);
+      savedRows.forEach(queueSavedPlacePhotoBackfill);
+    } catch (error) {
+      if (!chatMapPlaceSaved) setChatMapSavedMarkerId(null);
+      console.warn('[AIChatBox] could not update My Places:', error);
+      showDialog({
+        title: 'We could not update My Places',
+        message: 'Please try again in a moment.',
+        tone: 'warning',
+      });
+    } finally {
+      setChatMapSaveBusy(false);
+    }
+  }, [chatMapPlaceSaved, chatMapSaveBusy, deleteSavedPlace, savedChatMapPlace, selectedChatMapPlace, showChatMapNotice, showDialog]);
 
   const selectChatMapPlace = useCallback(async (marker: MapMarker) => {
     const place = chatMapPlaces.find((item) => item.markerId === marker.id);
@@ -744,6 +836,10 @@ export default function AIChatBox({
 
   const chatMapRoute = chatMapSelectedRoute
     ?? (chatMapOverviewRouteVisible ? chatMapOverviewRoute : null);
+  const chatMapRouteKey = useMemo(
+    () => chatMapRoute ? JSON.stringify(chatMapRoute.geometry.coordinates) : 'none',
+    [chatMapRoute],
+  );
   const chatMapPopup = useMemo(() => selectedChatMapPlace && chatMapOrigin ? (
     <AtlasChatMapPlacePopup
       name={selectedChatMapPlace.name}
@@ -751,21 +847,38 @@ export default function AIChatBox({
       distanceLabel={distanceLabel(chatMapOrigin, [selectedChatMapPlace.longitude, selectedChatMapPlace.latitude])}
       origin={chatMapOrigin}
       destination={[selectedChatMapPlace.longitude, selectedChatMapPlace.latitude]}
+      saved={chatMapPlaceSaved}
+      saving={chatMapSaveBusy}
+      onToggleSaved={() => { void toggleChatMapSavedPlace(); }}
     />
-  ) : null, [chatMapOrigin, selectedChatMapPlace]);
+  ) : null, [chatMapOrigin, chatMapPlaceSaved, chatMapSaveBusy, selectedChatMapPlace, toggleChatMapSavedPlace]);
   const chatMapOverlay = useMemo(() => <AtlasChatMapControls
     topInset={insets.top}
-    routeVisible={chatMapOverviewRouteVisible}
-    routeLoading={chatMapRouteLoading}
-    routeAvailable={Boolean(chatMapOverviewRoute) || (Boolean(chatMapOrigin) && chatMapPlaces.length > 0)}
     onReturn={returnFromPresentationMap}
     onClose={closePresentationMap}
-    onToggleRoute={() => { void toggleChatMapOverviewRoute(); }}
     placePopup={chatMapPopup}
-  />, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces.length, chatMapPopup, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
+    notice={chatMapNotice}
+  />, [chatMapNotice, chatMapPopup, closePresentationMap, insets.top, returnFromPresentationMap]);
+  const chatMapStateKey = [
+    chatMapCameraKey,
+    chatMapPresentation?.kind ?? 'none',
+    chatMapMarkers.map((marker) => `${marker.id}:${marker.longitude.toFixed(6)}:${marker.latitude.toFixed(6)}:${marker.tone ?? 'saved'}`).join('|'),
+    chatMapSelectedId ?? 'none',
+    chatMapRouteKey,
+    chatMapOverviewRouteVisible ? 'overview' : 'route-hidden',
+    chatMapRouteLoading ? 'route-loading' : 'route-idle',
+    chatMapSaveBusy ? 'save-loading' : 'save-idle',
+    chatMapPlaceSaved ? 'saved' : 'unsaved',
+    chatMapNotice ?? 'no-notice',
+  ].join('::');
 
   useEffect(() => {
-    if (!chatMapPresentation) return;
+    if (!chatMapPresentation) {
+      latestChatMapStateKeyRef.current = null;
+      return;
+    }
+    if (latestChatMapStateKeyRef.current === chatMapStateKey) return;
+    latestChatMapStateKeyRef.current = chatMapStateKey;
     setAtlasMapState({
       markers: chatMapMarkers,
       centerCoordinate: chatMapOrigin ?? (chatMapMarkers[0] ? [chatMapMarkers[0].longitude, chatMapMarkers[0].latitude] : undefined),
@@ -781,7 +894,7 @@ export default function AIChatBox({
       overlay: chatMapOverlay,
       hideChrome: true,
     });
-  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPopup, chatMapPresentation, chatMapRoute, chatMapSelectedId, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
     chatMapRouteRequestRef.current += 1;
@@ -798,24 +911,49 @@ export default function AIChatBox({
   const resolveAction = async (messageId: string, accepted: boolean) => {
     const message = messages.find((item) => item.id === messageId);
     const action = message?.pendingAction;
-    if (!action || !sessionId) return;
+    if (!action || !sessionId || resolvingActionIdsRef.current.has(action.action_id)) return;
+    resolvingActionIdsRef.current.add(action.action_id);
+
+    // A confirmed place save has an optimistic local row. Do not hold the chat
+    // open for Supabase, background photo enrichment, or action bookkeeping.
+    if (accepted && action.kind === 'save_places') {
+      setMessages((current) => current.map((item) => (
+        item.id === messageId ? { ...item, pendingAction: null } : item
+      )));
+      const placesToSave = action.places.map((place, index) => ({
+        id: place.external_id || 'chat-place-' + index,
+        name: place.name,
+        subtitle: place.full_address || place.description || '',
+        type: place.category || 'Place',
+        latitude: place.latitude,
+        longitude: place.longitude,
+        imageUri: place.photo_url || undefined,
+        externalId: place.external_id || undefined,
+        externalSource: 'atlas_ai',
+        city: place.city || undefined,
+        region: place.region || undefined,
+        country: place.country || undefined,
+      }));
+      void savePlaces(placesToSave)
+        .then((savedRows) => {
+          savedRows.forEach(queueSavedPlacePhotoBackfill);
+          return confirmAtlasChatAction(sessionId, action.action_id, true, {
+            saved_place_count: action.places.length,
+          });
+        })
+        .catch((error) => {
+          console.warn('[AIChatBox] could not save proposed places:', error);
+          showDialog({
+            title: 'We could not save these places',
+            message: 'Please try again in a moment.',
+            tone: 'warning',
+          });
+        })
+        .finally(() => resolvingActionIdsRef.current.delete(action.action_id));
+      onClose();
+      return;
+    }
     try {
-      if (accepted && action.kind === 'save_places') {
-        await savePlaces(action.places.map((place, index) => ({
-          id: place.external_id || 'chat-place-' + index,
-          name: place.name,
-          subtitle: place.full_address || place.description || '',
-          type: place.category || 'Place',
-          latitude: place.latitude,
-          longitude: place.longitude,
-          imageUri: place.photo_url || undefined,
-          externalId: place.external_id || undefined,
-          externalSource: 'atlas_ai',
-          city: place.city || undefined,
-          region: place.region || undefined,
-          country: place.country || undefined,
-        })));
-      }
       let createdAtlasId: string | null = null;
       if (accepted && action.kind === 'create_atlas') {
         const atlas = await createAtlas(action.title);
@@ -850,12 +988,14 @@ export default function AIChatBox({
         message: 'Nothing has been confirmed in this chat. Please try again.',
         tone: 'warning',
       });
+    } finally {
+      resolvingActionIdsRef.current.delete(action.action_id);
     }
   };
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
-    const displayText = stripActionMarkers(item.text);
+    const displayText = normalizeAssistantText(stripActionMarkers(item.text));
     const feedbackText = displayText.trim() || item.text.trim();
     const selectedFeedback = messageFeedback[item.id];
     const toggleFeedback = (feedback: MessageFeedback) => {
@@ -899,7 +1039,7 @@ export default function AIChatBox({
                 <View style={styles.thinkingRow}>
                   <Text style={styles.assistantLabel}>Atlas AI</Text>
                   {item.thoughtDurationSeconds ? (
-                    <Text style={styles.thinkingText}>Thought {item.thoughtDurationSeconds}s</Text>
+                    <Text style={styles.thinkingText}>thought {item.thoughtDurationSeconds}s</Text>
                   ) : null}
                 </View>
               ) : null}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import time
@@ -81,7 +82,9 @@ web search when it improves the answer. Never invent a business, coordinates,
 or an app write.
 
 Tool rules:
-- A nearby request, including gas stations, MUST call find_nearby_places.
+- A nearby request, including gas stations, MUST call find_nearby_places. When
+  the user names multiple categories, pass every distinct category in the
+  categories array in one call (for example, ["car washes", "gas stations"]).
 - For pasted notes or an itinerary that the user wants added, call
   extract_pasted_places, then propose_add_places. This is only a proposal.
 - For creating an Atlas, find or extract real places first, then call
@@ -150,6 +153,42 @@ def _dedupe_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[s
     return result
 
 
+def _nearby_categories(categories: list[str] | None, query: str | None) -> list[str]:
+    """Normalize multi-category tool input and tolerate older single-query calls."""
+    raw = categories or ([query] if query else [])
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        for candidate in re.split(r"\s*(?:,|/|&|\band\b)\s*", str(value or ""), flags=re.IGNORECASE):
+            clean = " ".join(candidate.split()).strip(" .")
+            key = clean.casefold()
+            if clean and key not in seen:
+                seen.add(key)
+                normalized.append(clean[:100])
+    return normalized[:6]
+
+
+def _nearby_distance_km(origin: tuple[float, float], place: dict[str, Any]) -> float:
+    """Use straight-line distance only to consistently order mixed categories."""
+    longitude, latitude = origin
+    latitude_delta = math.radians(float(place["latitude"]) - latitude)
+    longitude_delta = math.radians(float(place["longitude"]) - longitude)
+    latitude_start = math.radians(latitude)
+    latitude_end = math.radians(float(place["latitude"]))
+    factor = math.sin(latitude_delta / 2) ** 2 + math.cos(latitude_start) * math.cos(latitude_end) * math.sin(longitude_delta / 2) ** 2
+    return 6371 * 2 * math.atan2(math.sqrt(factor), math.sqrt(1 - factor))
+
+
+def _nearby_title(categories: list[str]) -> str:
+    if not categories:
+        return "Nearby places"
+    if len(categories) == 1:
+        return f"Nearby {categories[0]}"
+    if len(categories) == 2:
+        return f"Nearby {categories[0]} and {categories[1]}"
+    return f"Nearby {', '.join(categories[:-1])}, and {categories[-1]}"
+
+
 async def _road_route(coordinates: list[tuple[float, float]]) -> dict[str, Any] | None:
     """Return a real walking route when Mapbox routing is configured."""
     if len(coordinates) < 2 or not os.getenv("MAPBOX_ACCESS_TOKEN", "").strip():
@@ -176,35 +215,80 @@ async def _road_route(coordinates: list[tuple[float, float]]) -> dict[str, Any] 
 
 def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
     @tool
-    async def find_nearby_places(query: str, limit: int = 5) -> dict[str, Any]:
-        """Find real nearby places for a category using the device GPS location."""
+    async def find_nearby_places(
+        categories: list[str] | None = None,
+        query: str | None = None,
+        limit_per_category: int | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Find real nearby places for one or more categories using device GPS."""
         current = getattr(session, "user_location", None)
         if not current or len(current) != 2:
             return {"error": "Current device location is unavailable."}
         longitude, latitude = float(current[0]), float(current[1])
         from backend.services import place_search_service
 
-        session_token = str(uuid.uuid4())
-        suggestions = await place_search_service.suggest(
-            query=query.strip(), session_token=session_token, proximity=f"{longitude},{latitude}",
-            limit=max(1, min(int(limit or 5), 8)),
+        requested_categories = _nearby_categories(categories, query)
+        if not requested_categories:
+            return {"error": "At least one nearby place category is required."}
+        category_limit = max(1, min(int(limit_per_category or limit or 3), 8))
+
+        async def search_category(category: str) -> tuple[str, list[dict[str, Any]]]:
+            session_token = str(uuid.uuid4())
+            suggestions = await place_search_service.suggest(
+                query=category, session_token=session_token, proximity=f"{longitude},{latitude}", limit=category_limit,
+            )
+            retrieved = await asyncio.gather(*[
+                place_search_service.retrieve(item["external_id"], session_token)
+                for item in suggestions[:category_limit]
+            ])
+            places = _dedupe_places(
+                [place for result in retrieved for place in result],
+                limit=category_limit,
+            )
+            for place in places:
+                place["requested_category"] = category
+            return category, places
+
+        searched = await asyncio.gather(
+            *(search_category(category) for category in requested_categories),
+            return_exceptions=True,
         )
-        retrieved = await asyncio.gather(*[
-            place_search_service.retrieve(item["external_id"], session_token)
-            for item in suggestions[: max(1, min(int(limit or 5), 8))]
-        ])
-        places = _dedupe_places([place for result in retrieved for place in result], limit=max(1, min(int(limit or 5), 8)))
+        groups = state.setdefault("nearby_groups", {})
+        for result in searched:
+            if isinstance(result, Exception):
+                continue
+            category, places = result
+            groups[category] = places
+
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[str, int, int]] = set()
+        for category_places in groups.values():
+            for place in category_places:
+                key = (place["name"].casefold(), round(place["latitude"] * 10_000), round(place["longitude"] * 10_000))
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(place)
+        places = sorted(merged, key=lambda place: _nearby_distance_km((longitude, latitude), place))[:24]
+        displayed_categories = list(groups.keys())
         if not places:
-            return {"query": query, "places": [], "error": "No nearby places were found."}
+            return {"categories": requested_categories, "places": [], "error": "No nearby places were found."}
         route = await _road_route([(longitude, latitude), (places[0]["longitude"], places[0]["latitude"])])
         session.locations = places
         session.route = route
         state["presentation"] = {
-            "kind": "nearby_map", "title": f"Nearby {query.strip()}",
+            "kind": "nearby_map", "title": _nearby_title(displayed_categories),
             "user_location": {"longitude": longitude, "latitude": latitude},
-            "places": places, "route": route,
+            "places": places,
+            "groups": [{"category": category, "places": category_places} for category, category_places in groups.items()],
+            "route": route,
         }
-        return {"query": query, "places": places, "route": route}
+        return {
+            "categories": requested_categories,
+            "groups": [{"category": category, "places": category_places} for category, category_places in groups.items()],
+            "places": places,
+            "route": route,
+        }
 
     @tool
     async def extract_pasted_places(text: str) -> dict[str, Any]:
@@ -265,7 +349,7 @@ async def _run_agent(session: Any, user_message: str) -> dict[str, Any]:
     model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session)), *_history_messages(session)]
-    state: dict[str, Any] = {"presentation": None, "pending_action": None}
+    state: dict[str, Any] = {"presentation": None, "pending_action": None, "nearby_groups": {}}
     tools = _agent_tools(session, state)
     tools_by_name = {item.name: item for item in tools}
     tool_calls_used: list[str] = []

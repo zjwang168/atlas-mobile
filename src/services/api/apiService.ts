@@ -641,10 +641,16 @@ export async function cancelParseRequest(requestId: string): Promise<{ cancelled
 }
 
 export type RegionPhotoResponse = { region: string; photo_url: string | null; photo_urls?: string[] };
+export type PlacePhotoResponse = { name: string; photo_url: string | null };
 
 export async function getRegionPhoto(region: string): Promise<RegionPhotoResponse> {
   const query = encodeURIComponent(region.trim());
   return getJson<RegionPhotoResponse>(`/region_photo?query=${query}`);
+}
+
+export async function getPlacePhoto(name: string): Promise<PlacePhotoResponse> {
+  const query = encodeURIComponent(name.trim());
+  return getJson<PlacePhotoResponse>(`/place_photo?name=${query}`);
 }
 
 export type PlaceSuggestResponse = {

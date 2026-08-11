@@ -2,9 +2,12 @@ import MapboxMap, { type MapMarker } from '@/features/map/MapboxMap';
 import type { AtlasChatPresentation } from '@/services/api/apiService';
 import { CheckIcon } from 'phosphor-react-native/src/icons/Check';
 import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
+import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
-import { Image, Pressable, StyleSheet, View, type ImageStyle } from 'react-native';
+import { Image, Linking, Pressable, StyleSheet, View, type ImageStyle } from 'react-native';
 import { Text } from '@/components/ui/text';
+
+const GOOGLE_MAPS_ICON = require('../../../../assets/icons/google-maps2.png');
 
 type Props = {
   presentation: AtlasChatPresentation;
@@ -58,6 +61,7 @@ function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?:
 export default function AtlasChatResultCard({ presentation, pendingAction, onConfirm, onCancel, onOpenMap }: Props) {
   const hasPendingAction = Boolean(pendingAction);
   const featuredPlace = presentation.places[0];
+  const hasSinglePlace = presentation.places.length === 1 && Boolean(featuredPlace);
   const placeSubtitle = featuredPlace
     ? [featuredPlace.category, featuredPlace.full_address || featuredPlace.description]
       .filter(Boolean)
@@ -78,6 +82,21 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       tone: 'recommended' as const,
     })),
   ];
+  const openPlaceInGoogleMaps = () => {
+    if (!featuredPlace) return;
+    const destination = `${featuredPlace.latitude},${featuredPlace.longitude}`;
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(destination)}`;
+    Linking.openURL(url).catch((error) => console.warn('[AtlasChatResultCard] could not open Google Maps place:', error));
+  };
+  const openDirectionsInGoogleMaps = () => {
+    if (!featuredPlace) return;
+    const destination = `${featuredPlace.latitude},${featuredPlace.longitude}`;
+    const origin = presentation.user_location
+      ? `&origin=${encodeURIComponent(`${presentation.user_location.latitude},${presentation.user_location.longitude}`)}`
+      : '';
+    const url = `https://www.google.com/maps/dir/?api=1${origin}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+    Linking.openURL(url).catch((error) => console.warn('[AtlasChatResultCard] could not open Google Maps directions:', error));
+  };
 
   return (
     <View style={styles.card}>
@@ -141,6 +160,29 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
           </View>
         </View>
       ) : null}
+      {hasSinglePlace ? (
+        <View style={styles.googleMapsRow}>
+          <Text style={styles.googleMapsPrompt}>Check it on Google Maps?</Text>
+          <View style={styles.googleMapsActions}>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={`View ${featuredPlace!.name} in Google Maps`}
+              onPress={openPlaceInGoogleMaps}
+              style={({ pressed }) => [styles.googleMapsAction, styles.googleMapsViewAction, pressed && styles.actionPressed]}
+            >
+              <Image source={GOOGLE_MAPS_ICON} style={styles.googleMapsIcon} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={`Navigate to ${featuredPlace!.name} in Google Maps`}
+              onPress={openDirectionsInGoogleMaps}
+              style={({ pressed }) => [styles.googleMapsAction, styles.googleMapsNavigateAction, pressed && styles.actionPressed]}
+            >
+              <NavigationArrowIcon size={18} color="#FFFFFF" weight="bold" />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -165,4 +207,12 @@ const styles = StyleSheet.create({
   cancelButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#F4F4F5', alignItems: 'center', justifyContent: 'center' },
   confirmButton: { minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#121212', flexDirection: 'row', alignItems: 'center', gap: 6 },
   confirmButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  googleMapsRow: { minHeight: 58, paddingHorizontal: 2, paddingTop: 12, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  googleMapsPrompt: { flex: 1, color: '#3F3F46', fontSize: 13, lineHeight: 18 },
+  googleMapsActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  googleMapsAction: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  googleMapsViewAction: { backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DADCE0' },
+  googleMapsNavigateAction: { backgroundColor: '#16A34A' },
+  googleMapsIcon: { width: 26, height: 26, resizeMode: 'contain' },
+  actionPressed: { transform: [{ scale: 0.95 }], opacity: 0.86 },
 });

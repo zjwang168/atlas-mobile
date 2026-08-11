@@ -64,6 +64,43 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["locations"]), 2)
         self.assertIsNone(result["pending_action"])
 
+    async def test_nearby_search_merges_multiple_categories_into_one_map(self):
+        model = _ToolModel([
+            tool_call("find_nearby_places", {
+                "categories": ["car washes", "gas stations"],
+                "limit_per_category": 1,
+            }),
+            AIMessage(content="I found both car washes and gas stations nearby."),
+        ])
+
+        async def suggest(query, **_kwargs):
+            return [{"external_id": query}]
+
+        async def retrieve(external_id, _session_token):
+            if external_id == "car washes":
+                return [{
+                    "name": "Shine Car Wash", "latitude": 47.607, "longitude": -122.333,
+                    "full_address": "1 Wash Way", "category": "Car Wash",
+                }]
+            return [{
+                "name": "North Fuel", "latitude": 47.608, "longitude": -122.334,
+                "full_address": "2 Fuel Lane", "category": "Gas Station",
+            }]
+
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(side_effect=suggest)),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(side_effect=retrieve)),
+            patch("backend.langgraph.chat_agent._road_route", new=AsyncMock(return_value=None)),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "Where are the nearest car washes and gas stations?")
+
+        self.assertEqual(result["presentation"]["title"], "Nearby car washes and gas stations")
+        self.assertEqual(len(result["presentation"]["places"]), 2)
+        self.assertEqual([group["category"] for group in result["presentation"]["groups"]], ["car washes", "gas stations"])
+        self.assertEqual({place["requested_category"] for place in result["locations"]}, {"car washes", "gas stations"})
+
     async def test_pasted_places_then_add_produces_confirmation_only(self):
         extracted = [{
             "name": "Museum One", "latitude": 47.61, "longitude": -122.33,
