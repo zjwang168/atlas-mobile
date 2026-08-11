@@ -275,6 +275,77 @@ async def generate_import_welcome(session_id: str, deselected_locations: list[di
     }
 
 
+async def generate_atlas_welcome(session_id: str) -> dict[str, Any]:
+    """Create the assistant-first opening message for a saved Atlas edit."""
+    session = conversation_manager.get_session(session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    for message in session.messages:
+        if message.get("role") != "assistant":
+            continue
+        presentation = _stored_presentation(message.get("tool_results"))
+        if presentation and presentation.get("kind") == "atlas_draft":
+            return {
+                "session_id": session.session_id, "conversation_id": session.conversation_id,
+                "response": message.get("content") or "Hi, your Atlas is ready to keep planning.",
+                "locations": session.locations, "route": session.route, "tool_calls_used": [],
+                "tool_results": message.get("tool_results") or [], "status": "success", "partial": False,
+                "pending_action": None, "presentation": presentation, "place_cards": [],
+                "metrics": {"latency_ms": 0, "tool_call_count": 0},
+            }
+
+    places = _dedupe_places(getattr(session, "locations", []) or [], limit=50)
+    session.locations = places
+    title = str(getattr(session, "title", "") or "your Atlas").strip()[:100]
+    prompt = (
+        f"The user has just saved edits to the Atlas named '{title}'. The explicit places are in their confirmed route order. "
+        "Write the first visible assistant message now. Start with a warm greeting, acknowledge that the Atlas is ready, "
+        "and say the orange numbered map below follows the saved order. Offer exactly three concise next things the user "
+        "can ask or do, as bullets, then ask one inviting question. Do not call tools, do not claim any new write, and keep it under 140 words."
+    )
+    started_at = time.perf_counter()
+    answer = ""
+    try:
+        model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+        model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
+        response = await model.ainvoke([
+            SystemMessage(content=_system_prompt(session)),
+            *_history_messages(session),
+            HumanMessage(content=prompt),
+        ])
+        answer = _content_to_text(getattr(response, "content", response))
+    except Exception as error:
+        print(f"[Chat] Atlas welcome generation failed: {error}")
+    answer = answer or (
+        f"Hi, {title} is saved and ready to explore. The orange numbered map below follows your current stop order.\n\n"
+        "We can:\n- tighten the route and travel times\n- add or adjust a day-by-day schedule\n- find a useful stop near any point\n\n"
+        "What would you like to refine first?"
+    )
+    presentation = {
+        "kind": "atlas_draft", "title": title, "places": places,
+        "planning_note": "Your saved Atlas order is shown on the map.", "route": session.route,
+        "user_location": (
+            {"longitude": session.user_location[0], "latitude": session.user_location[1]}
+            if session.user_location and len(session.user_location) == 2 else None
+        ),
+    }
+    session.chat_presentation = presentation
+    tool_results = [{"name": "atlas_welcome", "result": {"presentation": presentation}}]
+    session.add_message("assistant", answer, tool_results=tool_results)
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception as error:
+        print(f"[Chat] Failed to persist Atlas welcome: {error}")
+    return {
+        "session_id": session.session_id, "conversation_id": session.conversation_id,
+        "response": answer, "locations": session.locations, "route": session.route,
+        "tool_calls_used": [], "tool_results": tool_results, "status": "success", "partial": False,
+        "pending_action": None, "presentation": presentation, "place_cards": [],
+        "metrics": {"latency_ms": round((time.perf_counter() - started_at) * 1000), "tool_call_count": 0},
+    }
+
+
 def _normalize_place(place: dict[str, Any]) -> dict[str, Any] | None:
     try:
         name = str(place.get("name") or "").strip()

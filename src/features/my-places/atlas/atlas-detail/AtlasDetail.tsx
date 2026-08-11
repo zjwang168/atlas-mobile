@@ -1,12 +1,13 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import ContentPanel, { SNAP_HEIGHTS } from '@/components/content-panel/ContentPanel';
 import { useHome, type AtlasMapState } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import { atlasCameraFromStops } from '@/features/map/atlasCamera';
-import AtlasBuilder, { type DraftPlace } from '@/features/my-plan/atlas-builder/AtlasBuilder';
-import { requestAtlasRoute, requestMapboxDirections, requestMapboxOptimization } from '@/services/api/apiService';
+import AtlasBuilder, { type AtlasSavedMapView, type DraftPlace } from '@/features/my-plan/atlas-builder/AtlasBuilder';
+import { createChatSession, requestAtlasRoute, requestMapboxDirections, requestMapboxOptimization } from '@/services/api/apiService';
 import { decodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
 import { updateAtlas } from '@/services/atlas/atlasService';
 import type { Atlas } from '@/types/atlas';
@@ -173,7 +174,8 @@ function routeDistanceLabelsForItems(route: RouteFeature, items: ItineraryItem[]
 }
 
 export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightChange }: AtlasDetailProps) {
-  const { atlases, savedPlaces, atlasPlaces, atlasMapState, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId } = useHome();
+  const { show: showDialog } = useAppDialog();
+  const { atlases, savedPlaces, atlasPlaces, atlasMapState, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setActiveSidekick, userLocation } = useHome();
   const [editing, setEditing] = useState(false);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [routeFeature, setRouteFeature] = useState<RouteFeature | null>(null);
@@ -347,7 +349,79 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       : null
   ), [presentation.bounds, presentation.centerCoordinate, presentation.zoomLevel]);
 
-  const handleEditorSaved = useCallback((mapView?: { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature }) => {
+  const openAtlasEditChat = useCallback(async (mapView: AtlasSavedMapView) => {
+    if (!atlas) return;
+    const atlasChatPlaces = mapView.places.map((place) => ({
+      name: place.name,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      full_address: place.subtitle,
+      description: place.note || place.subtitle,
+      category: place.category || 'Place',
+      photo_url: place.photo_url || null,
+      city: place.city || null,
+      region: place.region || null,
+      country: place.country || null,
+      timeline_day: place.timeline_day ?? null,
+      timeline_time: place.timeline_time ?? null,
+      transport: place.transport ?? null,
+    }));
+    const places = mapView.places.map((place) => ({
+      id: place.id,
+      name: place.name,
+      subtitle: place.subtitle,
+      type: place.category || 'Place',
+      latitude: place.latitude,
+      longitude: place.longitude,
+      imageUri: place.photo_url || undefined,
+      city: place.city || undefined,
+      country: place.country || undefined,
+    }));
+    try {
+      const created = await createChatSession({
+        title: mapView.title,
+        source_url: `atlas:${atlas.id}`,
+        source_type: 'atlas_edit',
+        locations: atlasChatPlaces,
+        user_location: userLocation,
+      });
+      const conversationId = created.conversation_id || created.session_id;
+      const createdAt = new Date().toISOString();
+      const temporaryId = addChatHistoryItem({
+        title: mapView.title,
+        sourceUrl: `atlas:${atlas.id}`,
+        sourceType: 'atlas_edit',
+        locationCount: places.length,
+        messageCount: 0,
+        places,
+        updatedAt: createdAt,
+      });
+      const historyItem = {
+        id: conversationId,
+        title: mapView.title,
+        sourceUrl: `atlas:${atlas.id}`,
+        sourceType: 'atlas_edit',
+        locationCount: places.length,
+        messageCount: 0,
+        places,
+        createdAt,
+        updatedAt: createdAt,
+        atlasWelcome: { places: atlasChatPlaces },
+      };
+      replaceChatHistoryItem(temporaryId, historyItem);
+      setActiveHistoryItem(historyItem);
+      setActiveSidekick('aiChat');
+    } catch (error) {
+      console.warn('[AtlasDetail] could not start Atlas AI chat:', error);
+      showDialog({
+        title: 'We couldn\'t start this Atlas chat',
+        message: 'Your Atlas was saved. Please try Save and Ask AI again.',
+        tone: 'warning',
+      });
+    }
+  }, [addChatHistoryItem, atlas, replaceChatHistoryItem, setActiveHistoryItem, setActiveSidekick, showDialog, userLocation]);
+
+  const handleEditorSaved = useCallback((askAI: boolean, mapView?: AtlasSavedMapView) => {
     if (!mapView) {
       setEditing(false);
       return;
@@ -380,7 +454,8 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     setDisplayedRoute(null);
     setRouteCamera(null);
     setEditing(false);
-  }, [atlas?.id, atlasId, setAtlasMapState]);
+    if (askAI) void openAtlasEditChat(mapView);
+  }, [atlas?.id, atlasId, openAtlasEditChat, setAtlasMapState]);
 
   const handleEditorClosed = useCallback(() => {
     // Cancel discards the editor camera and returns directly to the durable
@@ -557,7 +632,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
-    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={handleEditorClosed} onSaved={(_, _askAI, mapView) => handleEditorSaved(mapView as { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature } | undefined)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={handleEditorClosed} onSaved={(_, askAI, mapView) => handleEditorSaved(askAI, mapView)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
       <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} distanceLabel={activeRouteDistanceLabels[index]?.text} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>

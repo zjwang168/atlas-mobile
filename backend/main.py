@@ -162,6 +162,10 @@ class ImportWelcomeRequest(BaseModel):
     deselected_locations: list[dict] = []
 
 
+class AtlasWelcomeRequest(BaseModel):
+    locations: list[dict] = []
+
+
 class AtlasDiscoverRequest(BaseModel):
     query: str
     request_id: Optional[str] = None
@@ -1160,6 +1164,25 @@ async def create_import_welcome(session_id: str, req: ImportWelcomeRequest) -> d
         raise HTTPException(status_code=404, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Import welcome error: {error}") from error
+
+
+@app.post("/sessions/{session_id}/atlas-welcome")
+async def create_atlas_welcome(session_id: str, req: AtlasWelcomeRequest) -> dict:
+    """Create the assistant-first opening message for a saved Atlas edit."""
+    try:
+        session = conversation_manager.get_session(session_id)
+        if not session:
+            session = await conversation_manager.load_conversation(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        if req.locations:
+            session.locations = req.locations
+        from backend.langgraph.chat_agent import generate_atlas_welcome
+        return await generate_atlas_welcome(session.session_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Atlas welcome error: {error}") from error
 
 
 @app.get("/conversations")

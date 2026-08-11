@@ -14,6 +14,7 @@ import { loadChatHistory, supabase } from '../../services/supabase/supabaseClien
 import type { Atlas } from '../../types/atlas';
 import type { AtlasPlace, PlaceDetail } from '../../types/place';
 import type { MapMarker } from '../map/MapboxMap';
+import type { AtlasChatPresentation } from '../../services/api/apiService';
 
 // --- Chat History ---
 
@@ -35,6 +36,8 @@ export type ChatHistoryItem = {
   importWelcome?: {
     deselectedPlaces: ParsedPlace[];
   };
+  /** Present only while opening a chat directly from a saved Atlas edit. */
+  atlasWelcome?: { places: AtlasChatPresentation['places'] };
 };
 
 const MAX_CHAT_HISTORY = 50;

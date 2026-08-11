@@ -45,6 +45,15 @@ export type DraftPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude
   joinId?: string;
 };
 
+export type AtlasSavedMapView = {
+  title: string;
+  centerCoordinate: [number, number];
+  zoomLevel: number;
+  markers: MapMarker[];
+  routeGeoJSON?: AtlasRouteResponse['route'];
+  places: DraftPlace[];
+};
+
 type TransportMode = AtlasTransportMode;
 
 const TRANSPORT_OPTIONS: Array<{ mode: TransportMode; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
@@ -76,7 +85,7 @@ type FocusArea = {
 
 type AtlasBuilderProps = {
   onClose: () => void;
-  onSaved: (atlasId: string, askAI: boolean, mapView?: { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: AtlasRouteResponse['route'] }) => void;
+  onSaved: (atlasId: string, askAI: boolean, mapView?: AtlasSavedMapView) => void;
   atlasId?: string;
   initialCandidates?: DraftPlace[];
   initialItems?: DraftPlace[];
@@ -1306,9 +1315,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       showDialog({ title: 'Location verification in progress', message: 'Wait for AI map positions to be verified before saving this Atlas.', tone: 'warning' });
       return;
     }
+    const title = atlasId ? (atlasTitle.trim() || existingAtlas?.title || buildAtlasTitle(items)) : buildAtlasTitle(items);
     // Saving must never move the map. The completed Atlas receives this exact
     // editor presentation and keeps it until its close button is used.
     const savedMapView = {
+      title,
       centerCoordinate: viewportCenterRef.current,
       zoomLevel: viewportZoomRef.current,
       markers: items.map((item, index) => ({
@@ -1321,17 +1332,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         order: index + 1,
       })),
       routeGeoJSON: route?.route,
+      places: items,
     };
     setSavingKind(askAI ? 'ai' : 'atlas');
     try {
-      const title = atlasId ? (atlasTitle.trim() || existingAtlas?.title || buildAtlasTitle(items)) : buildAtlasTitle(items);
       const atlas = atlasId ? existingAtlas : await createAtlas(title);
       if (!atlas) throw new Error('Atlas could not be created');
       // Hand the completed page its orange pins before cache/network writes.
       // Persistence is local-first, so the map transition never waits for a
       // round trip or for atlas_places subscribers to hydrate the detail.
       preserveMapOnUnmountRef.current = true;
-      onSaved(atlas.id, askAI, savedMapView);
+      // Regular saves keep their current instant map handoff. Ask AI waits for
+      // the Atlas write to finish so the conversation is based on committed
+      // orange-pin order and itinerary metadata.
+      if (!askAI) onSaved(atlas.id, false, savedMapView);
       const hasPendingRows = Boolean(atlasId) && items.some((item) => !item.joinId);
       if (atlasId && !hasPendingRows) {
         await updateAtlasPlaces(items.map((item, index) => ({ joinRowId: item.joinId!, patch: {
@@ -1342,6 +1356,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           timeline_time: item.timeline_time ?? null,
         } })));
         await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
+        if (askAI) onSaved(atlas.id, true, savedMapView);
         return;
       }
       const existingRows = atlasPlaces.filter((row) => row.atlas_id === atlas.id);
@@ -1365,6 +1380,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         } }] : [];
       }));
       await updateAtlas(atlas.id, { title, route_geojson: route?.route ?? null, route_visible: Boolean(route) });
+      if (askAI) onSaved(atlas.id, true, savedMapView);
     } catch (error) {
       console.warn('[AtlasBuilder] saving failed', error);
       showDialog({ title: 'Atlas was not saved', message: 'Please check your connection and try again.', tone: 'warning' });

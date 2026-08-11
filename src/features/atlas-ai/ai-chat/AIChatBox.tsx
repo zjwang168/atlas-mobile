@@ -53,6 +53,7 @@ import {
   confirmAtlasChatAction,
   createChatSession,
   createImportChatWelcome,
+  createAtlasChatWelcome,
   fetchConversation,
   requestAtlasRoute,
   type AtlasChatPresentation,
@@ -91,6 +92,11 @@ const IMPORT_STARTER_PROMPTS = [
   'Build a day plan around these saved places',
   'Group these places by neighborhood',
   'What should I add nearby?',
+] as const;
+const ATLAS_STARTER_PROMPTS = [
+  'Tighten this route and travel times',
+  'Build a day-by-day schedule for this Atlas',
+  'What should I add near one of these stops?',
 ] as const;
 
 type Message = {
@@ -286,6 +292,7 @@ type AIChatBoxProps = {
   visible?: boolean;
   conversationId?: string | null;
   importWelcome?: { deselectedPlaces: ParsedPlace[] } | null;
+  atlasWelcome?: { places: AtlasChatPresentation['places'] } | null;
   showLanding?: boolean;
   onPresentationMapOpen?: () => void;
   onPresentationMapReturn?: () => void;
@@ -370,6 +377,7 @@ export default function AIChatBox({
   visible = true,
   conversationId = null,
   importWelcome = null,
+  atlasWelcome = null,
   showLanding = false,
   onPresentationMapOpen,
   onPresentationMapReturn,
@@ -597,18 +605,22 @@ export default function AIChatBox({
               presentation && parseStoredToolResults(message.tool_results)
                 .some((result) => result.name === 'import_welcome'),
             );
+            const isAtlasWelcome = Boolean(
+              presentation && parseStoredToolResults(message.tool_results)
+                .some((result) => result.name === 'atlas_welcome'),
+            );
             return {
               id: `${message.role}_${index}_${Date.now()}`,
               role: message.role === 'user' ? 'user' : 'assistant',
               text: message.content,
               presentation,
-              starterPrompts: isImportWelcome ? IMPORT_STARTER_PROMPTS : undefined,
+              starterPrompts: isImportWelcome ? IMPORT_STARTER_PROMPTS : isAtlasWelcome ? ATLAS_STARTER_PROMPTS : undefined,
             };
           });
 
         setSessionId(session.session_id);
         activeConversationIdRef.current = detail.session.conversation_id || conversationId;
-        if (importWelcome && restoredMessages.length === 0) {
+        if ((importWelcome || atlasWelcome) && restoredMessages.length === 0) {
           setPending(true);
           setMessages([{
             id: `import_welcome_${Date.now()}`,
@@ -618,23 +630,25 @@ export default function AIChatBox({
             thinkingStartedAt: Date.now(),
           }]);
           try {
-            const welcome = await createImportChatWelcome(
-              session.session_id,
-              importWelcome.deselectedPlaces.map((place) => ({
-                name: place.name,
-                latitude: place.latitude,
-                longitude: place.longitude,
-                full_address: place.subtitle,
-                category: place.type || 'Place',
-              })),
-            );
+            const welcome = importWelcome
+              ? await createImportChatWelcome(
+                session.session_id,
+                importWelcome.deselectedPlaces.map((place) => ({
+                  name: place.name,
+                  latitude: place.latitude,
+                  longitude: place.longitude,
+                  full_address: place.subtitle,
+                  category: place.type || 'Place',
+                })),
+              )
+              : await createAtlasChatWelcome(session.session_id, atlasWelcome?.places ?? []);
             if (cancelled) return;
             setMessages([{
               id: `assistant_import_welcome_${Date.now()}`,
               role: 'assistant',
               text: welcome.response,
               presentation: welcome.presentation,
-              starterPrompts: IMPORT_STARTER_PROMPTS,
+              starterPrompts: importWelcome ? IMPORT_STARTER_PROMPTS : ATLAS_STARTER_PROMPTS,
             }]);
           } catch (error) {
             if (cancelled) return;
@@ -642,10 +656,12 @@ export default function AIChatBox({
             setMessages([{
               id: `assistant_import_welcome_error_${Date.now()}`,
               role: 'assistant',
-              text: 'Hi, your saved places are ready to explore. I can help you build a route, group nearby stops, or find something to add next.',
+              text: atlasWelcome
+                ? 'Hi, your saved Atlas is ready to explore. I can help you tighten the route, plan the schedule, or find another useful stop.'
+                : 'Hi, your saved places are ready to explore. I can help you build a route, group nearby stops, or find something to add next.',
               presentation: {
-                kind: 'places_map',
-                title: `${places.length} saved ${places.length === 1 ? 'place' : 'places'}`,
+                kind: atlasWelcome ? 'atlas_draft' : 'places_map',
+                title: atlasWelcome ? (title || 'Saved Atlas') : `${places.length} saved ${places.length === 1 ? 'place' : 'places'}`,
                 places: places.map((place) => ({
                   name: place.name,
                   latitude: place.latitude,
@@ -656,7 +672,7 @@ export default function AIChatBox({
                 })),
                 route: null,
               },
-              starterPrompts: IMPORT_STARTER_PROMPTS,
+              starterPrompts: atlasWelcome ? ATLAS_STARTER_PROMPTS : IMPORT_STARTER_PROMPTS,
             }]);
           } finally {
             if (!cancelled) setPending(false);
@@ -675,7 +691,7 @@ export default function AIChatBox({
     return () => {
       cancelled = true;
     };
-  }, [conversationId, importWelcome, places, title]);
+  }, [atlasWelcome, conversationId, importWelcome, places, title]);
 
   const handleSend = async () => {
     const text = inputText.trim();

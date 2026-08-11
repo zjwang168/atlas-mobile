@@ -552,13 +552,6 @@ function AppContent() {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'any_links',
-          });
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -589,34 +582,6 @@ function AppContent() {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'youtube_links',
-          });
-
-            saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'youtube_links',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'youtube_links',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
-
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -644,32 +609,6 @@ function AppContent() {
           }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'tiktok_links',
-          });
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'tiktok_links',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'tiktok_links',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -697,32 +636,6 @@ function AppContent() {
           }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'instagram_reels',
-          });
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'instagram_reels',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'instagram_reels',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -750,32 +663,6 @@ function AppContent() {
           }
           const effectiveTitle = result.sourceTitle || importMeta?.title || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'facebook_reels',
-          });
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'facebook_reels',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'facebook_reels',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -803,14 +690,6 @@ function AppContent() {
             completeImport(result);
             return;
           }
-          const effectiveTitle = result.sourceTitle || 'Scanned places from image';
-          addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl: 'image_scan',
-            locationCount: result.places.length,
-            places: result.places,
-            sourceType: 'image_scan',
-          });
           completeImport(result);
         })
         .catch((err) => {
@@ -885,7 +764,6 @@ function AppContent() {
       .then((result) => {
         if (!cancelled) {
           const effectiveTitle = importMeta?.title || result.sourceTitle || importText;
-          const sourceUrl = importMeta?.sourceUrl || importText;
           const adaptedResult: ParseResult = {
             ...result,
             sourceTitle: effectiveTitle,

@@ -144,6 +144,13 @@ export type AtlasChatResponse = {
     sentiment?: 'positive' | 'neutral' | 'negative' | null;
     description?: string | null;
     category?: string | null;
+    photo_url?: string | null;
+    city?: string | null;
+    region?: string | null;
+    country?: string | null;
+    timeline_day?: number | null;
+    timeline_time?: string | null;
+    transport?: AtlasTransportMode | null;
   }>;
   route?: unknown;
   tool_calls_used: string[];
@@ -477,6 +484,14 @@ export async function createImportChatWelcome(
   return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/import-welcome`, {
     deselected_locations: deselectedLocations,
   });
+}
+
+/** Creates the assistant-first opening message for a saved Atlas edit. */
+export async function createAtlasChatWelcome(
+  sessionId: string,
+  places: AtlasChatPresentation['places'],
+): Promise<AtlasChatResponse> {
+  return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/atlas-welcome`, { locations: places });
 }
 
 export async function chatWithAtlas(

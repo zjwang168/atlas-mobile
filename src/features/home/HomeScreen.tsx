@@ -357,6 +357,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         visible={chatVisible}
         conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
         importWelcome={standaloneChatVisible ? null : (activeHistoryItem?.importWelcome ?? null)}
+        atlasWelcome={standaloneChatVisible ? null : (activeHistoryItem?.atlasWelcome ?? null)}
         onPresentationMapOpen={() => setChatMapOpen(true)}
         onPresentationMapReturn={() => setChatMapOpen(false)}
         onPresentationMapClose={() => {
