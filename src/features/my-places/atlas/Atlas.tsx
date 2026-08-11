@@ -11,6 +11,13 @@ import { AtlasCard } from './AtlasCard';
 
 const CATEGORY_PILLS = ['All', 'Restaurants', 'Museums', 'Trails', 'Cafes', 'Landmarks'];
 
+function coverIndex(atlasId: string, count: number): number {
+  if (count <= 1) return 0;
+  let hash = 0;
+  for (const character of atlasId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return hash % count;
+}
+
 function CategoryPillsRow() {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
@@ -90,10 +97,11 @@ export default function Atlas() {
       }
       return [{ id: row.place_id ?? row.external_place_id ?? row.id, latitude: row.latitude, longitude: row.longitude, title: row.place_name ?? saved?.name, description: row.place_subtitle ?? saved?.subtitle }];
     });
+    const photoUrls = rows.map((row) => row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url).filter((url): url is string => Boolean(url));
     return {
       atlas,
       camera: atlasCameraFromStops(stops),
-      coverUri: rows.map((row) => row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url).find(Boolean) ?? null,
+      coverUri: photoUrls[coverIndex(atlas.id, photoUrls.length)] ?? null,
     };
   }), [atlasPlaces, atlases, savedById]);
   const openAtlas = useCallback((atlasId: string, camera?: AtlasCameraPresentation) => {

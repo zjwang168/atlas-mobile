@@ -23,6 +23,11 @@ MAX_AGENT_STEPS = 6
 CHAT_TIMEOUT = 90
 CHAT_PROVIDER = "openai_mango"
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
+NEARBY_DEFAULT_RADIUS_KM = 25
+NEARBY_MAX_RADIUS_KM = 100
+ATLAS_TRANSPORT_MODES = {
+    "walk", "bike", "drive", "taxi", "bus", "coach", "subway", "train", "ferry", "flight",
+}
 _ACTION_MARKER_RE = re.compile(r"\[\[(?:PLACE_ACTION_CARD|CONFIRM_ADD_PLACES):[\s\S]*?\]\]")
 
 
@@ -66,6 +71,24 @@ def _location_context(session: Any) -> str:
     return "\n".join(lines)
 
 
+def _pending_atlas_context(session: Any) -> str:
+    action = getattr(session, "pending_chat_action", None)
+    if not action or action.get("kind") != "create_atlas":
+        return "No Atlas draft is waiting for confirmation."
+    lines = [f"Current Atlas draft: {action.get('title') or 'Untitled'}"]
+    for index, place in enumerate(action.get("places") or [], start=1):
+        schedule = ""
+        if place.get("timeline_time"):
+            day = f"Day {place['timeline_day']} · " if place.get("timeline_day") else ""
+            schedule = f" | {day}{place['timeline_time']}"
+        transport = f" | arrive by {place['transport']}" if place.get("transport") else ""
+        coordinates = ""
+        if place.get("latitude") is not None and place.get("longitude") is not None:
+            coordinates = f" ({place['latitude']}, {place['longitude']})"
+        lines.append(f"{index}. {place.get('name') or 'Unknown place'}{coordinates}{schedule}{transport}")
+    return "\n".join(lines)
+
+
 def _system_prompt(session: Any) -> str:
     title = str(getattr(session, "title", "") or "").strip()
     title_line = f"Chat title: {title}\n" if title else ""
@@ -85,16 +108,34 @@ Tool rules:
 - A nearby request, including gas stations, MUST call find_nearby_places. When
   the user names multiple categories, pass every distinct category in the
   categories array in one call (for example, ["car washes", "gas stations"]).
+  Use a concrete POI query, not a loose description: for example use "dog park"
+  for a park where dogs can be walked. A POI match alone does not prove rules
+  such as leash policy, opening hours, or whether dogs are currently allowed.
 - For pasted notes or an itinerary that the user wants added, call
   extract_pasted_places, then propose_add_places. This is only a proposal.
 - For creating an Atlas, find or extract real places first, then call
   propose_create_atlas. This is only a proposal.
+- If an Atlas draft already exists and the user asks to change its places,
+  order, timing, or transport, call propose_create_atlas again with the
+  complete revised list. Preserve every unchanged place. Put schedule data on
+  each place using timeline_day (integer), timeline_time (human-readable time),
+  and transport (one of walk, bike, drive, taxi, bus, coach, subway, train,
+  ferry, flight). The transport on a place means the leg arriving at that
+  place from the previous stop. Use the editor's whole-hour time format (for
+  example 8am, 1pm, 4pm). Use visit_duration_minutes or
+  travel_duration_minutes when you have a reasonable estimate.
+- When the user gives start or finish constraints, produce a complete ordered
+  schedule and state assumptions in the answer. Do not invent verified opening
+  hours; label unverified durations as estimates.
 - Never claim that a proposal was saved or created until the client confirms it.
 
 {title_line}{location_line}
 
 Explicit places attached to this chat:
-{_location_context(session)}"""
+{_location_context(session)}
+
+Pending Atlas draft:
+{_pending_atlas_context(session)}"""
 
 
 def _history_messages(session: Any) -> list[BaseMessage]:
@@ -111,6 +152,129 @@ def _history_messages(session: Any) -> list[BaseMessage]:
     return messages
 
 
+def _stored_presentation(value: Any) -> dict[str, Any] | None:
+    """Read a persisted presentation from a tool-result payload."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, list):
+        return None
+    for item in value:
+        if not isinstance(item, dict) or item.get("name") != "import_welcome":
+            continue
+        result = item.get("result")
+        if isinstance(result, dict) and isinstance(result.get("presentation"), dict):
+            return result["presentation"]
+    return None
+
+
+def _import_welcome_fallback(session: Any, deselected_names: list[str]) -> str:
+    places = getattr(session, "locations", []) or []
+    count = len(places)
+    names = ", ".join(str(place.get("name") or "a place") for place in places[:3])
+    suffix = f", including {names}" if names else ""
+    skipped = f" I kept {len(deselected_names)} unselected place{'s' if len(deselected_names) != 1 else ''} out of this chat." if deselected_names else ""
+    return (
+        f"Hi, your {count} saved place{'s' if count != 1 else ''}{suffix} are ready to explore on the map below.{skipped}\n\n"
+        "We can:\n- build a practical day-by-day route\n- compare neighborhoods and group nearby stops\n- find a good next stop, meal, or activity nearby\n\n"
+        "What would you like to plan first?"
+    )
+
+
+async def generate_import_welcome(session_id: str, deselected_locations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Create the first assistant turn for a saved import without a fake user turn."""
+    session = conversation_manager.get_session(session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    for message in session.messages:
+        if message.get("role") != "assistant":
+            continue
+        presentation = _stored_presentation(message.get("tool_results"))
+        if presentation:
+            return {
+                "session_id": session.session_id,
+                "conversation_id": session.conversation_id,
+                "response": message.get("content") or _import_welcome_fallback(session, []),
+                "locations": session.locations,
+                "route": session.route,
+                "tool_calls_used": [],
+                "tool_results": message.get("tool_results") or [],
+                "status": "success",
+                "partial": False,
+                "pending_action": None,
+                "presentation": presentation,
+                "place_cards": [],
+                "metrics": {"latency_ms": 0, "tool_call_count": 0},
+            }
+
+    selected = _dedupe_places(getattr(session, "locations", []) or [], limit=50)
+    session.locations = selected
+    deselected_names = [
+        str(place.get("name") or "").strip()[:200]
+        for place in (deselected_locations or [])[:50]
+        if isinstance(place, dict) and str(place.get("name") or "").strip()
+    ]
+    excluded_context = ", ".join(deselected_names[:12]) or "none"
+    prompt = (
+        "The user has just confirmed saving the explicit places attached to this chat. "
+        "Write the first visible assistant message now. Open with a warm, natural greeting, "
+        "briefly acknowledge the saved collection, and say the map below contains those saved places. "
+        f"The user did not select these parsed places: {excluded_context}. "
+        "Do not list unselected places unless it is useful to clarify the scope. "
+        "Offer exactly three concise next things the user can ask or do, as bullets, then ask one inviting question. "
+        "Do not call tools, do not claim any new write, and keep the message under 140 words."
+    )
+    started_at = time.perf_counter()
+    answer = ""
+    try:
+        model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+        model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
+        response = await model.ainvoke([
+            SystemMessage(content=_system_prompt(session)),
+            *_history_messages(session),
+            HumanMessage(content=prompt),
+        ])
+        answer = _content_to_text(getattr(response, "content", response))
+    except Exception as error:
+        print(f"[Chat] Import welcome generation failed: {error}")
+    answer = answer or _import_welcome_fallback(session, deselected_names)
+    presentation = {
+        "kind": "places_map",
+        "title": f"{len(selected)} saved place{'s' if len(selected) != 1 else ''}",
+        "user_location": (
+            {"longitude": session.user_location[0], "latitude": session.user_location[1]}
+            if session.user_location and len(session.user_location) == 2 else None
+        ),
+        "places": selected,
+        "route": None,
+    }
+    session.chat_presentation = presentation
+    tool_results = [{"name": "import_welcome", "result": {"presentation": presentation}}]
+    session.add_message("assistant", answer, tool_results=tool_results)
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception as error:
+        print(f"[Chat] Failed to persist import welcome: {error}")
+    return {
+        "session_id": session.session_id,
+        "conversation_id": session.conversation_id,
+        "response": answer,
+        "locations": session.locations,
+        "route": session.route,
+        "tool_calls_used": [],
+        "tool_results": tool_results,
+        "status": "success",
+        "partial": False,
+        "pending_action": None,
+        "presentation": presentation,
+        "place_cards": [],
+        "metrics": {"latency_ms": round((time.perf_counter() - started_at) * 1000), "tool_call_count": 0},
+    }
+
+
 def _normalize_place(place: dict[str, Any]) -> dict[str, Any] | None:
     try:
         name = str(place.get("name") or "").strip()
@@ -120,6 +284,26 @@ def _normalize_place(place: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not name or not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         return None
+    timeline_day: int | None = None
+    try:
+        if place.get("timeline_day") is not None:
+            timeline_day = max(1, int(place["timeline_day"]))
+    except (TypeError, ValueError):
+        timeline_day = None
+    timeline_time = str(place.get("timeline_time") or "").strip()[:40] or None
+    transport = str(place.get("transport") or "").strip().casefold()
+    if transport not in ATLAS_TRANSPORT_MODES:
+        transport = None
+
+    def optional_minutes(key: str) -> int | None:
+        try:
+            value = place.get(key)
+            if value is None or value == "":
+                return None
+            return max(0, min(int(value), 24 * 60))
+        except (TypeError, ValueError):
+            return None
+
     return {
         "name": name[:200],
         "latitude": latitude,
@@ -133,6 +317,11 @@ def _normalize_place(place: dict[str, Any]) -> dict[str, Any] | None:
         "city": place.get("city"),
         "region": place.get("region"),
         "country": place.get("country"),
+        "timeline_day": timeline_day,
+        "timeline_time": timeline_time,
+        "transport": transport,
+        "visit_duration_minutes": optional_minutes("visit_duration_minutes"),
+        "travel_duration_minutes": optional_minutes("travel_duration_minutes"),
     }
 
 
@@ -179,6 +368,36 @@ def _nearby_distance_km(origin: tuple[float, float], place: dict[str, Any]) -> f
     return 6371 * 2 * math.atan2(math.sqrt(factor), math.sqrt(1 - factor))
 
 
+def _nearby_bbox(longitude: float, latitude: float, radius_km: float) -> str:
+    """Return a Mapbox bbox around the device location for a local search."""
+    latitude_delta = radius_km / 111.32
+    longitude_delta = radius_km / max(111.32 * math.cos(math.radians(latitude)), 0.01)
+    west = max(-180, longitude - longitude_delta)
+    east = min(180, longitude + longitude_delta)
+    south = max(-90, latitude - latitude_delta)
+    north = min(90, latitude + latitude_delta)
+    return f"{west:.6f},{south:.6f},{east:.6f},{north:.6f}"
+
+
+def _nearby_search_query(category: str) -> str:
+    """Translate common conversational requests into Mapbox-friendly POI terms."""
+    normalized = " ".join(category.casefold().split())
+    if (
+        "dog park" in normalized
+        or "dog-friendly park" in normalized
+        or "dog friendly park" in normalized
+        or "park for dog" in normalized
+        or "遛狗" in category
+        or ("狗" in category and "公园" in category)
+    ):
+        return "dog park"
+    if "car wash" in normalized or "洗车" in category:
+        return "car wash"
+    if "gas station" in normalized or "加油站" in category:
+        return "gas station"
+    return category
+
+
 def _nearby_title(categories: list[str]) -> str:
     if not categories:
         return "Nearby places"
@@ -220,8 +439,9 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         query: str | None = None,
         limit_per_category: int | None = None,
         limit: int | None = None,
+        radius_km: int | None = None,
     ) -> dict[str, Any]:
-        """Find real nearby places for one or more categories using device GPS."""
+        """Find POIs within a local GPS radius, never returning distant global matches."""
         current = getattr(session, "user_location", None)
         if not current or len(current) != 2:
             return {"error": "Current device location is unavailable."}
@@ -232,20 +452,37 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         if not requested_categories:
             return {"error": "At least one nearby place category is required."}
         category_limit = max(1, min(int(limit_per_category or limit or 3), 8))
+        search_radius_km = max(1, min(int(radius_km or NEARBY_DEFAULT_RADIUS_KM), NEARBY_MAX_RADIUS_KM))
+        bbox = _nearby_bbox(longitude, latitude, search_radius_km)
+        candidate_limit = min(10, max(category_limit * 2, 6))
 
         async def search_category(category: str) -> tuple[str, list[dict[str, Any]]]:
             session_token = str(uuid.uuid4())
+            search_query = _nearby_search_query(category)
             suggestions = await place_search_service.suggest(
-                query=category, session_token=session_token, proximity=f"{longitude},{latitude}", limit=category_limit,
+                query=search_query,
+                session_token=session_token,
+                proximity=f"{longitude},{latitude}",
+                bbox=bbox,
+                limit=candidate_limit,
             )
             retrieved = await asyncio.gather(*[
                 place_search_service.retrieve(item["external_id"], session_token)
-                for item in suggestions[:category_limit]
+                for item in suggestions[:candidate_limit]
             ])
-            places = _dedupe_places(
+            candidates = _dedupe_places(
                 [place for result in retrieved for place in result],
-                limit=category_limit,
+                limit=candidate_limit,
             )
+            # Mapbox's proximity is only a ranking preference. Keep this hard
+            # check so an ambiguous category can never zoom a nearby map out to
+            # unrelated places elsewhere in the world.
+            places = [
+                place for place in candidates
+                if _nearby_distance_km((longitude, latitude), place) <= search_radius_km
+            ]
+            places.sort(key=lambda place: _nearby_distance_km((longitude, latitude), place))
+            places = places[:category_limit]
             for place in places:
                 place["requested_category"] = category
             return category, places
@@ -255,11 +492,15 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             return_exceptions=True,
         )
         groups = state.setdefault("nearby_groups", {})
+        not_found_categories: list[str] = []
         for result in searched:
             if isinstance(result, Exception):
                 continue
             category, places = result
-            groups[category] = places
+            if places:
+                groups[category] = places
+            else:
+                not_found_categories.append(category)
 
         merged: list[dict[str, Any]] = []
         seen: set[tuple[str, int, int]] = set()
@@ -272,7 +513,12 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         places = sorted(merged, key=lambda place: _nearby_distance_km((longitude, latitude), place))[:24]
         displayed_categories = list(groups.keys())
         if not places:
-            return {"categories": requested_categories, "places": [], "error": "No nearby places were found."}
+            return {
+                "categories": requested_categories,
+                "places": [],
+                "radius_km": search_radius_km,
+                "error": f"No matching places were found within {search_radius_km} km.",
+            }
         route = await _road_route([(longitude, latitude), (places[0]["longitude"], places[0]["latitude"])])
         session.locations = places
         session.route = route
@@ -288,6 +534,8 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             "groups": [{"category": category, "places": category_places} for category, category_places in groups.items()],
             "places": places,
             "route": route,
+            "radius_km": search_radius_km,
+            "not_found_categories": not_found_categories,
         }
 
     @tool
@@ -322,16 +570,35 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         return {"proposal": action}
 
     @tool
-    async def propose_create_atlas(title: str, places: list[dict[str, Any]]) -> dict[str, Any]:
-        """Propose an Atlas draft with geocoded places. This never creates an Atlas."""
+    async def propose_create_atlas(
+        title: str,
+        places: list[dict[str, Any]],
+        planning_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Propose or revise an Atlas draft with ordered, geocoded places.
+
+        Each place may include timeline_day, timeline_time, transport,
+        visit_duration_minutes, and travel_duration_minutes. This never writes
+        an Atlas; the client must confirm the proposal first.
+        """
         normalized = _dedupe_places(places)
         clean_title = " ".join(title.split())[:100]
         if not clean_title or not normalized:
             return {"error": "An Atlas draft needs a title and at least one geocoded place."}
-        action = {"action_id": str(uuid.uuid4()), "kind": "create_atlas", "title": clean_title, "places": normalized}
+        action = {
+            "action_id": str(uuid.uuid4()), "kind": "create_atlas", "title": clean_title,
+            "places": normalized, "planning_note": " ".join((planning_note or "").split())[:500] or None,
+        }
+        # The next user turn may refine this proposal. Preserve the full,
+        # geocoded draft in the regular chat context so the model can submit a
+        # revised complete itinerary without re-geocoding unchanged stops.
+        session.locations = normalized
         session.pending_chat_action = action
         state["pending_action"] = action
-        state["presentation"] = {"kind": "atlas_draft", "title": clean_title, "places": normalized, "route": session.route}
+        state["presentation"] = {
+            "kind": "atlas_draft", "title": clean_title, "places": normalized,
+            "planning_note": action["planning_note"], "route": session.route,
+        }
         return {"proposal": action}
 
     return [find_nearby_places, extract_pasted_places, propose_add_places, propose_create_atlas]

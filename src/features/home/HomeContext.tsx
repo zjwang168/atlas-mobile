@@ -30,6 +30,11 @@ export type ChatHistoryItem = {
       'reddit_links' | 'any_links' | 'link' | 'text'. Stored in
       conversations.source_type. */
   sourceType?: string;
+  /** Present only while opening a newly saved import. The first assistant
+      message is persisted by the backend; this context is not history data. */
+  importWelcome?: {
+    deselectedPlaces: ParsedPlace[];
+  };
 };
 
 const MAX_CHAT_HISTORY = 50;

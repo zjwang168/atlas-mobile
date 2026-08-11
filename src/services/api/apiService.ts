@@ -1,6 +1,8 @@
 import { GeocodedLocation, ParseResult, PlaceSuggestion } from '@/types/route';
 import { supabase } from '../supabase/supabaseClient';
 import Constants from 'expo-constants';
+import type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
+export type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
 
 /**
  * Base URL for the FastAPI backend.
@@ -125,7 +127,13 @@ export type AtlasChatResponse = {
       city?: string | null;
       region?: string | null;
       country?: string | null;
+      timeline_day?: number | null;
+      timeline_time?: string | null;
+      transport?: AtlasTransportMode | null;
+      visit_duration_minutes?: number | null;
+      travel_duration_minutes?: number | null;
     }>;
+    planning_note?: string | null;
   } | null;
   presentation?: AtlasChatPresentation | null;
   locations: Array<{
@@ -165,7 +173,13 @@ export type AtlasChatPresentation = {
     city?: string | null;
     region?: string | null;
     country?: string | null;
+    timeline_day?: number | null;
+    timeline_time?: string | null;
+    transport?: AtlasTransportMode | null;
+    visit_duration_minutes?: number | null;
+    travel_duration_minutes?: number | null;
   }>;
+  planning_note?: string | null;
   route?: {
     route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
     distance_km?: number;
@@ -443,6 +457,26 @@ export async function createChatSession(payload?: {
   user_location?: [number, number];
 }): Promise<CreateSessionResponse> {
   return postJson<CreateSessionResponse>('/sessions', payload ?? {});
+}
+
+/**
+ * Creates the assistant-first opening for an import after the user has saved
+ * their selected places. The excluded places are context only; they are never
+ * attached to the chat map or persisted as active conversation locations.
+ */
+export async function createImportChatWelcome(
+  sessionId: string,
+  deselectedLocations: Array<{
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+    category?: string;
+  }>,
+): Promise<AtlasChatResponse> {
+  return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/import-welcome`, {
+    deselected_locations: deselectedLocations,
+  });
 }
 
 export async function chatWithAtlas(

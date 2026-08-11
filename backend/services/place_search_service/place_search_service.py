@@ -67,6 +67,17 @@ def _round_proximity(proximity: Optional[str]) -> str:
     return f"{lng:.2f},{lat:.2f}"
 
 
+def _round_bbox(bbox: Optional[str]) -> str:
+    """Bucket a bounding box for the short-lived suggestion cache."""
+    if not bbox:
+        return "-"
+    try:
+        west, south, east, north = (float(part) for part in bbox.split(","))
+    except (TypeError, ValueError):
+        return "-"
+    return f"{west:.2f},{south:.2f},{east:.2f},{north:.2f}"
+
+
 def _first(values: Any) -> Optional[str]:
     if isinstance(values, list) and values:
         return str(values[0])
@@ -181,6 +192,7 @@ async def suggest(
     language: str = "en",
     country: Optional[str] = None,
     types: Optional[str] = None,
+    bbox: Optional[str] = None,
 ) -> list[dict]:
     """Return search candidates for `query`. None of them carry coordinates."""
     normalized = " ".join(query.split()).lower()
@@ -188,7 +200,7 @@ async def suggest(
 
     cache_key = (
         f"search:suggest:{language}:{country or '-'}:{types or '-'}:{limit}:"
-        f"{_round_proximity(proximity)}:{normalized}"
+        f"{_round_proximity(proximity)}:{_round_bbox(bbox)}:{normalized}"
     )
     cached = search_cache.get(cache_key)
     if cached is not None:
@@ -206,6 +218,8 @@ async def suggest(
         params["country"] = country
     if types:
         params["types"] = types
+    if bbox:
+        params["bbox"] = bbox
 
     payload = await _get_json(SUGGEST_URL, params)
     suggestions = [

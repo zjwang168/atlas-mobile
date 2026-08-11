@@ -1,6 +1,7 @@
 import { Text } from '@/components/ui/text';
 import type { AtlasCameraPresentation } from '@/features/map/atlasCamera';
 import { typography } from '@/theme/typography';
+import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { memo } from 'react';
 import { Image, Pressable, View } from 'react-native';
 
@@ -38,7 +39,7 @@ export const AtlasCard = memo(function AtlasCard({ atlasId, emoji, title, coverU
       >
         {coverUri ? <Image source={{ uri: coverUri }} style={{ position: 'absolute', width: '100%', height: '100%' }} resizeMode="cover" /> : null}
         {coverUri ? <View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.2)' }} /> : null}
-        {coverUri ? <View style={{ position: 'absolute', right: 9, bottom: 9, width: 30, height: 30, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.9)', alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontSize: 17, lineHeight: 20 }}>{emoji}</Text></View> : <Text style={{ fontSize: 48, lineHeight: 56, textAlign: 'center' }}>{emoji}</Text>}
+        {coverUri ? <View style={{ position: 'absolute', right: 9, bottom: 9, width: 30, height: 30, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.92)', alignItems: 'center', justifyContent: 'center' }}><MapTrifoldIcon size={17} color="#252525" weight="bold" /></View> : <Text style={{ fontSize: 48, lineHeight: 56, textAlign: 'center' }}>{emoji}</Text>}
       </View>
       <Text
         numberOfLines={2}

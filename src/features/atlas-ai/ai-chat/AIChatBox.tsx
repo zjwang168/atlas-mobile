@@ -52,11 +52,13 @@ import {
   chatWithAtlasStream,
   confirmAtlasChatAction,
   createChatSession,
+  createImportChatWelcome,
   fetchConversation,
   requestAtlasRoute,
   type AtlasChatPresentation,
 } from '@/services/api/apiService';
-import { addAtlasOwnedPlaces } from '@/services/atlas/atlasPlacesService';
+import { addAtlasOwnedPlaces, queueAtlasPlacePhotoBackfill } from '@/services/atlas/atlasPlacesService';
+import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas } from '@/services/atlas/atlasService';
 import { isSamePlace, queueSavedPlacePhotoBackfill, savePlaces } from '@/services/place/placeService';
 import type { ParsedPlace } from '@/services/import/importService';
@@ -85,6 +87,11 @@ const STARTER_PROMPTS = [
   'Best date-night viewpoints',
   'A hidden gem tourists don’t know',
 ] as const;
+const IMPORT_STARTER_PROMPTS = [
+  'Build a day plan around these saved places',
+  'Group these places by neighborhood',
+  'What should I add nearby?',
+] as const;
 
 type Message = {
   id: string;
@@ -94,11 +101,13 @@ type Message = {
   thinkingStartedAt?: number;
   thoughtDurationSeconds?: number;
   presentation?: AtlasChatPresentation | null;
+  starterPrompts?: readonly string[];
   pendingAction?: {
     action_id: string;
     kind: 'save_places' | 'create_atlas';
     title: string;
     places: AtlasChatPresentation['places'];
+    planning_note?: string | null;
   } | null;
 };
 
@@ -154,6 +163,11 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
     const result = toolResult.result;
     if (!result || typeof result !== 'object') continue;
     const data = result as Record<string, unknown>;
+    const presentation = data.presentation;
+    if (presentation && typeof presentation === 'object') {
+      const candidate = presentation as AtlasChatPresentation;
+      if (Array.isArray(candidate.places) && typeof candidate.kind === 'string') return candidate;
+    }
     const proposal = data.proposal;
     if (proposal && typeof proposal === 'object') {
       const action = proposal as Record<string, unknown>;
@@ -162,6 +176,7 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
           kind: action.kind === 'create_atlas' ? 'atlas_draft' : 'places_map',
           title: typeof action.title === 'string' ? action.title : 'Map result',
           places: action.places as AtlasChatPresentation['places'],
+          planning_note: typeof action.planning_note === 'string' ? action.planning_note : null,
           route: null,
         };
       }
@@ -270,6 +285,7 @@ type AIChatBoxProps = {
   title?: string;
   visible?: boolean;
   conversationId?: string | null;
+  importWelcome?: { deselectedPlaces: ParsedPlace[] } | null;
   showLanding?: boolean;
   onPresentationMapOpen?: () => void;
   onPresentationMapReturn?: () => void;
@@ -353,6 +369,7 @@ export default function AIChatBox({
   title,
   visible = true,
   conversationId = null,
+  importWelcome = null,
   showLanding = false,
   onPresentationMapOpen,
   onPresentationMapReturn,
@@ -572,18 +589,81 @@ export default function AIChatBox({
                 message.content.trim().startsWith('CONFIRM_ADD_PLACES ')
               ),
           )
-          .map((message, index) => ({
-            id: `${message.role}_${index}_${Date.now()}`,
-            role: message.role === 'user' ? 'user' : 'assistant',
-            text: message.content,
-            presentation: message.role === 'assistant'
+          .map((message, index) => {
+            const presentation = message.role === 'assistant'
               ? restorePresentationFromToolResults(message.tool_results)
-              : null,
-          }));
+              : null;
+            const isImportWelcome = Boolean(
+              presentation && parseStoredToolResults(message.tool_results)
+                .some((result) => result.name === 'import_welcome'),
+            );
+            return {
+              id: `${message.role}_${index}_${Date.now()}`,
+              role: message.role === 'user' ? 'user' : 'assistant',
+              text: message.content,
+              presentation,
+              starterPrompts: isImportWelcome ? IMPORT_STARTER_PROMPTS : undefined,
+            };
+          });
 
         setSessionId(session.session_id);
         activeConversationIdRef.current = detail.session.conversation_id || conversationId;
-        setMessages(restoredMessages);
+        if (importWelcome && restoredMessages.length === 0) {
+          setPending(true);
+          setMessages([{
+            id: `import_welcome_${Date.now()}`,
+            role: 'assistant',
+            text: '',
+            streaming: true,
+            thinkingStartedAt: Date.now(),
+          }]);
+          try {
+            const welcome = await createImportChatWelcome(
+              session.session_id,
+              importWelcome.deselectedPlaces.map((place) => ({
+                name: place.name,
+                latitude: place.latitude,
+                longitude: place.longitude,
+                full_address: place.subtitle,
+                category: place.type || 'Place',
+              })),
+            );
+            if (cancelled) return;
+            setMessages([{
+              id: `assistant_import_welcome_${Date.now()}`,
+              role: 'assistant',
+              text: welcome.response,
+              presentation: welcome.presentation,
+              starterPrompts: IMPORT_STARTER_PROMPTS,
+            }]);
+          } catch (error) {
+            if (cancelled) return;
+            console.warn('[AIChatBox] import welcome failed:', error);
+            setMessages([{
+              id: `assistant_import_welcome_error_${Date.now()}`,
+              role: 'assistant',
+              text: 'Hi, your saved places are ready to explore. I can help you build a route, group nearby stops, or find something to add next.',
+              presentation: {
+                kind: 'places_map',
+                title: `${places.length} saved ${places.length === 1 ? 'place' : 'places'}`,
+                places: places.map((place) => ({
+                  name: place.name,
+                  latitude: place.latitude,
+                  longitude: place.longitude,
+                  full_address: place.subtitle,
+                  description: place.subtitle,
+                  category: place.type || 'Place',
+                })),
+                route: null,
+              },
+              starterPrompts: IMPORT_STARTER_PROMPTS,
+            }]);
+          } finally {
+            if (!cancelled) setPending(false);
+          }
+        } else {
+          setMessages(restoredMessages);
+        }
         hydratedConversationIdRef.current = conversationId;
       } catch (error) {
         console.warn('[AIChatBox] hydrateFromConversation failed:', error);
@@ -595,7 +675,7 @@ export default function AIChatBox({
     return () => {
       cancelled = true;
     };
-  }, [conversationId, places, title]);
+  }, [conversationId, importWelcome, places, title]);
 
   const handleSend = async () => {
     const text = inputText.trim();
@@ -633,7 +713,12 @@ export default function AIChatBox({
       setMessages((current) => current.map((message) => (
         message.id === assistantMessageId
           ? { ...message, presentation: result.presentation, pendingAction: result.pending_action }
-          : message
+          // The backend has one pending confirmation per chat. A revised Atlas
+          // draft replaces the older proposal, so its old card must not remain
+          // actionable and accidentally create the stale itinerary.
+          : result.pending_action && message.pendingAction
+            ? { ...message, pendingAction: null }
+            : message
       )));
       const persistedConversationId = result.conversation_id ?? conversationIdRef.current;
       if (persistedConversationId && !historyItemIdRef.current) {
@@ -957,7 +1042,7 @@ export default function AIChatBox({
       let createdAtlasId: string | null = null;
       if (accepted && action.kind === 'create_atlas') {
         const atlas = await createAtlas(action.title);
-        await addAtlasOwnedPlaces(atlas.id, action.places.map((place, index) => ({
+        const atlasRows = await addAtlasOwnedPlaces(atlas.id, action.places.map((place, index) => ({
           id: place.external_id || 'chat-atlas-place-' + index,
           external_place_id: place.external_id || 'chat-atlas-place-' + index,
           name: place.name,
@@ -965,10 +1050,14 @@ export default function AIChatBox({
           latitude: place.latitude,
           longitude: place.longitude,
           photo_url: place.photo_url || null,
+          note: encodeAtlasPlaceMetadata(null, place.transport || null),
           city: place.city || null,
           region: place.region || null,
           country: place.country || null,
+          timeline_day: place.timeline_day ?? null,
+          timeline_time: place.timeline_time ?? null,
         })));
+        atlasRows.forEach(queueAtlasPlacePhotoBackfill);
         createdAtlasId = atlas.id;
       }
       await confirmAtlasChatAction(sessionId, action.action_id, accepted, {
@@ -1056,6 +1145,25 @@ export default function AIChatBox({
                   onConfirm={() => { void resolveAction(item.id, true); }}
                   onCancel={() => { void resolveAction(item.id, false); }}
                 />
+              ) : null}
+              {item.starterPrompts?.length ? (
+                <View style={styles.importStarterPrompts}>
+                  {item.starterPrompts.map((prompt) => (
+                    <Pressable
+                      key={prompt}
+                      accessibilityRole="button"
+                      accessibilityLabel={prompt}
+                      onPress={() => {
+                        setInputText(prompt);
+                        inputRef.current?.focus();
+                      }}
+                      style={({ pressed }) => [styles.importStarterPrompt, pressed && styles.importStarterPromptPressed]}
+                    >
+                      <Text style={styles.importStarterPromptText}>{prompt}</Text>
+                      <ArrowUpIcon size={14} weight="bold" color="#0C8149" />
+                    </Pressable>
+                  ))}
+                </View>
               ) : null}
             </View>
             {!item.streaming ? <View style={styles.feedbackBar}>
@@ -1232,7 +1340,10 @@ export default function AIChatBox({
               styles.listContent,
               {
                 paddingTop: headerOverlayHeight - 1,
-                paddingBottom: composerOverlayHeight,
+                // Keep the final assistant line above the floating composer.
+                // The extra breathing room also covers the composer shadow and
+                // the keyboard transition on smaller screens.
+                paddingBottom: composerOverlayHeight + 64,
               },
             ]}
             contentInsetAdjustmentBehavior="never"
@@ -1241,7 +1352,7 @@ export default function AIChatBox({
             onContentSizeChange={scrollToLatest}
             scrollIndicatorInsets={{
               top: headerOverlayHeight,
-              bottom: composerHeight + composerBottom,
+              bottom: composerHeight + composerBottom + 64,
             }}
             showsVerticalScrollIndicator={false}
           />
@@ -1646,6 +1757,10 @@ const styles = StyleSheet.create({
     opacity: 0.45,
     transform: [{ scale: 0.94 }],
   },
+  importStarterPrompts: { marginTop: 12, gap: 8 },
+  importStarterPrompt: { minHeight: 38, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: '#CDE9D9', backgroundColor: '#F4FCF7', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  importStarterPromptPressed: { backgroundColor: '#E6F8EC' },
+  importStarterPromptText: { flex: 1, color: '#12613B', fontSize: 13, lineHeight: 18, fontWeight: '700' },
   messageText: {
     fontSize: 16,
     lineHeight: 24,
