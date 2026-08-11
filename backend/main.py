@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import base64
+import json
 from collections import OrderedDict
 from typing import Optional
 import httpx
@@ -50,6 +51,7 @@ logging.getLogger("atlas").setLevel(logging.INFO)
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.services import progress
@@ -800,6 +802,45 @@ async def chat(req: ChatRequest) -> dict:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat error: {e}")
+
+
+@app.post("/chat/stream")
+async def stream_chat(req: ChatRequest) -> StreamingResponse:
+    """Stream display-safe chat deltas as newline-delimited JSON."""
+    try:
+        from backend.langgraph.chat_agent import stream_chat as run_stream_chat
+
+        async def _recover_session(session_key: str, conversation_key: str | None = None):
+            session = conversation_manager.get_session(session_key)
+            if session:
+                return session
+            session = await conversation_manager.load_conversation(session_key)
+            if session:
+                return session
+            if conversation_key:
+                return await conversation_manager.load_conversation(conversation_key)
+            return None
+
+        session = await _recover_session(req.session_id, req.conversation_id)
+        if not session:
+            raise ValueError(f"Session {req.session_id} not found")
+
+        async def event_stream():
+            try:
+                async for event in run_stream_chat(session.session_id, req.message):
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            except ValueError as error:
+                yield json.dumps({"type": "error", "message": str(error)}) + "\n"
+            except Exception:
+                yield json.dumps({"type": "error", "message": "Chat streaming failed. Please try again."}) + "\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.post("/atlas_ai/discover", response_model=ParseResponse,

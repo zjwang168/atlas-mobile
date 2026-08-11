@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from typing import Any
+from typing import Any, AsyncIterator
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -25,6 +25,8 @@ from backend.services.conversation_manager import conversation_manager
 
 MAX_CONTEXT_MESSAGES = 20
 CHAT_TIMEOUT = 90
+CHAT_PROVIDER = "openai_mango"
+DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
 # Historical conversations may contain the old product protocol. Do not feed
 # protocol markers back to the model or render them as part of the baseline
@@ -111,6 +113,92 @@ def _content_to_text(content: Any) -> str:
     return str(content or "").strip()
 
 
+def _chunk_to_text(chunk: Any) -> str:
+    """Return the incremental text carried by one LangChain stream chunk."""
+    content = getattr(chunk, "content", chunk)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+        return "".join(parts)
+    return ""
+
+
+async def stream_chat(session_id: str, user_message: str) -> AsyncIterator[dict]:
+    """Stream one plain chat response while preserving the final transcript.
+
+    Each ``token`` event contains a display-safe model delta. The final
+    ``complete`` event is emitted only after the assembled assistant message
+    has been persisted, so reconnecting clients always see one complete turn.
+    """
+    session = conversation_manager.get_session(session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    message = (user_message or "").strip()
+    if not message:
+        raise ValueError("Message cannot be empty")
+
+    session.add_message("user", message)
+    model_name = os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+    model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
+    prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session))]
+    prompt.extend(_history_messages(session))
+    answer_parts: list[str] = []
+    status = "success"
+    partial = False
+
+    try:
+        async with asyncio.timeout(CHAT_TIMEOUT):
+            async for chunk in model.astream(prompt):
+                delta = _chunk_to_text(chunk)
+                if not delta:
+                    continue
+                answer_parts.append(delta)
+                yield {"type": "token", "delta": delta}
+    except TimeoutError:
+        status = "timeout"
+        partial = True
+    except Exception as error:
+        status = "error"
+        partial = True
+        if not answer_parts:
+            yield {"type": "error", "message": f"Sorry, I couldn't answer that right now: {error}"}
+
+    answer = "".join(answer_parts).strip()
+    if not answer:
+        answer = (
+            "The response timed out. Please try again."
+            if status == "timeout"
+            else "I don't have a response for that yet."
+        )
+        yield {"type": "token", "delta": answer}
+
+    session.add_message("assistant", answer)
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception as error:
+        print(f"[Chat] Failed to persist conversation: {error}")
+
+    yield {
+        "type": "complete",
+        "session_id": session_id,
+        "response": answer,
+        "locations": session.locations,
+        "route": session.route,
+        "tool_calls_used": [],
+        "status": status,
+        "partial": partial,
+        "pending_action": None,
+        "place_cards": [],
+    }
+
+
 async def run_chat(session_id: str, user_message: str) -> dict:
     """Answer one message with one ordinary chat-model invocation.
 
@@ -127,9 +215,8 @@ async def run_chat(session_id: str, user_message: str) -> dict:
         raise ValueError("Message cannot be empty")
 
     session.add_message("user", message)
-    provider = os.environ.get("CHAT_PROVIDER", "deepseek")
-    model_name = os.environ.get("CHAT_MODEL", "deepseek-chat")
-    model = get_chat_model(provider, model_name, temperature=0.3)
+    model_name = os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+    model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session))]
     prompt.extend(_history_messages(session))
 

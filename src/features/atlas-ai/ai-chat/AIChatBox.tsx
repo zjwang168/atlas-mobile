@@ -34,6 +34,7 @@ import {
 import Markdown from 'react-native-markdown-display';
 import Animated, {
   LinearTransition,
+  FadeIn,
   SlideInDown,
   useReducedMotion,
 } from 'react-native-reanimated';
@@ -43,7 +44,7 @@ import { Text } from '@/components/ui/text';
 import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import TopBlurFade from '@/components/ui/top-blur-fade';
-import { chatWithAtlas, createChatSession, fetchConversation } from '@/services/api/apiService';
+import { chatWithAtlasStream, createChatSession, fetchConversation } from '@/services/api/apiService';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
 
@@ -75,21 +76,33 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  streaming?: boolean;
 };
 
 type MessageFeedback = 'up' | 'down';
-
-function normalizeAssistantText(text: string): string {
-  const cleaned = text.trim();
-  if (!cleaned) return 'No response returned.';
-  return cleaned;
-}
 
 function stripActionMarkers(text: string): string {
   return text
     .replace(/\[\[PLACE_ACTION_CARD:[\s\S]*?\]\]/g, '')
     .replace(/\[\[CONFIRM_ADD_PLACES:[\s\S]*?\]\]/g, '')
     .trim();
+}
+
+function StreamingAssistantText({ text, reducedMotion }: { text: string; reducedMotion: boolean }) {
+  const displayTokens = text.match(/\S+\s*|\s+/g) ?? [];
+
+  return (
+    <Text style={styles.streamingResponseText}>
+      {displayTokens.map((token, index) => (
+        <Animated.Text
+          key={`${index}:${token}`}
+          entering={reducedMotion ? undefined : FadeIn.duration(180)}
+        >
+          {token}
+        </Animated.Text>
+      ))}
+    </Text>
+  );
 }
 
 
@@ -212,6 +225,61 @@ export default function AIChatBox({
   const hydratedConversationIdRef = useRef<string | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const lastWelcomeKeyRef = useRef<string>('');
+  const streamQueueRef = useRef<string[]>([]);
+  const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamingMessageIdRef = useRef<string | null>(null);
+  const streamCompletionRef = useRef<(() => void) | null>(null);
+  const streamedTextRef = useRef(false);
+
+  const finishDisplayedStream = () => {
+    const messageId = streamingMessageIdRef.current;
+    if (messageId) {
+      setMessages((current) => current.map((message) => (
+        message.id === messageId ? { ...message, streaming: false } : message
+      )));
+    }
+    streamCompletionRef.current = null;
+    streamingMessageIdRef.current = null;
+    setPending(false);
+  };
+
+  const flushStreamQueue = () => {
+    const messageId = streamingMessageIdRef.current;
+    const nextToken = streamQueueRef.current.shift();
+    if (messageId && nextToken) {
+      setMessages((current) => current.map((message) => (
+        message.id === messageId ? { ...message, text: `${message.text}${nextToken}` } : message
+      )));
+      return;
+    }
+
+    if (streamTimerRef.current) {
+      clearInterval(streamTimerRef.current);
+      streamTimerRef.current = null;
+    }
+    const complete = streamCompletionRef.current;
+    if (complete) complete();
+  };
+
+  const enqueueStreamDelta = (delta: string) => {
+    const displayTokens = delta.match(/\S+\s*|\s+/g) ?? [delta];
+    streamQueueRef.current.push(...displayTokens);
+    streamedTextRef.current = true;
+    if (!streamTimerRef.current) {
+      streamTimerRef.current = setInterval(flushStreamQueue, reducedMotion ? 0 : 30);
+    }
+  };
+
+  const completeStreamAfterDisplay = () => {
+    streamCompletionRef.current = finishDisplayedStream;
+    if (!streamTimerRef.current && streamQueueRef.current.length === 0) {
+      finishDisplayedStream();
+    }
+  };
+
+  useEffect(() => () => {
+    if (streamTimerRef.current) clearInterval(streamTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -346,35 +414,33 @@ export default function AIChatBox({
     const text = inputText.trim();
     if (!text || pending) return;
 
-    setMessages((prev) => [...prev, { id: `user_${Date.now()}`, role: 'user', text }]);
+    const assistantMessageId = `ai_${Date.now()}`;
+    streamQueueRef.current = [];
+    streamedTextRef.current = false;
+    streamingMessageIdRef.current = assistantMessageId;
+
+    setMessages((prev) => [
+      ...prev,
+      { id: `user_${Date.now()}`, role: 'user', text },
+      { id: assistantMessageId, role: 'assistant', text: '', streaming: true },
+    ]);
     setInputText('');
     setPending(true);
 
     try {
       const currentSessionId = await ensureSession();
-      const response = await chatWithAtlas(currentSessionId, text, activeConversationIdRef.current);
-      const assistantText = normalizeAssistantText(response.response || '');
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai_${Date.now()}`,
-          role: 'assistant',
-          text: assistantText,
-        },
-      ]);
-
+      await chatWithAtlasStream(
+        currentSessionId,
+        text,
+        { onToken: enqueueStreamDelta },
+        activeConversationIdRef.current,
+      );
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai_${Date.now()}`,
-          role: 'assistant',
-          text: 'I couldn\'t respond just now. Please try sending that again in a moment.',
-        },
-      ]);
+      if (!streamedTextRef.current) {
+        enqueueStreamDelta('I couldn\'t respond just now. Please try sending that again in a moment.');
+      }
     } finally {
-      setPending(false);
+      completeStreamAfterDisplay();
     }
   };
 
@@ -420,9 +486,13 @@ export default function AIChatBox({
           <View style={styles.assistantContent}>
             <View style={styles.assistantMessageText}>
               <Text style={styles.assistantLabel}>Atlas AI</Text>
-              {displayText ? <Markdown style={markdownStyles}>{displayText}</Markdown> : null}
+              {item.streaming ? (
+                <StreamingAssistantText text={displayText} reducedMotion={reducedMotion} />
+              ) : displayText ? (
+                <Markdown style={markdownStyles}>{displayText}</Markdown>
+              ) : null}
             </View>
-            <View style={styles.feedbackBar}>
+            {!item.streaming ? <View style={styles.feedbackBar}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Helpful response"
@@ -488,7 +558,7 @@ export default function AIChatBox({
               >
                 <DotsThreeIcon size={16} weight="bold" color="#717171" />
               </Pressable>
-            </View>
+            </View> : null}
           </View>
         )}
       </View>
@@ -962,6 +1032,13 @@ const styles = StyleSheet.create({
   },
   assistantLabel: {
     color: '#717171',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+    letterSpacing: -0.16,
+  },
+  streamingResponseText: {
+    color: '#000000',
     fontSize: 16,
     lineHeight: 24,
     fontWeight: '400',

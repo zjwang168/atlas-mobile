@@ -135,6 +135,15 @@ export type AtlasChatResponse = {
   partial: boolean;
 };
 
+type AtlasChatStreamEvent =
+  | { type: 'token'; delta: string }
+  | { type: 'complete' } & AtlasChatResponse
+  | { type: 'error'; message: string };
+
+type AtlasChatStreamHandlers = {
+  onToken: (delta: string) => void;
+};
+
 export type AtlasRouteResponse = {
   route: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
   distance_km: number;
@@ -402,6 +411,81 @@ export async function chatWithAtlas(
     message,
     conversation_id: conversationId ?? undefined,
   });
+}
+
+/**
+ * Read the chat response as NDJSON so native clients can render model output
+ * immediately instead of waiting for the final assistant message.
+ */
+export async function chatWithAtlasStream(
+  sessionId: string,
+  message: string,
+  handlers: AtlasChatStreamHandlers,
+  conversationId?: string | null,
+): Promise<AtlasChatResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/x-ndjson',
+        'Content-Type': 'application/json',
+        ...(await authHeaders()),
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+        conversation_id: conversationId ?? undefined,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`API error (${response.status}): ${errorBody || response.statusText}`);
+    }
+    if (!response.body) throw new Error('Streaming is not available on this device.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed: AtlasChatResponse | null = null;
+
+    const consumeLine = (line: string) => {
+      if (!line.trim()) return;
+      const event = JSON.parse(line) as AtlasChatStreamEvent;
+      if (event.type === 'token') {
+        handlers.onToken(event.delta);
+      } else if (event.type === 'complete') {
+        completed = event;
+      } else {
+        throw new Error(event.message);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      lines.forEach(consumeLine);
+      if (done) break;
+    }
+    buffer += decoder.decode();
+    consumeLine(buffer);
+
+    if (!completed) throw new Error('The chat stream ended before completing.');
+    return completed;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`请求超时：后端处理超过 ${REQUEST_TIMEOUT_MS / 1000}s，请稍后再试`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function discoverAtlasPlaces(
