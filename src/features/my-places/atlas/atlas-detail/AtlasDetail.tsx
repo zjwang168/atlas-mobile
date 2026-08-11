@@ -382,6 +382,22 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     setEditing(false);
   }, [atlas?.id, atlasId, setAtlasMapState]);
 
+  const handleEditorClosed = useCallback(() => {
+    // Cancel discards the editor camera and returns directly to the durable
+    // orange-pin overview. AtlasBuilder preserves this handoff while unmounting.
+    const nextState: AtlasMapState = {
+      ...presentation,
+      cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
+      cameraKey: `atlas-cancel-${atlas?.id ?? atlasId}-${Date.now()}`,
+      cameraAnimationDurationMs: 0,
+      routeGeoJSON: displayedRoute ?? undefined,
+    };
+    latestAtlasMapStateRef.current = nextState;
+    setAtlasMapState(nextState);
+    setSelectedPlaceId(null);
+    setEditing(false);
+  }, [atlas?.id, atlasId, displayedRoute, presentation, setAtlasMapState]);
+
   const toggleRoute = useCallback(async () => {
     if (!atlas || routeBusy || routeInFlightRef.current || items.length < 2) return;
     if (displayedRoute) {
@@ -541,7 +557,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
-    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => handleEditorSaved(mapView as { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature } | undefined)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
+    {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={handleEditorClosed} onSaved={(_, _askAI, mapView) => handleEditorSaved(mapView as { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature } | undefined)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
       <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} distanceLabel={activeRouteDistanceLabels[index]?.text} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
@@ -594,12 +610,12 @@ function DistanceHint({ text, connector = false }: { text: string; connector?: b
 function ItineraryMetadata({ item, connector = false, onShare }: { item: ItineraryItem; connector?: boolean; onShare?: () => void }) {
   const transport = item.transport ? TRANSPORT_PRESENTATION[item.transport] : null;
   if (!item.time && !transport) {
-    return connector ? null : <View style={styles.atlasBeginsRow}><Text style={styles.atlasBeginsText}>Where your Atlas begins</Text>{onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={styles.atlasBeginsShare}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas<Text style={styles.registeredMark}>®</Text></Text></TouchableOpacity> : null}</View>;
+    return connector ? null : <View style={styles.atlasBeginsRow}><Text style={styles.atlasBeginsText}>Where your Atlas begins</Text>{onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={styles.atlasBeginsShare}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas</Text></TouchableOpacity> : null}</View>;
   }
   return <View style={[styles.itineraryMetaRow, connector && styles.connectorMetaRow, !connector && onShare && styles.itineraryMetaRowWithShare]}>
     {item.time ? <View style={[styles.dayMarker, styles.timeMarker]}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>{item.day ? `Day ${item.day} · ${item.time}` : item.time}</Text></View> : null}
     {transport ? <View accessibilityLabel={transport.label} style={styles.transportMarker}><Ionicons name={transport.icon} size={13} color="#64748B" /></View> : null}
-    {!connector && onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={[styles.atlasBeginsShare, styles.metadataShare]}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas<Text style={styles.registeredMark}>®</Text></Text></TouchableOpacity> : null}
+    {!connector && onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={[styles.atlasBeginsShare, styles.metadataShare]}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas</Text></TouchableOpacity> : null}
   </View>;
 }
 

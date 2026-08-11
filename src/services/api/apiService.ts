@@ -96,6 +96,7 @@ export type LinkPreview = {
 
 export type AtlasChatResponse = {
   session_id: string;
+  conversation_id?: string | null;
   response: string;
   place_cards?: Array<{
     places: Array<{
@@ -109,7 +110,9 @@ export type AtlasChatResponse = {
     status: 'pending' | 'pin_done' | 'save_done' | 'done';
   }>;
   pending_action?: {
-    action: 'pin_in_chat' | 'save_to_my_places' | 'both';
+    action_id: string;
+    kind: 'save_places' | 'create_atlas';
+    title: string;
     places: Array<{
       name: string;
       latitude: number;
@@ -117,9 +120,14 @@ export type AtlasChatResponse = {
       subtitle?: string;
       category?: string;
       description?: string;
-      confidence?: number;
+      external_id?: string | null;
+      photo_url?: string | null;
+      city?: string | null;
+      region?: string | null;
+      country?: string | null;
     }>;
   } | null;
+  presentation?: AtlasChatPresentation | null;
   locations: Array<{
     name: string;
     latitude: number;
@@ -133,6 +141,36 @@ export type AtlasChatResponse = {
   tool_calls_used: string[];
   status: string;
   partial: boolean;
+  metrics?: {
+    latency_ms: number;
+    tool_call_count: number;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+  };
+};
+
+export type AtlasChatPresentation = {
+  kind: 'nearby_map' | 'places_map' | 'atlas_draft';
+  title: string;
+  user_location?: { longitude: number; latitude: number };
+  places: Array<{
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+    description?: string | null;
+    category?: string;
+    external_id?: string | null;
+    photo_url?: string | null;
+    city?: string | null;
+    region?: string | null;
+    country?: string | null;
+  }>;
+  route?: {
+    route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+    distance_km?: number;
+    duration_minutes?: number;
+  } | null;
 };
 
 type AtlasChatStreamEvent =
@@ -287,11 +325,16 @@ export type ConversationDetailResponse = {
     created_at?: number;
     updated_at?: number;
   };
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{
+    role: string;
+    content: string;
+    tool_results?: unknown;
+  }>;
 };
 
 export type CreateSessionResponse = {
   session_id: string;
+  conversation_id?: string | null;
   title: string;
   location_count: number;
   message_count: number;
@@ -397,6 +440,7 @@ export async function createChatSession(payload?: {
     description?: string | null;
     category?: string | null;
   }>;
+  user_location?: [number, number];
 }): Promise<CreateSessionResponse> {
   return postJson<CreateSessionResponse>('/sessions', payload ?? {});
 }
@@ -405,11 +449,13 @@ export async function chatWithAtlas(
   sessionId: string,
   message: string,
   conversationId?: string | null,
+  userLocation?: [number, number],
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>('/chat', {
     session_id: sessionId,
     message,
     conversation_id: conversationId ?? undefined,
+    user_location: userLocation,
   });
 }
 
@@ -422,6 +468,7 @@ export async function chatWithAtlasStream(
   message: string,
   handlers: AtlasChatStreamHandlers,
   conversationId?: string | null,
+  userLocation?: [number, number],
 ): Promise<AtlasChatResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -438,6 +485,7 @@ export async function chatWithAtlasStream(
         session_id: sessionId,
         message,
         conversation_id: conversationId ?? undefined,
+        user_location: userLocation,
       }),
       signal: controller.signal,
     });
@@ -486,6 +534,20 @@ export async function chatWithAtlasStream(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function confirmAtlasChatAction(
+  sessionId: string,
+  actionId: string,
+  accepted: boolean,
+  outcome?: Record<string, unknown>,
+): Promise<void> {
+  await postJson('/chat/actions/confirm', {
+    session_id: sessionId,
+    action_id: actionId,
+    accepted,
+    outcome,
+  });
 }
 
 export async function discoverAtlasPlaces(

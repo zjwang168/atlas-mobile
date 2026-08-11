@@ -18,7 +18,7 @@ import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
 import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
 import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated as NativeAnimated,
@@ -43,8 +43,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/components/ui/text';
 import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { useAppDialog } from '@/components/feedback/AppDialog';
+import { useHome } from '@/features/home/HomeContext';
+import type { MapMarker } from '@/features/map/MapboxMap';
 import TopBlurFade from '@/components/ui/top-blur-fade';
-import { chatWithAtlasStream, createChatSession, fetchConversation } from '@/services/api/apiService';
+import AtlasChatResultCard from './AtlasChatResultCard';
+import { AtlasChatMapControls, AtlasChatMapPlacePopup } from './AtlasChatMapOverlay';
+import {
+  chatWithAtlasStream,
+  confirmAtlasChatAction,
+  createChatSession,
+  fetchConversation,
+  requestAtlasRoute,
+  type AtlasChatPresentation,
+} from '@/services/api/apiService';
+import { addAtlasOwnedPlaces } from '@/services/atlas/atlasPlacesService';
+import { createAtlas } from '@/services/atlas/atlasService';
+import { savePlaces } from '@/services/place/placeService';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
 
@@ -77,6 +91,15 @@ type Message = {
   role: 'user' | 'assistant';
   text: string;
   streaming?: boolean;
+  thinkingStartedAt?: number;
+  thoughtDurationSeconds?: number;
+  presentation?: AtlasChatPresentation | null;
+  pendingAction?: {
+    action_id: string;
+    kind: 'save_places' | 'create_atlas';
+    title: string;
+    places: AtlasChatPresentation['places'];
+  } | null;
 };
 
 type MessageFeedback = 'up' | 'down';
@@ -86,6 +109,61 @@ function stripActionMarkers(text: string): string {
     .replace(/\[\[PLACE_ACTION_CARD:[\s\S]*?\]\]/g, '')
     .replace(/\[\[CONFIRM_ADD_PLACES:[\s\S]*?\]\]/g, '')
     .trim();
+}
+
+function parseStoredToolResults(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.filter(
+    (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object',
+  );
+  if (typeof value !== 'string') return [];
+  try {
+    return parseStoredToolResults(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function restorePresentationFromToolResults(value: unknown): AtlasChatPresentation | null {
+  const toolResults = parseStoredToolResults(value);
+
+  for (const toolResult of [...toolResults].reverse()) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const data = result as Record<string, unknown>;
+    const proposal = data.proposal;
+    if (proposal && typeof proposal === 'object') {
+      const action = proposal as Record<string, unknown>;
+      if (Array.isArray(action.places)) {
+        return {
+          kind: action.kind === 'create_atlas' ? 'atlas_draft' : 'places_map',
+          title: typeof action.title === 'string' ? action.title : 'Map result',
+          places: action.places as AtlasChatPresentation['places'],
+          route: null,
+        };
+      }
+    }
+
+    if (!Array.isArray(data.places)) continue;
+    if (toolResult.name === 'find_nearby_places') {
+      const query = typeof data.query === 'string' ? data.query : 'places';
+      return {
+        kind: 'nearby_map',
+        title: `Nearby ${query}`,
+        places: data.places as AtlasChatPresentation['places'],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    }
+    if (toolResult.name === 'extract_pasted_places') {
+      return {
+        kind: 'places_map',
+        title: typeof data.title === 'string' ? data.title : 'Places from your text',
+        places: data.places as AtlasChatPresentation['places'],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    }
+  }
+
+  return null;
 }
 
 function FadingStreamToken({ token, reducedMotion }: { token: string; reducedMotion: boolean }) {
@@ -160,39 +238,6 @@ function StreamingAssistantText({ text, reducedMotion }: { text: string; reduced
 }
 
 
-function buildWelcomeMessage(places: ParsedPlace[], title?: string): string {
-  if (places.length === 0) {
-    return [
-      '### Atlas AI',
-      '',
-      'I am ready to help you compare neighborhoods, reason through places, or turn a rough idea into a plan.',
-      '',
-      '### Next step',
-      '',
-      'Ask me what you want to compare, where the strongest options are, or what is missing.',
-    ].join('\n');
-  }
-
-  const highlightNames = places.slice(0, 3).map((place) => `**${place.name}**`).join(', ');
-  const moreCount = places.length > 3 ? ` and ${places.length - 3} more` : '';
-  const sourceLabel = title ? `from **${title}**` : 'from this saved set';
-  const regionLine = places[0]?.subtitle ? `The first place I see is **${places[0].subtitle}**.` : '';
-
-  return [
-    '### What I found',
-    '',
-    `I pulled together **${places.length} place${places.length > 1 ? 's' : ''}** ${sourceLabel}.`,
-    highlightNames ? `A few anchors are ${highlightNames}${moreCount}.` : '',
-    regionLine,
-    '',
-    '### Next step',
-    '',
-    'Ask me to compare them, group them by area, or help turn them into a plan.',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 type AIChatBoxProps = {
   places: ParsedPlace[];
   onClose: () => void;
@@ -202,7 +247,39 @@ type AIChatBoxProps = {
   visible?: boolean;
   conversationId?: string | null;
   showLanding?: boolean;
+  onPresentationMapOpen?: () => void;
+  onPresentationMapReturn?: () => void;
+  onPresentationMapClose?: () => void;
 };
+
+type ChatMapPlace = AtlasChatPresentation['places'][number] & { markerId: string };
+type RouteFeature = GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+
+function chatMapPlaceId(place: AtlasChatPresentation['places'][number], index: number): string {
+  return `chat-map-place-${place.external_id || index}`;
+}
+
+function boundsForChatMarkers(markers: MapMarker[]) {
+  if (markers.length < 2) return undefined;
+  const longitudes = markers.map((marker) => marker.longitude);
+  const latitudes = markers.map((marker) => marker.latitude);
+  const longitudePadding = Math.max(0.003, (Math.max(...longitudes) - Math.min(...longitudes)) * 0.18);
+  const latitudePadding = Math.max(0.003, (Math.max(...latitudes) - Math.min(...latitudes)) * 0.18);
+  return {
+    ne: [Math.max(...longitudes) + longitudePadding, Math.max(...latitudes) + latitudePadding] as [number, number],
+    sw: [Math.min(...longitudes) - longitudePadding, Math.min(...latitudes) - latitudePadding] as [number, number],
+  };
+}
+
+function distanceLabel(origin: [number, number], destination: [number, number]): string {
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const latitudeDelta = toRadians(destination[1] - origin[1]);
+  const longitudeDelta = toRadians(destination[0] - origin[0]);
+  const latitudeFactor = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(toRadians(origin[1])) * Math.cos(toRadians(destination[1])) * Math.sin(longitudeDelta / 2) ** 2;
+  const kilometers = 6371 * 2 * Math.atan2(Math.sqrt(latitudeFactor), Math.sqrt(1 - latitudeFactor));
+  return kilometers < 1 ? `${Math.max(10, Math.round(kilometers * 1000 / 10) * 10)} m` : `${kilometers.toFixed(kilometers < 10 ? 1 : 0)} km`;
+}
 
 type GlassIconButtonProps = {
   icon: Icon;
@@ -253,17 +330,21 @@ export default function AIChatBox({
   visible = true,
   conversationId = null,
   showLanding = false,
+  onPresentationMapOpen,
+  onPresentationMapReturn,
+  onPresentationMapClose,
 }: AIChatBoxProps) {
   const { show: showDialog } = useAppDialog();
+  const {
+    addChatHistoryItem,
+    replaceChatHistoryItem,
+    setAtlasMapState,
+    setOverlay,
+    userLocation,
+  } = useHome();
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      text: buildWelcomeMessage(places, title),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -274,6 +355,13 @@ export default function AIChatBox({
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
   >({});
+  const [chatMapPresentation, setChatMapPresentation] = useState<AtlasChatPresentation | null>(null);
+  const [chatMapSelectedId, setChatMapSelectedId] = useState<string | null>(null);
+  const [chatMapSelectedRoute, setChatMapSelectedRoute] = useState<RouteFeature | null>(null);
+  const [chatMapOverviewRoute, setChatMapOverviewRoute] = useState<RouteFeature | null>(null);
+  const [chatMapOverviewRouteVisible, setChatMapOverviewRouteVisible] = useState(false);
+  const [chatMapRouteLoading, setChatMapRouteLoading] = useState(false);
+  const [chatMapCameraKey, setChatMapCameraKey] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const hydratedConversationIdRef = useRef<string | null>(null);
@@ -285,20 +373,32 @@ export default function AIChatBox({
   const streamCompletionRef = useRef<(() => void) | null>(null);
   const streamedTextRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
+  const historyItemIdRef = useRef<string | null>(null);
+  const conversationIdRef = useRef<string | null>(null);
+  const chatMapRouteRequestRef = useRef(0);
 
-  const scrollToLatest = () => {
+  const scrollToLatest = useCallback(() => {
     if (scrollFrameRef.current !== null) return;
     scrollFrameRef.current = requestAnimationFrame(() => {
       scrollFrameRef.current = null;
       flatListRef.current?.scrollToEnd({ animated: false });
     });
-  };
+  }, []);
 
   const finishDisplayedStream = () => {
     const messageId = streamingMessageIdRef.current;
     if (messageId) {
       setMessages((current) => current.map((message) => (
-        message.id === messageId ? { ...message, streaming: false } : message
+        message.id === messageId
+          ? {
+              ...message,
+              streaming: false,
+              thoughtDurationSeconds: Math.max(
+                1,
+                Math.round((Date.now() - (message.thinkingStartedAt ?? Date.now())) / 1000),
+              ),
+            }
+          : message
       )));
     }
     streamCompletionRef.current = null;
@@ -379,6 +479,12 @@ export default function AIChatBox({
     return () => clearTimeout(focusTimer);
   }, [reducedMotion, visible]);
 
+  useEffect(() => {
+    if (!visible) return;
+    const frame = requestAnimationFrame(scrollToLatest);
+    return () => cancelAnimationFrame(frame);
+  }, [inputContentHeight, keyboardHeight, messages.length, scrollToLatest, visible]);
+
   const ensureSession = async (): Promise<string> => {
     if (sessionId) return sessionId;
     const created = await createChatSession({
@@ -393,8 +499,10 @@ export default function AIChatBox({
         description: place.subtitle,
         category: place.type || 'Place',
       })),
+      user_location: userLocation,
     });
     setSessionId(created.session_id);
+    conversationIdRef.current = created.conversation_id ?? null;
     return created.session_id;
   };
 
@@ -406,15 +514,11 @@ export default function AIChatBox({
     if (!conversationId && lastWelcomeKeyRef.current !== welcomeKey) {
       lastWelcomeKeyRef.current = welcomeKey;
       setSessionId(null);
+      conversationIdRef.current = null;
+      historyItemIdRef.current = null;
       setPending(false);
       setInputText('');
-      setMessages([
-        {
-          id: `welcome_${welcomeKey}`,
-          role: 'assistant',
-          text: buildWelcomeMessage(places, title),
-        },
-      ]);
+      setMessages([]);
     }
 
     let cancelled = false;
@@ -439,32 +543,14 @@ export default function AIChatBox({
             id: `${message.role}_${index}_${Date.now()}`,
             role: message.role === 'user' ? 'user' : 'assistant',
             text: message.content,
+            presentation: message.role === 'assistant'
+              ? restorePresentationFromToolResults(message.tool_results)
+              : null,
           }));
-
-        const sessionPlaces = detail.session.locations ?? [];
-        const hasOpeningAssistant = restoredMessages[0]?.role === 'assistant';
-        const openingMessage =
-          hasOpeningAssistant
-            ? null
-            : {
-                id: `opening_${conversationId}`,
-                role: 'assistant' as const,
-                text: buildWelcomeMessage(
-                  sessionPlaces.map((place) => ({
-                    id: `${place.name}_${place.latitude}_${place.longitude}`,
-                    name: place.name,
-                    subtitle: place.full_address || place.description || '',
-                    type: place.category || 'Place',
-                    latitude: place.latitude,
-                    longitude: place.longitude,
-                  })),
-                  detail.session.title || title,
-                ),
-              };
 
         setSessionId(session.session_id);
         activeConversationIdRef.current = detail.session.conversation_id || conversationId;
-        setMessages(openingMessage ? [openingMessage, ...restoredMessages] : restoredMessages);
+        setMessages(restoredMessages);
         hydratedConversationIdRef.current = conversationId;
       } catch (error) {
         console.warn('[AIChatBox] hydrateFromConversation failed:', error);
@@ -490,7 +576,13 @@ export default function AIChatBox({
     setMessages((prev) => [
       ...prev,
       { id: `user_${Date.now()}`, role: 'user', text },
-      { id: assistantMessageId, role: 'assistant', text: '', streaming: true },
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        text: '',
+        streaming: true,
+        thinkingStartedAt: Date.now(),
+      },
     ]);
     scrollToLatest();
     setInputText('');
@@ -498,18 +590,266 @@ export default function AIChatBox({
 
     try {
       const currentSessionId = await ensureSession();
-      await chatWithAtlasStream(
+      const result = await chatWithAtlasStream(
         currentSessionId,
         text,
         { onToken: enqueueStreamDelta },
         activeConversationIdRef.current,
+        userLocation,
       );
+      setMessages((current) => current.map((message) => (
+        message.id === assistantMessageId
+          ? { ...message, presentation: result.presentation, pendingAction: result.pending_action }
+          : message
+      )));
+      const persistedConversationId = result.conversation_id ?? conversationIdRef.current;
+      if (persistedConversationId && !historyItemIdRef.current) {
+        const createdAt = new Date().toISOString();
+        const historyItem = {
+          id: persistedConversationId,
+          title: text.slice(0, 100),
+          sourceUrl: '',
+          sourceType: 'atlas_ai',
+          locationCount: places.length,
+          messageCount: 2,
+          places,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        historyItemIdRef.current = addChatHistoryItem({
+          title: historyItem.title,
+          sourceUrl: historyItem.sourceUrl,
+          sourceType: historyItem.sourceType,
+          locationCount: historyItem.locationCount,
+          messageCount: historyItem.messageCount,
+          places: historyItem.places,
+          updatedAt: historyItem.updatedAt,
+        });
+        replaceChatHistoryItem(historyItemIdRef.current, historyItem);
+      }
     } catch (error) {
       if (!streamedTextRef.current) {
         enqueueStreamDelta('I couldn\'t respond just now. Please try sending that again in a moment.');
       }
     } finally {
       completeStreamAfterDisplay();
+    }
+  };
+
+  const chatMapOrigin = useMemo<[number, number] | null>(() => {
+    if (chatMapPresentation?.user_location) {
+      return [chatMapPresentation.user_location.longitude, chatMapPresentation.user_location.latitude];
+    }
+    return userLocation ?? null;
+  }, [chatMapPresentation?.user_location, userLocation]);
+
+  const chatMapPlaces = useMemo<ChatMapPlace[]>(() => (chatMapPresentation?.places ?? []).map((place, index) => ({
+    ...place,
+    markerId: chatMapPlaceId(place, index),
+  })), [chatMapPresentation?.places]);
+
+  const chatMapMarkers = useMemo<MapMarker[]>(() => [
+    ...(chatMapOrigin ? [{
+      id: 'chat-user-location',
+      latitude: chatMapOrigin[1],
+      longitude: chatMapOrigin[0],
+      title: 'You',
+      tone: 'focused' as const,
+    }] : []),
+    ...chatMapPlaces.map((place, index) => ({
+      id: place.markerId,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      description: place.full_address || place.description || undefined,
+      tone: chatMapPresentation?.kind === 'atlas_draft' ? 'atlas' as const : 'recommended' as const,
+      order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
+    })),
+  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind]);
+
+  const selectedChatMapPlace = useMemo(
+    () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
+    [chatMapPlaces, chatMapSelectedId],
+  );
+
+  const clearChatMapSelection = useCallback(() => {
+    chatMapRouteRequestRef.current += 1;
+    setChatMapSelectedId(null);
+    setChatMapSelectedRoute(null);
+  }, []);
+
+  const selectChatMapPlace = useCallback(async (marker: MapMarker) => {
+    const place = chatMapPlaces.find((item) => item.markerId === marker.id);
+    if (!place) return;
+    const requestId = chatMapRouteRequestRef.current + 1;
+    chatMapRouteRequestRef.current = requestId;
+    setChatMapSelectedId(place.markerId);
+    setChatMapSelectedRoute(null);
+    if (!chatMapOrigin) return;
+    try {
+      const result = await requestAtlasRoute([
+        chatMapOrigin,
+        [place.longitude, place.latitude],
+      ]);
+      if (chatMapRouteRequestRef.current === requestId) setChatMapSelectedRoute(result.route);
+    } catch (error) {
+      console.warn('[AIChatBox] could not load selected-place route:', error);
+    }
+  }, [chatMapOrigin, chatMapPlaces]);
+
+  const toggleChatMapOverviewRoute = useCallback(async () => {
+    if (chatMapOverviewRouteVisible) {
+      setChatMapOverviewRouteVisible(false);
+      return;
+    }
+    if (chatMapOverviewRoute) {
+      setChatMapOverviewRouteVisible(true);
+      return;
+    }
+    const coordinates = [
+      ...(chatMapOrigin ? [chatMapOrigin] : []),
+      ...chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number]),
+    ];
+    if (coordinates.length < 2) return;
+    setChatMapRouteLoading(true);
+    try {
+      const result = await requestAtlasRoute(coordinates);
+      setChatMapOverviewRoute(result.route);
+      setChatMapOverviewRouteVisible(true);
+    } catch (error) {
+      console.warn('[AIChatBox] could not load overview route:', error);
+      showDialog({
+        title: 'Route unavailable',
+        message: 'We could not load a route for these places. Please try again.',
+        tone: 'warning',
+      });
+    } finally {
+      setChatMapRouteLoading(false);
+    }
+  }, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, showDialog]);
+
+  const returnFromPresentationMap = useCallback(() => {
+    clearChatMapSelection();
+    setChatMapPresentation(null);
+    setAtlasMapState(null);
+    onPresentationMapReturn?.();
+  }, [clearChatMapSelection, onPresentationMapReturn, setAtlasMapState]);
+
+  const closePresentationMap = useCallback(() => {
+    clearChatMapSelection();
+    setChatMapPresentation(null);
+    setAtlasMapState(null);
+    if (onPresentationMapClose) onPresentationMapClose();
+    else onClose();
+  }, [clearChatMapSelection, onClose, onPresentationMapClose, setAtlasMapState]);
+
+  const chatMapRoute = chatMapSelectedRoute
+    ?? (chatMapOverviewRouteVisible ? chatMapOverviewRoute : null);
+  const chatMapPopup = useMemo(() => selectedChatMapPlace && chatMapOrigin ? (
+    <AtlasChatMapPlacePopup
+      name={selectedChatMapPlace.name}
+      address={selectedChatMapPlace.full_address || selectedChatMapPlace.description}
+      distanceLabel={distanceLabel(chatMapOrigin, [selectedChatMapPlace.longitude, selectedChatMapPlace.latitude])}
+      origin={chatMapOrigin}
+      destination={[selectedChatMapPlace.longitude, selectedChatMapPlace.latitude]}
+    />
+  ) : null, [chatMapOrigin, selectedChatMapPlace]);
+  const chatMapOverlay = useMemo(() => <AtlasChatMapControls
+    topInset={insets.top}
+    routeVisible={chatMapOverviewRouteVisible}
+    routeLoading={chatMapRouteLoading}
+    routeAvailable={Boolean(chatMapOverviewRoute) || (Boolean(chatMapOrigin) && chatMapPlaces.length > 0)}
+    onReturn={returnFromPresentationMap}
+    onClose={closePresentationMap}
+    onToggleRoute={() => { void toggleChatMapOverviewRoute(); }}
+    placePopup={chatMapPopup}
+  />, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces.length, chatMapPopup, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
+
+  useEffect(() => {
+    if (!chatMapPresentation) return;
+    setAtlasMapState({
+      markers: chatMapMarkers,
+      centerCoordinate: chatMapOrigin ?? (chatMapMarkers[0] ? [chatMapMarkers[0].longitude, chatMapMarkers[0].latitude] : undefined),
+      bounds: boundsForChatMarkers(chatMapMarkers),
+      zoomLevel: chatMapMarkers.length > 1 ? 13 : 15,
+      cameraKey: `chat-map-${chatMapCameraKey}`,
+      cameraAnimationDurationMs: 420,
+      routeGeoJSON: chatMapRoute ?? undefined,
+      selectedMarkerId: chatMapSelectedId,
+      onMarkerPress: (marker) => { void selectChatMapPlace(marker); },
+      onMapPress: clearChatMapSelection,
+      markerPopup: null,
+      overlay: chatMapOverlay,
+      hideChrome: true,
+    });
+  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPopup, chatMapPresentation, chatMapRoute, chatMapSelectedId, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+
+  const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
+    chatMapRouteRequestRef.current += 1;
+    setChatMapPresentation(presentation);
+    setChatMapSelectedId(null);
+    setChatMapSelectedRoute(null);
+    setChatMapOverviewRoute(presentation.route?.route ?? null);
+    setChatMapOverviewRouteVisible(false);
+    setChatMapRouteLoading(false);
+    setChatMapCameraKey(Date.now());
+    onPresentationMapOpen?.();
+  }, [onPresentationMapOpen]);
+
+  const resolveAction = async (messageId: string, accepted: boolean) => {
+    const message = messages.find((item) => item.id === messageId);
+    const action = message?.pendingAction;
+    if (!action || !sessionId) return;
+    try {
+      if (accepted && action.kind === 'save_places') {
+        await savePlaces(action.places.map((place, index) => ({
+          id: place.external_id || 'chat-place-' + index,
+          name: place.name,
+          subtitle: place.full_address || place.description || '',
+          type: place.category || 'Place',
+          latitude: place.latitude,
+          longitude: place.longitude,
+          imageUri: place.photo_url || undefined,
+          externalId: place.external_id || undefined,
+          externalSource: 'atlas_ai',
+          city: place.city || undefined,
+          region: place.region || undefined,
+          country: place.country || undefined,
+        })));
+      }
+      let createdAtlasId: string | null = null;
+      if (accepted && action.kind === 'create_atlas') {
+        const atlas = await createAtlas(action.title);
+        await addAtlasOwnedPlaces(atlas.id, action.places.map((place, index) => ({
+          id: place.external_id || 'chat-atlas-place-' + index,
+          external_place_id: place.external_id || 'chat-atlas-place-' + index,
+          name: place.name,
+          subtitle: place.full_address || place.description || '',
+          latitude: place.latitude,
+          longitude: place.longitude,
+          photo_url: place.photo_url || null,
+          city: place.city || null,
+          region: place.region || null,
+          country: place.country || null,
+        })));
+        createdAtlasId = atlas.id;
+      }
+      await confirmAtlasChatAction(sessionId, action.action_id, accepted, {
+        created_atlas_id: createdAtlasId,
+        saved_place_count: accepted ? action.places.length : 0,
+      });
+      setMessages((current) => current.map((item) => (
+        item.id === messageId ? { ...item, pendingAction: null } : item
+      )));
+      if (createdAtlasId) {
+        setOverlay({ kind: 'atlasDetail', atlasId: createdAtlasId });
+        onClose();
+      }
+    } catch (error) {
+      showDialog({
+        title: accepted ? 'We could not apply this change' : 'We could not cancel this proposal',
+        message: 'Nothing has been confirmed in this chat. Please try again.',
+        tone: 'warning',
+      });
     }
   };
 
@@ -555,11 +895,27 @@ export default function AIChatBox({
           <View style={styles.assistantContent}>
             <View style={styles.assistantMessageText}>
               {item.streaming && !displayText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
-              {!item.streaming || displayText ? <Text style={styles.assistantLabel}>Atlas AI</Text> : null}
+              {!item.streaming || displayText ? (
+                <View style={styles.thinkingRow}>
+                  <Text style={styles.assistantLabel}>Atlas AI</Text>
+                  {item.thoughtDurationSeconds ? (
+                    <Text style={styles.thinkingText}>Thought {item.thoughtDurationSeconds}s</Text>
+                  ) : null}
+                </View>
+              ) : null}
               {item.streaming && displayText ? (
                 <StreamingAssistantText text={displayText} reducedMotion={reducedMotion} />
               ) : displayText ? (
                 <Markdown style={markdownStyles}>{displayText}</Markdown>
+              ) : null}
+              {item.presentation ? (
+                <AtlasChatResultCard
+                  presentation={item.presentation}
+                  pendingAction={item.pendingAction}
+                  onOpenMap={() => openPresentationMap(item.presentation!)}
+                  onConfirm={() => { void resolveAction(item.id, true); }}
+                  onCancel={() => { void resolveAction(item.id, false); }}
+                />
               ) : null}
             </View>
             {!item.streaming ? <View style={styles.feedbackBar}>

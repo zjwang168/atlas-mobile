@@ -1290,6 +1290,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     });
   }, [atlasId, atlasTitle, existingAtlas, showDialog]);
 
+  const closeEditor = useCallback(() => {
+    // AtlasDetail synchronously restores the completed Atlas overview. Keep the
+    // shared map alive during that handoff so Home never installs its GPS camera.
+    preserveMapOnUnmountRef.current = Boolean(atlasId);
+    onClose();
+  }, [atlasId, onClose]);
+
   const persist = useCallback(async (askAI: boolean) => {
     if (!items.length) {
       showDialog({ title: 'Choose a place first', message: 'Select at least one point on the map.', tone: 'warning' });
@@ -1490,7 +1497,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </View>
         <View style={styles.headerRight}>
           {atlasId ? <TouchableOpacity accessibilityLabel={`Rename ${atlasTitle || existingAtlas?.title || 'Atlas'}`} onPress={renameAtlas} style={styles.focusAreaButton}><Text numberOfLines={1} style={styles.focusAreaButtonText}>{atlasTitle || existingAtlas?.title || 'Atlas'}</Text><Ionicons name="pencil-outline" size={15} color="#6A6A70" /></TouchableOpacity> : (started && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={onReturnToCreateSearch ? returnToCreateSearch : openFocusSearch} style={styles.focusAreaButton}><Ionicons name="location-sharp" size={23} color="#303033" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null)}
-          <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
+          <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={closeEditor} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
         </View>
       </View>
 

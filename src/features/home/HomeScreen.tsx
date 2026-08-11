@@ -103,6 +103,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
   const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
+  const [chatMapOpen, setChatMapOpen] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
   const [homePanelVisible, setHomePanelVisible] = useState(true);
   const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
@@ -133,15 +134,16 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
     return 12;
   }, [atlasMapState?.zoomLevel, selectedPlaceCoordinate]);
 
-  const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
-  const historyChatRequested = activeSidekick === 'aiChat' && panelVisible;
+  const panelVisible = !chatMapOpen && (overlay.kind === 'none' || overlay.kind === 'search');
+  const historyChatRequested = activeSidekick === 'aiChat' && (panelVisible || chatMapOpen);
   const chatRequested = standaloneChatVisible || historyChatRequested;
-  const chatVisible = chatPresentationVisible;
-  const effectiveTabBarVisible = tabBarVisible && !chatVisible;
+  const chatVisible = chatPresentationVisible && !chatMapOpen;
+  const effectiveTabBarVisible = tabBarVisible && !chatVisible && !chatMapOpen;
 
   useEffect(() => {
     if (!chatRequested) {
       setChatPresentationVisible(false);
+      setChatMapOpen(false);
       return;
     }
     // Let the selector travel from My Places to Chat before the chat surface
@@ -342,6 +344,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         }
         places={standaloneChatVisible ? [] : (activeHistoryItem?.places ?? parsedPlaces)}
         onClose={() => {
+          setChatMapOpen(false);
           setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
           setActiveSidekick('none');
@@ -353,6 +356,15 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatVisible}
         conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
+        onPresentationMapOpen={() => setChatMapOpen(true)}
+        onPresentationMapReturn={() => setChatMapOpen(false)}
+        onPresentationMapClose={() => {
+          setChatMapOpen(false);
+          setStandaloneChatVisible(false);
+          setActiveHistoryItem(null);
+          setActiveSidekick('none');
+          animateToTab(TAB_PLACES);
+        }}
       />
 
       {/* Native tab bar — fades out when overlay features request it */}

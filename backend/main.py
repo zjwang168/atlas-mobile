@@ -155,6 +155,7 @@ class CreateSessionRequest(BaseModel):
     source_url: Optional[str] = None
     source_type: Optional[str] = None
     locations: Optional[list[dict]] = None
+    user_location: Optional[tuple[float, float]] = None
 
 
 class AtlasDiscoverRequest(BaseModel):
@@ -226,6 +227,16 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     conversation_id: Optional[str] = None
+    # The app supplies the foreground GPS coordinate as [longitude, latitude]
+    # only for this request. It is never inferred by the model.
+    user_location: Optional[tuple[float, float]] = None
+
+
+class ChatActionConfirmationRequest(BaseModel):
+    session_id: str
+    action_id: str
+    accepted: bool
+    outcome: Optional[dict] = None
 
 
 class MemoryRequest(BaseModel):
@@ -237,6 +248,7 @@ class MemoryRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     session_id: str
+    conversation_id: Optional[str] = None
     title: str = ""
     location_count: int = 0
     message_count: int = 0
@@ -783,6 +795,8 @@ async def chat(req: ChatRequest) -> dict:
         session = await _recover_session(req.session_id, req.conversation_id)
         if session:
             req_session_id = session.session_id
+            if req.user_location:
+                session.user_location = req.user_location
         else:
             raise ValueError(f"Session {req.session_id} not found")
 
@@ -824,6 +838,8 @@ async def stream_chat(req: ChatRequest) -> StreamingResponse:
         session = await _recover_session(req.session_id, req.conversation_id)
         if not session:
             raise ValueError(f"Session {req.session_id} not found")
+        if req.user_location:
+            session.user_location = req.user_location
 
         async def event_stream():
             try:
@@ -841,6 +857,40 @@ async def stream_chat(req: ChatRequest) -> StreamingResponse:
         )
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/chat/actions/confirm")
+async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
+    """Record a client-confirmed Atlas proposal without performing a write.
+
+    Atlas and place writes stay in the authenticated mobile domain layer. This
+    endpoint only gives the next agent turn an auditable fact about the user's
+    decision, preventing a proposal from being treated as already applied.
+    """
+    session = conversation_manager.get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+    action = session.pending_chat_action
+    # This endpoint only records an audit event; the client has already used
+    # authenticated domain services for the actual write. Accept a replay
+    # after a backend restart instead of reporting a false user-facing error.
+    if action and action.get("action_id") != req.action_id:
+        raise HTTPException(status_code=409, detail="This chat action is no longer pending")
+
+    outcome = req.outcome or {}
+    event = {
+        "action_id": req.action_id,
+        "kind": action.get("kind") if action else "unknown",
+        "accepted": req.accepted,
+        "outcome": outcome,
+    }
+    session.add_message("tool", "chat_action_confirmation", tool_results=event)
+    session.pending_chat_action = None
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception:
+        pass
+    return {"status": "recorded", "event": event}
 
 
 @app.post("/atlas_ai/discover", response_model=ParseResponse,
@@ -1067,12 +1117,14 @@ async def create_session(req: CreateSessionRequest) -> SessionResponse:
     session.source_url = req.source_url
     session.source_type = req.source_type
     session.locations = req.locations or []
+    session.user_location = req.user_location
     try:
         await conversation_manager.save_conversation(session.session_id)
     except Exception:
         pass
     return SessionResponse(
         session_id=session.session_id,
+        conversation_id=session.conversation_id,
         title=session.title,
         location_count=len(session.locations),
         message_count=len(session.messages),
