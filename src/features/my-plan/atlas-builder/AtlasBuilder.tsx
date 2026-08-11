@@ -62,7 +62,7 @@ const TRANSPORT_OPTIONS: Array<{ mode: TransportMode; label: string; icon: keyof
 
 type SearchResult =
   | { kind: 'saved'; place: SavedPlace }
-  | { kind: 'remote'; externalId: string; name: string; subtitle: string; featureType?: string };
+  | { kind: 'remote'; externalId: string; name: string; subtitle: string; featureType?: string; coordinate?: [number, number]; bounds?: { ne: [number, number]; sw: [number, number] } };
 
 type FocusArea = {
   label: string;
@@ -84,9 +84,11 @@ type AtlasBuilderProps = {
   initialBounds?: { ne: [number, number]; sw: [number, number] };
   initialLocation?: string;
   started?: boolean;
+  autoFocusCreateSearch?: boolean;
   onItemsChange?: (items: DraftPlace[]) => void;
   onFirstPlaceAdded?: () => void;
   onBuildPlan?: (location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => void;
+  onReturnToCreateSearch?: () => void;
 };
 
 const PLANNING_HOURS = Array.from({ length: 17 }, (_, index) => {
@@ -326,7 +328,7 @@ function buildAtlasTitle(items: DraftPlace[]) {
   return `${place}: ${slogan}`;
 }
 
-export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, onItemsChange, onFirstPlaceAdded, onBuildPlan }: AtlasBuilderProps) {
+export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation } = useHome();
   const searchSession = useRef(createSearchSession()).current;
@@ -362,6 +364,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [localMustSeesPending, setLocalMustSeesPending] = useState(false);
   const [nearbyPromptVisible, setNearbyPromptVisible] = useState(false);
   const [nearbyRecommending, setNearbyRecommending] = useState(false);
+  const isCreateAtlasLanding = !atlasId && !started && !handoffStarted;
   const popupScale = useRef(new Animated.Value(0.92)).current;
   const popupOpacity = useRef(new Animated.Value(0)).current;
   const [popupBottom, setPopupBottom] = useState(0);
@@ -457,6 +460,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useEffect(() => {
     Animated.timing(searchAppear, { toValue: 1, duration: 260, useNativeDriver: true }).start();
   }, [searchAppear]);
+
+  useEffect(() => {
+    if (!autoFocusCreateSearch || !isCreateAtlasLanding) return;
+    const timer = setTimeout(() => inputRef.current?.focus(), 80);
+    return () => clearTimeout(timer);
+  }, [autoFocusCreateSearch, isCreateAtlasLanding]);
 
   const hideNearbyPrompt = useCallback((permanent = false) => {
     if (permanent) nearbyPromptDismissedRef.current = true;
@@ -554,44 +563,99 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed.length < 2) {
+    if (trimmed.length < 1) {
       setResults([]);
       setSearching(false);
       return;
     }
-    const timer = setTimeout(async () => {
-      queryAbortRef.current?.abort();
-      const controller = new AbortController();
-      queryAbortRef.current = controller;
-      const local = savedPlaces.filter((place) => isLocalMatch(place, trimmed)).slice(0, 8)
+    queryAbortRef.current?.abort();
+    const controller = new AbortController();
+    queryAbortRef.current = controller;
+    const local = isCreateAtlasLanding
+      ? []
+      : savedPlaces.filter((place) => isLocalMatch(place, trimmed)).slice(0, 8)
         .map((place): SearchResult => ({ kind: 'saved', place }));
-      setResults([]);
-      setSearching(true);
-      try {
-        const remote = await suggestPlaces(trimmed, searchSession, mapCenter ? { proximity: mapCenter } : {}, controller.signal);
-        if (controller.signal.aborted) return;
-        const uniqueRemote = remote
-          .filter((suggestion) => !local.some((result) => result.kind === 'saved' && normalize(result.place.name) === normalize(suggestion.name)))
-          .slice(0, 2)
-          .map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type }));
-        setResults([...uniqueRemote, ...local].slice(0, 4));
-      } catch (error) {
-        if (!isAbortError(error)) {
-          console.warn('[AtlasBuilder] search failed', error);
-          setResults(local.slice(0, 4));
-        }
-      } finally {
-        if (!controller.signal.aborted) setSearching(false);
+    setResults([]);
+    setSearching(true);
+    let geographicResult: SearchResult | null = null;
+    const withGeographicResult = (remote: SearchResult[]) => geographicResult
+      ? [geographicResult, ...remote.filter((result) => result.kind !== 'remote' || normalize(result.name) !== normalize(geographicResult?.kind === 'remote' ? geographicResult.name : ''))].slice(0, 8)
+      : remote;
+
+    // Suggestions are the interaction-critical request. Do not wait for the
+    // separate area lookup before showing them: legacy geocoding can be slow
+    // on a weak connection, while Search Box can already render a useful list.
+    void suggestPlaces(
+      trimmed,
+      searchSession,
+      isCreateAtlasLanding
+        ? { proximity: mapCenter, types: 'poi,place,locality,district,region,country', includeNonPoi: true }
+        : mapCenter ? { proximity: mapCenter } : {},
+      controller.signal,
+    ).then((remote) => {
+      if (controller.signal.aborted) return;
+      const normalizedQuery = normalize(trimmed);
+      const searchScore = (suggestion: typeof remote[number]) => {
+        const geographic = ['place', 'locality', 'district', 'region', 'country'].includes(suggestion.feature_type);
+        const exact = normalize(suggestion.name) === normalizedQuery;
+        return exact && geographic ? 0 : geographic ? 1 : exact ? 2 : 3;
+      };
+      const uniqueRemote = remote
+        .filter((suggestion) => !local.some((result) => result.kind === 'saved' && normalize(result.place.name) === normalize(suggestion.name)))
+        .sort((left, right) => searchScore(left) - searchScore(right) || left.name.localeCompare(right.name))
+        .slice(0, isCreateAtlasLanding ? 8 : 2)
+        .map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type }));
+      setResults(isCreateAtlasLanding ? withGeographicResult(uniqueRemote) : [...uniqueRemote, ...local].slice(0, 4));
+    }).catch((error) => {
+      if (!controller.signal.aborted && !isAbortError(error)) {
+        console.warn('[AtlasBuilder] search failed', error);
+        setResults(isCreateAtlasLanding ? [] : local.slice(0, 4));
       }
-    }, 180);
-    return () => clearTimeout(timer);
-  }, [mapCenter, query, savedPlaces, searchSession]);
+    }).finally(() => {
+      if (!controller.signal.aborted) setSearching(false);
+    });
+
+    // This corrects ambiguous names such as California and Beijing after the
+    // fast list is already visible. It never delays the search interaction.
+    if (isCreateAtlasLanding && trimmed.length >= 2) {
+      void geocodeAtlasArea(trimmed, controller.signal).then((resolvedArea) => {
+        if (controller.signal.aborted || !resolvedArea || !['place', 'region', 'country'].includes(resolvedArea.featureType ?? '')) return;
+        geographicResult = {
+          kind: 'remote',
+          externalId: `atlas-area-${resolvedArea.featureType}-${resolvedArea.center.join(',')}`,
+          name: resolvedArea.label ?? trimmed,
+          subtitle: resolvedArea.subtitle ?? '',
+          featureType: resolvedArea.featureType,
+          coordinate: resolvedArea.center,
+          bounds: resolvedArea.bounds,
+        };
+        setResults((current) => withGeographicResult(current));
+      });
+    }
+    return () => controller.abort();
+  }, [isCreateAtlasLanding, mapCenter, query, savedPlaces, searchSession]);
 
   const hideTransientUI = useCallback(() => {
     inputRef.current?.blur();
     setResults([]);
     setFocused(null);
     setPopupVisible(false);
+  }, []);
+
+  const handleQueryChange = useCallback((nextQuery: string) => {
+    // State set from TextInput's event is visible one render earlier than a
+    // useEffect, so the spinner responds on the actual keystroke. Abort the
+    // previous query here as well; waiting for effect cleanup lets slow mobile
+    // networks accumulate obsolete requests while somebody is still typing.
+    queryAbortRef.current?.abort();
+    setQuery(nextQuery);
+    if (nextQuery.trim().length >= 1) {
+      setResults([]);
+      setSearching(true);
+    } else {
+      setResults([]);
+      setSearching(false);
+    }
   }, []);
 
   const focus = useCallback((place: DraftPlace, showPopup = false, bounds?: { ne: [number, number]; sw: [number, number] }) => {
@@ -625,7 +689,15 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setFullResults(null);
   }, []);
 
-  const discoverDeepSeekPlaces = useCallback(async (city: string, count: number, proximity?: [number, number]): Promise<DraftPlace[]> => {
+  const returnToCreateSearch = useCallback(() => {
+    // The replacement Create screen installs its own continental camera in a
+    // layout effect. Keep the shared map alive during this one-render handoff
+    // so Home never falls back to its GPS camera in between.
+    preserveMapOnUnmountRef.current = true;
+    onReturnToCreateSearch?.();
+  }, [onReturnToCreateSearch]);
+
+  const discoverDeepSeekPlaces = useCallback(async (city: string, count: number, proximity?: [number, number], administrativeBounds?: { ne: [number, number]; sw: [number, number] }): Promise<DraftPlace[]> => {
     const toDraftRecommendation = (place: GeocodedLocation, index: number): DraftPlace => ({
       id: `deepseek-${aiRecommendationSessionId}-${place.external_id ?? `${normalize(place.name)}-${index}`}`,
       name: place.name,
@@ -657,15 +729,18 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       const proximityInstruction = proximity
         ? ` The requested area is centered at ${proximity[1].toFixed(4)}, ${proximity[0].toFixed(4)}. Every returned place must be within ${FOCUS_SAVED_PLACES_RADIUS_KM} km of that coordinate; do not return places from another city or state.`
         : '';
+      const administrativeInstruction = administrativeBounds
+        ? ` Every returned place must be inside the requested administrative area: longitude ${administrativeBounds.sw[0].toFixed(4)} to ${administrativeBounds.ne[0].toFixed(4)}, latitude ${administrativeBounds.sw[1].toFixed(4)} to ${administrativeBounds.ne[1].toFixed(4)}. Do not return a place outside those boundaries.`
+        : '';
       const result = await discoverAtlasPlaces(
-        `Recommend exactly ${needed} famous places in ${city}.${proximityInstruction} This is turn ${attempt + 1} of one continuous Atlas editing conversation. Return only real places that are different from every place already discussed. Return each real place name, plausible decimal latitude and longitude, city/region context, category, and a location-specific license-plate-style English slogan in the description field (maximum 4 English words). Do not use a category as the description, do not truncate a sentence, and do not write a complete sentence. Coordinates are provisional and will be geocode-verified in parallel. Style references: The Emerald Needle; Where Fish Fly; Glass Without Limits; Rock Meets Tech; Art By The Sound; Skyline Capital; Rainforest Not Rain; Wisdom Under Cherry; Where Water Works; Wheel Over Waves.`,
+        `Recommend exactly ${needed} famous places in ${city}.${proximityInstruction}${administrativeInstruction} This is turn ${attempt + 1} of one continuous Atlas editing conversation. Return only real places that are different from every place already discussed. Return each real place name, plausible decimal latitude and longitude, city/region context, category, and a location-specific license-plate-style English slogan in the description field (maximum 4 English words). Do not use a category as the description, do not truncate a sentence, and do not write a complete sentence. Coordinates are provisional and will be geocode-verified in parallel. Style references: The Emerald Needle; Where Fish Fly; Glass Without Limits; Rock Meets Tech; Art By The Sound; Skyline Capital; Rainforest Not Rain; Wisdom Under Cherry; Where Water Works; Wheel Over Waves.`,
         undefined,
         undefined,
         { sessionId: aiRecommendationSessionId, excludedPlaceNames: [...knownNames] },
       );
       result.locations.forEach((place, index) => {
         const name = normalize(place.name);
-        if (!name || knownNames.has(name) || discoveries.length >= count || (proximity && !isNearCoordinate(place, proximity))) return;
+        if (!name || knownNames.has(name) || discoveries.length >= count || (proximity && !isNearCoordinate(place, proximity)) || (administrativeBounds && !isWithinBounds(place, administrativeBounds))) return;
         knownNames.add(name);
         aiRecommendedNamesRef.current.add(name);
         discoveries.push(toDraftRecommendation(place, discoveries.length + index));
@@ -771,7 +846,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setMapBounds(bounds);
     setMapZoom(zoomForBounds(bounds, isCountry ? 1.2 : 1.9));
     try {
-      const recommendations = await discoverDeepSeekPlaces(area.label, 6, isCountry ? undefined : focusCoordinate);
+      const recommendations = await discoverDeepSeekPlaces(area.label, 3, isCountry ? undefined : focusCoordinate);
       setRecommendedPlaces(recommendations);
     } catch (error) {
       console.warn('[AtlasBuilder] plan discovery failed', error);
@@ -796,7 +871,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
     try {
-      const recommendations = await discoverDeepSeekPlaces(city, 6, userLocation);
+      const recommendations = await discoverDeepSeekPlaces(city, 3, userLocation);
       setRecommendedPlaces(recommendations);
       setFocusLabel(city);
     } catch (error) {
@@ -805,23 +880,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
   }, [discoverDeepSeekPlaces, handoffToPlan, savedPlaces, userLocation]);
 
-  useEffect(() => {
-    if ((!started && !atlasId) || initialPlaceSelected.current) return;
-    const selectedIds = new Set([
-      ...items.map((item) => item.id),
-      ...atlasPlaces
-        .filter((row) => row.atlas_id === atlasId)
-        .map((row) => row.place_id ?? row.external_place_id ?? row.id),
-    ]);
-    const candidateSource = started && initialCandidates?.length
-      ? initialCandidates
-      : savedPlaces.map((place) => toDraft(place));
-    const candidates = candidateSource.filter((place) => (
-      !selectedIds.has(place.id)
-      && (!atlasId || isWithinBounds(place, mapBounds ?? initialBounds))
-    ));
-    const place = candidates[Math.floor(Math.random() * candidates.length)];
-    if (!place) return;
+  const revealInitialCandidate = useCallback((place: DraftPlace) => {
+    if (initialPlaceSelected.current) return;
     initialPlaceSelected.current = true;
     setFocused(place);
     setPopupVisible(true);
@@ -831,10 +891,45 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       Animated.spring(popupScale, { toValue: 1, damping: 15, stiffness: 220, useNativeDriver: true }),
       Animated.timing(popupOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
     ]).start();
-  }, [atlasId, atlasPlaces, initialBounds, initialCandidates, items, mapBounds, popupOpacity, popupScale, savedPlaces, started]);
+  }, [popupOpacity, popupScale]);
+
+  useEffect(() => {
+    if ((!started && !atlasId) || initialPlaceSelected.current) return;
+    const selectedIds = new Set([
+      ...items.map((item) => item.id),
+      ...atlasPlaces
+        .filter((row) => row.atlas_id === atlasId)
+        .map((row) => row.place_id ?? row.external_place_id ?? row.id),
+    ]);
+    const candidateSource = started && initialCandidates !== undefined
+      ? initialCandidates
+      : savedPlaces.map((place) => toDraft(place));
+    const candidates = candidateSource.filter((place) => (
+      !selectedIds.has(place.id)
+      && isWithinBounds(place, mapBounds ?? initialBounds)
+    ));
+    const place = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!place) return;
+    revealInitialCandidate(place);
+  }, [atlasId, atlasPlaces, initialBounds, initialCandidates, items, mapBounds, revealInitialCandidate, savedPlaces, started]);
 
   const resolveResult = useCallback(async (result: SearchResult): Promise<DraftPlace | null> => {
     if (result.kind === 'saved') return toDraft(result.place);
+    if (result.coordinate) {
+      return {
+        id: result.externalId,
+        name: result.name,
+        subtitle: result.subtitle,
+        latitude: result.coordinate[1],
+        longitude: result.coordinate[0],
+        photo_url: null,
+        city: result.featureType === 'place' ? result.name : null,
+        region: result.featureType === 'region' ? result.name : null,
+        country: result.featureType === 'country' ? result.name : null,
+        category: result.featureType ?? null,
+        source: 'search',
+      };
+    }
     const resolved = await resolvePlace({ external_id: result.externalId, name: result.name, feature_type: 'poi', source: 'mapbox' }, searchSession);
     if (!resolved) return null;
     return {
@@ -960,13 +1055,83 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const handleResultFocus = useCallback(async (result: SearchResult) => {
     try {
       const place = await resolveResult(result);
-      if (place) focus(place, false);
+      if (place) focus(place, true);
       inputRef.current?.blur();
       setResults([]);
     } catch (error) {
       console.warn('[AtlasBuilder] resolving search result failed', error);
     }
   }, [focus, resolveResult]);
+
+  const beginAtlasFromSearchResult = useCallback(async (result: SearchResult) => {
+    const key = result.kind === 'saved' ? result.place.id : result.externalId;
+    setAddingResult(key);
+    try {
+      const place = result.kind === 'saved' ? toDraft(result.place) : await resolveResult(result);
+      if (!place) return;
+      const coordinate: [number, number] = [place.longitude, place.latitude];
+      const areaSaved = result.kind === 'remote' && result.featureType === 'country'
+        ? savedPlaces.filter((savedPlace) => normalize(savedPlace.country ?? '') === normalize(place.name))
+        : result.kind === 'remote' && result.featureType === 'region'
+          ? savedPlaces.filter((savedPlace) => normalize(savedPlace.region ?? '') === normalize(place.name))
+          : result.kind === 'remote' && result.featureType === 'place'
+            ? savedPlaces.filter((savedPlace) => normalize(savedPlace.city ?? '') === normalize(place.name))
+            : [];
+      // Keep camera padding separate from candidate eligibility. A padded
+      // provincial/state bbox can spill into a neighbouring jurisdiction, so
+      // green candidates must always satisfy the original Mapbox boundary.
+      const candidateBounds = result.kind === 'remote' && result.bounds
+        ? result.bounds
+        : undefined;
+      const nearbySaved = savedPlaces.filter((savedPlace) => isNearCoordinate(savedPlace, coordinate));
+      const localSaved = (areaSaved.length ? areaSaved : nearbySaved)
+        .filter((savedPlace) => isWithinBounds(savedPlace, candidateBounds));
+      const bounds = candidateBounds
+        ? expandBounds(candidateBounds)
+        : localSaved.length
+        ? focusBoundsForSavedPlaces(coordinate, localSaved)
+        : boundsFromRadius(coordinate, 18);
+      const location = place.city ?? place.region ?? place.name;
+      // The selected search result is the fastest and most predictable first
+      // green + candidate. It also avoids waiting for another POI retrieval.
+      const candidates = [{ ...place, source: 'search' as const }];
+      // Stop all type-ahead work before the view transition. In particular,
+      // old geocoding requests must not publish results over Edit Atlas.
+      queryAbortRef.current?.abort();
+      inputRef.current?.blur();
+      setQuery('');
+      setResults([]);
+      setSearching(false);
+      handoffToPlan(location, candidates, centerOfBounds(bounds), bounds);
+
+      // Match the other entry paths: let the editor paint, then load three
+      // independent purple AI recommendations without blocking navigation.
+      void (async () => {
+        await waitForFirstAtlasPaint();
+        try {
+          const areaSelection = result.kind === 'remote' && ['place', 'region', 'country'].includes(result.featureType ?? '');
+          const aiLocation = areaSelection ? location : place.city ?? place.region ?? location;
+          const resolvedAiArea = candidateBounds
+            ? { bounds: candidateBounds }
+            : await geocodeAtlasArea(aiLocation);
+          const recommendations = await discoverDeepSeekPlaces(
+            aiLocation,
+            3,
+            undefined,
+            resolvedAiArea?.bounds,
+          );
+          setRecommendedPlaces(recommendations);
+          setFocusLabel(aiLocation);
+        } catch (error) {
+          console.warn('[AtlasBuilder] search-area discovery failed', error);
+        }
+      })();
+    } catch (error) {
+      console.warn('[AtlasBuilder] starting Atlas from search result failed', error);
+    } finally {
+      setAddingResult(null);
+    }
+  }, [discoverDeepSeekPlaces, handoffToPlan, resolveResult, savedPlaces]);
 
   const handleResultAdd = useCallback(async (result: SearchResult) => {
     const key = result.kind === 'saved' ? result.place.id : result.externalId;
@@ -1212,7 +1377,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       tone: focused?.id === place.id ? 'focused' as const : 'saved' as const,
     }));
     const recommended = recommendedPlaces
-      .filter((place) => !savedPlaces.some((savedPlace) => savedPlace.id === place.id) && !selected.has(place.id))
+      .filter((place) => place.source === 'recommended' && !savedPlaces.some((savedPlace) => savedPlace.id === place.id) && !selected.has(place.id))
       .map((place) => ({ id: place.id, latitude: place.latitude, longitude: place.longitude, title: place.name, description: place.subtitle, labelHint: place.aiDescription ?? undefined, ai: true, tone: focused?.id === place.id ? 'focused' as const : 'recommended' as const }));
     const atlasItems = [...items, ...(removingPlace && !items.some((item) => item.id === removingPlace.id) ? [removingPlace] : [])]
       .map((item, index) => ({
@@ -1228,7 +1393,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       }));
     const focusedSearch = focused && !selected.has(focused.id)
       && !savedPlaces.some((place) => place.id === focused.id)
-      && !recommendedPlaces.some((place) => place.id === focused.id)
+      && !recommendedPlaces.some((place) => place.id === focused.id && place.source === 'recommended')
       ? [{ id: focused.id, latitude: focused.latitude, longitude: focused.longitude, title: focused.name, description: focused.subtitle, labelHint: focused.aiDescription ?? undefined, ai: focused.source === 'recommended', tone: 'focused' as const }]
       : [];
     const byId = new Map<string, MapMarker>();
@@ -1242,17 +1407,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const mapSearchOverlay = useMemo(() => <Animated.View pointerEvents="box-none" style={[styles.mapSearchLayer, { opacity: searchAppear, transform: [{ translateX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) }, { scaleX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }) }] }]}>
     <View pointerEvents="auto" style={styles.mapSearchBox}>
       <Ionicons name={focusSearchActive ? 'locate-outline' : 'search'} size={18} color={focusSearchActive ? '#0F766E' : '#6B7280'} />
-      <TextInput ref={inputRef} value={query} onChangeText={setQuery} placeholder={focusSearchActive ? 'Search an area' : 'Search places'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={openFullSearch} />
-      {searching ? <ActivityIndicator size="small" color="#2563EB" /> : <TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus search area' : 'Search all places'} onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity>}
+      <TextInput ref={inputRef} value={query} onChangeText={handleQueryChange} placeholder={focusSearchActive ? 'Search an area' : 'Search places'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={focusSearchActive ? openFullSearch : undefined} />
+      {searching ? <ActivityIndicator size="small" color="#2563EB" /> : focusSearchActive ? <TouchableOpacity accessibilityLabel="Focus search area" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity> : null}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>
     {localMustSeesVisible ? <Animated.View style={[styles.localMustSeesNote, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={hideLocalMustSees} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></Animated.View> : null}
     {nearbyPromptVisible ? <Animated.View style={{ opacity: nearbyPromptOpacity }}><View style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
-    {results.length > 0 ? <View pointerEvents="auto" style={styles.results}>{results.map((result) => {
+    {results.length > 0 ? <View pointerEvents="auto" style={styles.results}><ScrollView nestedScrollEnabled showsVerticalScrollIndicator style={styles.searchResultsScroll}>{results.map((result) => {
       const key = result.kind === 'saved' ? result.place.id : result.externalId;
-      return <View key={key} style={styles.resultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultFocus(result)}><View style={styles.resultTitleRow}><Text numberOfLines={1} style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text>{result.kind === 'saved' ? <View style={styles.savedTag}><Text style={styles.savedTagText}>Saved</Text></View> : null}</View><Text numberOfLines={1} style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus this area' : 'Add to Atlas'} disabled={focusSearchActive ? false : addingResult === key} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultAdd(result)} style={[focusSearchActive ? styles.focusResultButton : styles.addResultButton, !focusSearchActive && addingResult === key && styles.addResultButtonPending]}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>;
-    })}</View> : null}
-  </Animated.View>, [addingResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleResultAdd, handleResultFocus, hideLocalMustSees, localMustSeesOpacity, localMustSeesVisible, nearbyPromptOpacity, nearbyPromptVisible, nearbyRecommending, openFullSearch, query, recommendNearby, recommendedPlaces.length, results, searchAppear, searching]);
+      const createSearchAction = isCreateAtlasLanding && !focusSearchActive;
+      const resultContent = <><View style={styles.resultTitleRow}><Text numberOfLines={1} style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text>{result.kind === 'saved' ? <View style={styles.savedTag}><Text style={styles.savedTagText}>Saved</Text></View> : null}</View><Text numberOfLines={1} style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></>;
+      const copy = createSearchAction ? <View style={styles.resultCopy}>{resultContent}</View> : <TouchableOpacity style={styles.resultCopy} onPress={() => focusSearchActive ? focusAreaResult(result) : handleResultFocus(result)}>{resultContent}</TouchableOpacity>;
+      return <View key={key} style={[styles.resultRow, styles.searchResultRow]}>{copy}<TouchableOpacity accessibilityLabel={focusSearchActive ? 'Focus this area' : createSearchAction ? 'Open this place in Atlas' : 'Add to Atlas'} disabled={!focusSearchActive && addingResult === key} onPress={() => focusSearchActive ? focusAreaResult(result) : createSearchAction ? beginAtlasFromSearchResult(result) : handleResultAdd(result)} style={[focusSearchActive ? styles.focusResultButton : styles.addResultButton, !focusSearchActive && addingResult === key && styles.addResultButtonPending]}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : createSearchAction ? 'arrow-forward' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>;
+    })}</ScrollView></View> : null}
+  </Animated.View>, [addingResult, beginAtlasFromSearchResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleQueryChange, handleResultAdd, handleResultFocus, hideLocalMustSees, isCreateAtlasLanding, localMustSeesOpacity, localMustSeesVisible, nearbyPromptOpacity, nearbyPromptVisible, nearbyRecommending, openFullSearch, query, recommendNearby, recommendedPlaces.length, results, searchAppear, searching]);
 
   const handlePanelHeightChange = useCallback((height: number) => {
     // Keep layout-position state outside the native animation. Native Animated
@@ -1262,7 +1430,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   const atlasMapOverlay = useMemo(() => <>
     {!savingKind ? mapSearchOverlay : null}
-    {!savingKind && popupVisible && focused ? <View pointerEvents="box-none" style={[styles.mapCandidateLayer, { bottom: popupBottom }]}><Animated.View style={{ opacity: popupOpacity, transform: [{ scale: popupScale }] }}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View></View> : null}
+    {!savingKind && (popupVisible && focused || started || Boolean(atlasId)) ? <View pointerEvents="box-none" style={[styles.mapCandidateLayer, { bottom: popupBottom }]}>
+      {popupVisible && focused ? <Animated.View style={{ opacity: popupOpacity, transform: [{ scale: popupScale }] }}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View> : null}
+      <View pointerEvents="none" style={styles.mapCandidateGuide}><Text numberOfLines={1} style={styles.mapCandidateGuideText}>Continue search or tap saved to add</Text></View>
+    </View> : null}
   </>, [addPlace, atlasId, focused, items, mapSearchOverlay, popupBottom, popupOpacity, popupScale, popupVisible, recommendedPlaces.length, savingKind, started]);
 
   useLayoutEffect(() => {
@@ -1272,10 +1443,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       cameraScreenOffsetY: atlasId ? EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y : 0,
       centerCoordinate: mapCenter,
       zoomLevel: mapZoom,
-      // Edit mode starts with this Atlas's durable orange-pin bounds. Create
-      // mode deliberately keeps its continental overview until a focus area
-      // is chosen.
-      bounds: atlasId ? mapBounds : undefined,
+      // Edit mode and a selected Create-search area both own an explicit
+      // bounds camera. A blank Create screen remains continental.
+      bounds: atlasId || started ? mapBounds : undefined,
       cameraKey,
       cameraAnimationDurationMs: atlasId ? 0 : undefined,
       selectedMarkerId: focused?.id ?? null,
@@ -1319,7 +1489,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
         <View style={styles.headerRight}>
-          {atlasId ? <TouchableOpacity accessibilityLabel={`Rename ${atlasTitle || existingAtlas?.title || 'Atlas'}`} onPress={renameAtlas} style={styles.focusAreaButton}><Text numberOfLines={1} style={styles.focusAreaButtonText}>{atlasTitle || existingAtlas?.title || 'Atlas'}</Text><Ionicons name="pencil-outline" size={15} color="#6A6A70" /></TouchableOpacity> : (started && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={openFocusSearch} style={styles.focusAreaButton}><Ionicons name="location-sharp" size={23} color="#303033" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null)}
+          {atlasId ? <TouchableOpacity accessibilityLabel={`Rename ${atlasTitle || existingAtlas?.title || 'Atlas'}`} onPress={renameAtlas} style={styles.focusAreaButton}><Text numberOfLines={1} style={styles.focusAreaButtonText}>{atlasTitle || existingAtlas?.title || 'Atlas'}</Text><Ionicons name="pencil-outline" size={15} color="#6A6A70" /></TouchableOpacity> : (started && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={onReturnToCreateSearch ? returnToCreateSearch : openFocusSearch} style={styles.focusAreaButton}><Ionicons name="location-sharp" size={23} color="#303033" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null)}
           <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
         </View>
       </View>
@@ -1526,6 +1696,8 @@ function TimePickerModal({ visible, day, time, dayLocked, hasExisting, validatio
 }
 
 const styles = StyleSheet.create({
+  searchResultRow: { minHeight: 62 },
+  searchResultsScroll: { maxHeight: 186 },
   // Atlas landing page: a quieter, editorial hierarchy that keeps the list
   // dense enough to browse without turning it into a stack of blue controls.
   eyebrow: { color: '#0F766E', fontSize: 10, fontWeight: '800', letterSpacing: 1.1, marginBottom: 3 },
@@ -1593,6 +1765,8 @@ const styles = StyleSheet.create({
   addResultButtonPending: { backgroundColor: '#94A3B8' },
   focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F766E' },
   mapCandidateLayer: { position: 'absolute', left: 16, right: 16, bottom: '60%', alignItems: 'center', zIndex: 30 },
+  mapCandidateGuide: { width: 312, marginTop: 5, paddingHorizontal: 4 },
+  mapCandidateGuideText: { color: '#667085', fontSize: 10, lineHeight: 13, fontWeight: '600', textAlign: 'center' },
   mapPopup: { width: 312, minHeight: 76, borderRadius: 14, backgroundColor: '#FFFFFF', paddingHorizontal: 15, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', shadowColor: '#111827', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
   mapPopupArrow: { position: 'absolute', top: -7, left: '50%', marginLeft: -7, width: 14, height: 14, backgroundColor: '#FFFFFF', transform: [{ rotate: '45deg' }] },
   mapPinActionWrap: { width: 34, height: 34, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },

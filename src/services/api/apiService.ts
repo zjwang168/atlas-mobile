@@ -60,9 +60,9 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   }
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, signal?: AbortSignal, includeAuth = true): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: await authHeaders(),
+    headers: includeAuth ? await authHeaders() : undefined,
     signal,
   });
   if (!response.ok) {
@@ -148,22 +148,26 @@ export function requestAtlasRoute(coordinates: Array<[number, number]>): Promise
 
 type MapboxRouteResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; code?: string };
 type MapboxOptimizationResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; waypoints?: Array<{ waypoint_index: number; trips_index: number; location: [number, number] }>; code?: string };
-type MapboxGeocodingResponse = { features?: Array<{ center?: [number, number]; bbox?: [number, number, number, number] }> };
-export type AtlasAreaGeocode = { center: [number, number]; bounds?: { ne: [number, number]; sw: [number, number] } };
+type MapboxGeocodingResponse = { features?: Array<{ center?: [number, number]; bbox?: [number, number, number, number]; text?: string; place_name?: string; place_type?: string[] }> };
+export type AtlasAreaGeocode = { center: [number, number]; bounds?: { ne: [number, number]; sw: [number, number] }; label?: string; subtitle?: string; featureType?: string };
 
-async function mapboxRequest<T>(path: string): Promise<T> {
+async function mapboxRequest<T>(path: string, signal?: AbortSignal): Promise<T> {
   if (!MAPBOX_ACCESS_TOKEN) throw new Error('Mapbox access token is not configured');
-  const response = await fetch(`https://api.mapbox.com${path}${path.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(MAPBOX_ACCESS_TOKEN)}`);
+  const response = await fetch(
+    `https://api.mapbox.com${path}${path.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(MAPBOX_ACCESS_TOKEN)}`,
+    { signal },
+  );
   if (!response.ok) throw new Error(`Mapbox request failed (${response.status})`);
   return response.json() as Promise<T>;
 }
 
 /** Resolves a named Focus area before the Atlas editor builds its camera. */
-export async function geocodeAtlasArea(query: string): Promise<AtlasAreaGeocode | null> {
+export async function geocodeAtlasArea(query: string, signal?: AbortSignal): Promise<AtlasAreaGeocode | null> {
   if (!query.trim()) return null;
   try {
     const result = await mapboxRequest<MapboxGeocodingResponse>(
       `/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?types=place,region,country&limit=1`,
+      signal,
     );
     const feature = result.features?.[0];
     const center = feature?.center;
@@ -172,8 +176,15 @@ export async function geocodeAtlasArea(query: string): Promise<AtlasAreaGeocode 
     const bounds = bbox && bbox.every(Number.isFinite)
       ? { ne: [bbox[2], bbox[3]] as [number, number], sw: [bbox[0], bbox[1]] as [number, number] }
       : undefined;
-    return { center, bounds };
+    return {
+      center,
+      bounds,
+      label: feature.text ?? feature.place_name,
+      subtitle: feature.place_name,
+      featureType: feature.place_type?.[0],
+    };
   } catch (error) {
+    if (signal?.aborted) return null;
     console.warn('[apiService] Focus-area geocoding failed', error);
     return null;
   }
@@ -517,6 +528,7 @@ export async function searchPlaces(
     limit?: number;
     language?: string;
     country?: string;
+    types?: string;
   },
   signal?: AbortSignal,
 ): Promise<PlaceSuggestResponse> {
@@ -528,8 +540,11 @@ export async function searchPlaces(
   if (params.limit) search.set('limit', String(params.limit));
   if (params.language) search.set('language', params.language);
   if (params.country) search.set('country', params.country);
+  if (params.types) search.set('types', params.types);
 
-  return getJson<PlaceSuggestResponse>(`/places/search?${search.toString()}`, signal);
+  // Mapbox search endpoints are public application queries. Avoid waiting for
+  // Supabase session hydration before every keystroke.
+  return getJson<PlaceSuggestResponse>(`/places/search?${search.toString()}`, signal, false);
 }
 
 /** Resolve one suggestion into saveable places. Returns a list: a `brand`
@@ -543,6 +558,7 @@ export async function retrievePlace(
   return getJson<PlaceRetrieveResponse>(
     `/places/retrieve/${encodeURIComponent(externalId)}?${search.toString()}`,
     signal,
+    false,
   );
 }
 

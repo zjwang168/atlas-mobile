@@ -949,7 +949,7 @@ async def speech_transcribe(file: UploadFile = File(...)) -> dict:
          responses={422: {"model": ErrorResponse}, 429: {"model": ErrorResponse},
                     502: {"model": ErrorResponse}})
 async def places_search(
-    q: str = Query(..., min_length=2, description="Search text, as typed"),
+    q: str = Query(..., min_length=1, description="Search text, as typed"),
     session_token: str = Query(
         ...,
         min_length=1,
@@ -965,12 +965,14 @@ async def places_search(
     limit: int = Query(10, ge=1, le=10),
     language: str = Query("en"),
     country: Optional[str] = Query(None, description="ISO 3166-1 alpha-2 filter"),
+    types: Optional[str] = Query(None, description="Comma-separated Mapbox feature types"),
 ) -> PlaceSuggestResponse:
     """Suggest places for a partial query. Results carry no coordinates."""
     try:
         suggestions = await place_search_service.suggest(
             q, session_token,
             proximity=proximity, limit=limit, language=language, country=country,
+            types=types,
         )
     except Exception as e:
         raise _place_search_http_error(e)

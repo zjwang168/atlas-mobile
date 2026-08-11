@@ -28,7 +28,7 @@ ATTRIBUTION = "© Mapbox © OpenStreetMap"
 # Kept short because this backs a typeahead: a keystroke that is going to fail
 # should fail while the user is still typing, not eight seconds later. The next
 # keystroke retries anyway.
-REQUEST_TIMEOUT_S = 3.5
+REQUEST_TIMEOUT_S = 2.5
 
 # Suggestions churn as the user types, so they are held only long enough to
 # absorb repeated keystrokes. A retrieved place is stable POI data and is kept
@@ -180,13 +180,14 @@ async def suggest(
     limit: int = MAX_LIMIT,
     language: str = "en",
     country: Optional[str] = None,
+    types: Optional[str] = None,
 ) -> list[dict]:
     """Return search candidates for `query`. None of them carry coordinates."""
     normalized = " ".join(query.split()).lower()
     limit = max(1, min(limit, MAX_LIMIT))
 
     cache_key = (
-        f"search:suggest:{language}:{country or '-'}:{limit}:"
+        f"search:suggest:{language}:{country or '-'}:{types or '-'}:{limit}:"
         f"{_round_proximity(proximity)}:{normalized}"
     )
     cached = search_cache.get(cache_key)
@@ -203,6 +204,8 @@ async def suggest(
         params["proximity"] = proximity
     if country:
         params["country"] = country
+    if types:
+        params["types"] = types
 
     payload = await _get_json(SUGGEST_URL, params)
     suggestions = [

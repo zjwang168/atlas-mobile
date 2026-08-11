@@ -25,6 +25,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   const [buildCenter, setBuildCenter] = useState<[number, number] | undefined>();
   const [buildBounds, setBuildBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>();
   const [buildLocation, setBuildLocation] = useState<string | undefined>();
+  const [autoFocusCreateSearch, setAutoFocusCreateSearch] = useState(false);
   const [builderKey, setBuilderKey] = useState(0);
   const editorWasEligibleRef = useRef(false);
 
@@ -37,6 +38,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setBuildCenter(undefined);
     setBuildBounds(undefined);
     setBuildLocation(undefined);
+    setAutoFocusCreateSearch(false);
     setBuilderKey((value) => value + 1);
     setBuilderVisible(true);
   }, [snapTo]);
@@ -47,9 +49,22 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setBuildCenter(undefined);
     setBuildBounds(undefined);
     setBuildLocation(undefined);
+    setAutoFocusCreateSearch(false);
     snapTo?.('default');
     onExit?.();
   }, [onExit, snapTo]);
+  const returnToCreateSearch = useCallback(() => {
+    // This is only passed to provisional editors opened from Create Atlas.
+    // Re-mounting clears their temporary recommendations and camera state.
+    setBuildSeed(null);
+    setDraftItems([]);
+    setBuildCenter(undefined);
+    setBuildBounds(undefined);
+    setBuildLocation(undefined);
+    setAutoFocusCreateSearch(true);
+    setBuilderKey((value) => value + 1);
+    setBuilderVisible(true);
+  }, []);
   const openBuildPlan = useCallback((_location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => {
     setBuildLocation(_location);
     setBuildSeed(candidates);
@@ -69,7 +84,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   }
 
   if (builderVisible) {
-    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onSaved={(atlasId, askAI, mapView) => {
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} autoFocusCreateSearch={autoFocusCreateSearch} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onReturnToCreateSearch={returnToCreateSearch} onSaved={(atlasId, askAI, mapView) => {
       // Saving transitions directly into the completed Atlas. Do not use
       // closeBuilder here: it calls onExit and visibly returns to My Places.
       const completedCamera = mapView ? atlasCameraFromStops(mapView.markers.map((marker) => ({
@@ -99,6 +114,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
       setBuildCenter(undefined);
       setBuildBounds(undefined);
       setBuildLocation(undefined);
+      setAutoFocusCreateSearch(false);
       if (askAI) setActiveSidekick('aiChat');
       else setOverlay({ kind: 'atlasDetail', atlasId });
     }} />;
