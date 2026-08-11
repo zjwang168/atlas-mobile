@@ -89,6 +89,19 @@ function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Route request timed out')), timeoutMs);
+    promise.then((value) => {
+      clearTimeout(timeout);
+      resolve(value);
+    }).catch((error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
 function routeLines(route: RouteFeature): GeoJSON.Position[][] {
   return route.geometry.type === 'LineString' ? [route.geometry.coordinates] : route.geometry.coordinates;
 }
@@ -181,6 +194,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   const routeControlBottom = useRef(new Animated.Value(SNAP_HEIGHTS.default)).current;
   const optimizationPromptOpacity = useRef(new Animated.Value(0)).current;
   const routePlaybackRef = useRef(0);
+  const routeInFlightRef = useRef(false);
   const hydratedRouteAtlasRef = useRef<string | null>(null);
   const pendingMapReleaseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestAtlasMapStateRef = useRef<AtlasMapState>(null);
@@ -248,6 +262,10 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     : presentation;
   const optimizedItems = useMemo(() => optimizationOrder ? optimizationOrder.map((index) => items[index]).filter((item): item is ItineraryItem => Boolean(item)) : [], [items, optimizationOrder]);
   const listItems = optimizationReview ? optimizedItems : (appliedOptimizedItems ?? items);
+  const activeRouteDistanceLabels = useMemo(
+    () => displayedRoute && listItems.length ? routeDistanceLabelsForItems(displayedRoute, listItems) : [],
+    [displayedRoute, listItems],
+  );
 
   useEffect(() => {
     const visible = Boolean(optimizationOrder && !optimizationDismissed && !optimizationReview);
@@ -258,6 +276,8 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     if (!atlas || hydratedRouteAtlasRef.current === atlas.id) return;
     hydratedRouteAtlasRef.current = atlas.id;
     routePlaybackRef.current += 1;
+    routeInFlightRef.current = false;
+    setRouteBusy(false);
     // A completed Atlas always opens as its orange-pin overview. Keep a
     // persisted route ready for Show route, but never draw it by default.
     const persistedRoute = atlas?.route_geojson ?? null;
@@ -363,9 +383,11 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   }, [atlas?.id, atlasId, setAtlasMapState]);
 
   const toggleRoute = useCallback(async () => {
-    if (!atlas || routeBusy || items.length < 2) return;
+    if (!atlas || routeBusy || routeInFlightRef.current || items.length < 2) return;
     if (displayedRoute) {
       routePlaybackRef.current += 1;
+      routeInFlightRef.current = false;
+      setOptimizingRoute(false);
       setDisplayedRoute(null);
       setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-hidden-${Date.now()}`, 500));
       return;
@@ -375,16 +397,19 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-stored-route-${Date.now()}`, 500));
       return;
     }
+    routeInFlightRef.current = true;
+    const requestToken = ++routePlaybackRef.current;
     setRouteBusy(true);
     setOptimizationDismissed(false);
     setOptimizingRoute(true);
     const coordinates = items.map((item) => [item.place.longitude, item.place.latitude] as [number, number]);
     const optimizationPromise = requestMapboxOptimization(coordinates);
     try {
-      const nextRoute = await requestMapboxDirections(coordinates).catch((error) => {
+      const nextRoute = await withTimeout(requestMapboxDirections(coordinates), 15000).catch((error) => {
         console.warn('[AtlasDetail] Mapbox Directions unavailable; using route service fallback:', error);
-        return requestAtlasRoute(coordinates);
+        return withTimeout(requestAtlasRoute(coordinates), 15000);
       });
+      if (requestToken !== routePlaybackRef.current) return;
       setRouteFeature(nextRoute.route);
       setDisplayedRoute(nextRoute.route);
       setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-route-${Date.now()}`, 500));
@@ -392,13 +417,19 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     } catch (error) {
       console.warn('[AtlasDetail] could not create route:', error);
     } finally {
-      setRouteBusy(false);
+      if (requestToken === routePlaybackRef.current) {
+        routeInFlightRef.current = false;
+        setRouteBusy(false);
+      }
     }
     optimizationPromise.then((result) => {
+      if (requestToken !== routePlaybackRef.current) return;
       const changed = result.order.some((value, index) => value !== index);
       if (changed) { setOptimizationOrder(result.order); setOptimizedRoute(result.route.route); }
       setOptimizingRoute(false);
-    }).catch(() => setOptimizingRoute(false));
+    }).catch(() => {
+      if (requestToken === routePlaybackRef.current) setOptimizingRoute(false);
+    });
   }, [atlas, atlasOverviewCamera, detailCameraKey, displayedRoute, items, routeBusy, routeFeature]);
 
   const openOptimizationReview = useCallback(() => {
@@ -479,7 +510,6 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       cameraAnimationDurationMs: 320,
       ...(scopedRouteCamera ? { cameraAnimationDurationMs: scopedRouteCamera.cameraAnimationDurationMs } : {}),
       routeGeoJSON: renderedRoute ?? undefined,
-      routeDistanceLabels: renderedRoute && listItems.length ? routeDistanceLabelsForItems(renderedRoute, listItems) : undefined,
       hideChrome: capturingShare,
       selectedMarkerId: selectedPlaceId,
       onMarkerPress: (marker) => setSelectedPlaceId(marker.id),
@@ -513,7 +543,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
     {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={() => setEditing(false)} onSaved={(_, _askAI, mapView) => handleEditorSaved(mapView as { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: RouteFeature } | undefined)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
-      <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
+      <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} distanceLabel={activeRouteDistanceLabels[index]?.text} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
     </>}
   </ContentPanel>;
@@ -536,7 +566,7 @@ function OptimizedRouteReview({ items, originalItems, bottomInset, onClose, onSa
   return <View style={styles.optimizedReview}><View style={styles.optimizedReviewHeader}><View><Text style={styles.optimizedReviewTitle}>Better route</Text><Text style={styles.optimizedReviewSubtitle}>Optimized stop order</Text></View><TouchableOpacity accessibilityLabel="Close optimized route" onPress={onClose} style={styles.optimizedReviewClose}><Ionicons name="close" size={20} color="#252528" /></TouchableOpacity></View><FlatList data={items} keyExtractor={(item) => item.rowId} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 92, gap: 8 }} renderItem={({ item, index }) => { const originalIndex = originalIndexByRowId.get(item.rowId) ?? index; const change = originalIndex - index; return <View style={styles.optimizedRow}><View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>{item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.optimizedImage} /> : <View style={[styles.optimizedImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}<View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text></View>{change ? <View style={[styles.orderChange, change > 0 ? styles.orderUp : styles.orderDown]}><Ionicons name={change > 0 ? 'arrow-up-outline' : 'arrow-down-outline'} size={11} color={change > 0 ? '#217558' : '#986033'} /><Text style={[styles.orderChangeText, change > 0 ? styles.orderUpText : styles.orderDownText]}>{Math.abs(change)}</Text></View> : <View style={styles.orderUnchanged}><Text style={styles.orderUnchangedText}>Same</Text></View>}</View>; }} /><View style={styles.optimizedReviewFooter}><TouchableOpacity onPress={onClose} style={styles.optimizedCancel}><Text style={styles.optimizedCancelText}>Cancel</Text></TouchableOpacity><TouchableOpacity onPress={onSave} style={styles.optimizedSave}><Text style={styles.optimizedSaveText}>Save new route</Text></TouchableOpacity></View></View>;
 }
 
-function ItineraryRow({ item, index, nextItem, selected, onPress, onShare, onNavigate }: { item: ItineraryItem; index: number; nextItem?: ItineraryItem; selected: boolean; onPress: () => void; onShare?: () => void; onNavigate?: () => void }) {
+function ItineraryRow({ item, index, nextItem, distanceLabel, selected, onPress, onShare, onNavigate }: { item: ItineraryItem; index: number; nextItem?: ItineraryItem; distanceLabel?: string; selected: boolean; onPress: () => void; onShare?: () => void; onNavigate?: () => void }) {
   const nextHasMetadata = Boolean(nextItem && (nextItem.time || nextItem.transport));
   const navigationButton = nextItem && onNavigate ? <TouchableOpacity accessibilityLabel={`Navigate from ${item.place.name} to ${nextItem.place.name} in Google Maps`} onPress={onNavigate} activeOpacity={0.7} style={[styles.navigationButton, nextHasMetadata && styles.connectorNavigationButton]}>
     <Ionicons name="logo-google" size={9} color="#4285F4" />
@@ -552,9 +582,13 @@ function ItineraryRow({ item, index, nextItem, selected, onPress, onShare, onNav
     {nextItem ? nextHasMetadata ? <View style={styles.metadataConnector}>
       <View pointerEvents="none" style={styles.connectorLine} />
       <ItineraryMetadata item={nextItem} connector />
-      {navigationButton ? <View style={styles.connectorNavigation}>{navigationButton}</View> : null}
-    </View> : <View style={styles.navigationGap}>{navigationButton}</View> : null}
+      {navigationButton ? <View style={styles.connectorNavigation}>{navigationButton}{distanceLabel ? <DistanceHint text={distanceLabel} connector /> : null}</View> : null}
+    </View> : <View style={styles.navigationGap}>{navigationButton}{distanceLabel ? <DistanceHint text={distanceLabel} /> : null}</View> : null}
   </View>;
+}
+
+function DistanceHint({ text, connector = false }: { text: string; connector?: boolean }) {
+  return <View pointerEvents="none" accessibilityLabel={`Route distance ${text}`} style={[styles.distanceHint, connector && styles.distanceHintConnector]}><Text style={styles.distanceHintText}>{text}</Text></View>;
 }
 
 function ItineraryMetadata({ item, connector = false, onShare }: { item: ItineraryItem; connector?: boolean; onShare?: () => void }) {
@@ -562,13 +596,20 @@ function ItineraryMetadata({ item, connector = false, onShare }: { item: Itinera
   if (!item.time && !transport) {
     return connector ? null : <View style={styles.atlasBeginsRow}><Text style={styles.atlasBeginsText}>Where your Atlas begins</Text>{onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={styles.atlasBeginsShare}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas<Text style={styles.registeredMark}>®</Text></Text></TouchableOpacity> : null}</View>;
   }
-  return <View style={[styles.itineraryMetaRow, connector && styles.connectorMetaRow]}>
-    {item.time ? <View style={styles.dayMarker}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>{item.day ? `Day ${item.day} · ${item.time}` : item.time}</Text></View> : null}
+  return <View style={[styles.itineraryMetaRow, connector && styles.connectorMetaRow, !connector && onShare && styles.itineraryMetaRowWithShare]}>
+    {item.time ? <View style={[styles.dayMarker, styles.timeMarker]}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>{item.day ? `Day ${item.day} · ${item.time}` : item.time}</Text></View> : null}
     {transport ? <View accessibilityLabel={transport.label} style={styles.transportMarker}><Ionicons name={transport.icon} size={13} color="#64748B" /></View> : null}
+    {!connector && onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={[styles.atlasBeginsShare, styles.metadataShare]}><Ionicons name="share-social-outline" size={13} color="#B9683C" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas<Text style={styles.registeredMark}>®</Text></Text></TouchableOpacity> : null}
   </View>;
 }
 
 const styles = StyleSheet.create({
+  itineraryMetaRowWithShare: { alignSelf: 'stretch', marginLeft: 0, marginRight: 0, paddingLeft: 9 },
+  metadataShare: { marginLeft: 'auto' },
+  timeMarker: { height: 24, paddingVertical: 0 },
+  distanceHint: { position: 'absolute', left: '50%', top: -8, marginLeft: 20, width: 28, height: 18, borderRadius: 9, backgroundColor: '#FBFCFC', borderWidth: StyleSheet.hairlineWidth, borderColor: '#E7EBEE', alignItems: 'center', justifyContent: 'center', zIndex: 4 },
+  distanceHintConnector: { top: 0 },
+  distanceHintText: { width: '100%', color: '#A0A8AE', fontSize: 8, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
   rowSelectedSurface: { backgroundColor: '#F1F3F4', borderColor: '#E1E4E7' },
   routeMapOverlay: { ...StyleSheet.absoluteFill },
   floatingRouteButton: { position: 'absolute', right: 16, minHeight: 30, borderRadius: 12, backgroundColor: '#FFF8F3', borderWidth: StyleSheet.hairlineWidth, borderColor: '#F0CDB9', shadowColor: '#8B4E2A', shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4 },
