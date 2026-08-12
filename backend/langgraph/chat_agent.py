@@ -142,6 +142,11 @@ Tool rules:
   an unverified constraint is true.
 - For pasted notes or an itinerary that the user wants added, call
   extract_pasted_places, then propose_add_places. This is only a proposal.
+- For requests for film, television, or music-video filming locations, sets,
+  or locations associated with a named work, call research_screen_locations.
+  It uses the Paste Text live-research and geocoding pipeline, then produces
+  one Atlas confirmation proposal itself. Do not call propose_create_atlas
+  again after it.
 - For creating an Atlas, find or extract real places first, then call
   propose_create_atlas. This is only a proposal.
 - If an Atlas draft already exists and the user asks to change its places,
@@ -965,6 +970,45 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         return {"title": result.get("title"), "places": places, "route": session.route}
 
     @tool
+    async def research_screen_locations(query: str) -> dict[str, Any]:
+        """Research and geocode filming locations for a named screen work, then prepare an Atlas for confirmation."""
+        clean_query = " ".join(str(query or "").split())[:1_000]
+        if len(clean_query) < 3:
+            return {"error": "A film, show, or filming-location request is required."}
+        from backend.services.smart_text_service import analyze_smart_text
+
+        result = await analyze_smart_text(clean_query, use_web_search=True)
+        places = _dedupe_places(result.get("locations") or [])
+        if not places:
+            return {"error": "No mappable filming locations were found from the researched sources."}
+
+        title = " ".join(str(result.get("title") or clean_query).split())[:100]
+        action = {
+            "action_id": str(uuid.uuid4()),
+            "kind": "create_atlas",
+            "title": title,
+            "places": places,
+            "planning_note": "Filming locations researched from live web sources and geocoded before mapping.",
+        }
+        session.locations = places
+        session.route = result.get("route")
+        session.pending_chat_action = action
+        state["pending_action"] = action
+        state["presentation"] = {
+            "kind": "atlas_draft",
+            "title": title,
+            "places": places,
+            "planning_note": action["planning_note"],
+            "route": session.route,
+        }
+        return {
+            "title": title,
+            "places": places,
+            "route": session.route,
+            "proposal": action,
+        }
+
+    @tool
     async def propose_add_places(places: list[dict[str, Any]]) -> dict[str, Any]:
         """Propose saving parsed places to My Places. This never writes data."""
         normalized = _dedupe_places(places)
@@ -1012,7 +1056,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
         return {"proposal": action}
 
-    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, extract_pasted_places, propose_add_places, propose_create_atlas]
+    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, extract_pasted_places, research_screen_locations, propose_add_places, propose_create_atlas]
 
 
 def _image_data_url(image_base64: str | None) -> str | None:

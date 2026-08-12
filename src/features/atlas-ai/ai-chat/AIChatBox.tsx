@@ -944,6 +944,7 @@ export default function AIChatBox({
     if (result.canceled) return;
     const asset = result.assets?.[0];
     if (asset?.uri && asset.base64) {
+      setInputContentHeight(21);
       setAttachedImageUri(asset.uri);
       setAttachedImageBase64(asset.base64);
     }
@@ -1521,13 +1522,14 @@ export default function AIChatBox({
 
   const hasComposerText = inputText.length > 0;
   const canSendMessage = Boolean(inputText.trim() || attachedImageBase64);
+  const imageAttachmentDisabled = pending || sessionInitializing || Boolean(attachedImageUri);
   const landingVisible =
     showLanding && !messages.some((message) => message.role === 'user');
   const hasStartedChat = messages.some((message) => message.role === 'user');
   const headerTop = Math.max(insets.top, 56);
   const headerOverlayHeight = headerTop + 68;
   const composerHeight = attachedImageUri
-    ? Math.min(244, Math.max(152, inputContentHeight + 112))
+    ? Math.min(244, Math.max(180, inputContentHeight + 148))
     : hasComposerText
     ? Math.min(196, Math.max(120, inputContentHeight + 72))
     : 56;
@@ -1762,7 +1764,7 @@ export default function AIChatBox({
               {
                 height: composerHeight,
                 marginHorizontal: 12,
-                borderRadius: hasComposerText ? 24 : 32,
+                borderRadius: hasComposerText || attachedImageUri ? 24 : 32,
               },
             ]}
           >
@@ -1790,7 +1792,10 @@ export default function AIChatBox({
                   value={inputText}
                   onChangeText={setInputText}
                   onContentSizeChange={({ nativeEvent }) => {
-                    setInputContentHeight(Math.max(21, Math.ceil(nativeEvent.contentSize.height)));
+                    const nextHeight = Math.max(21, Math.ceil(nativeEvent.contentSize.height));
+                    setInputContentHeight((currentHeight) => (
+                      currentHeight === nextHeight ? currentHeight : nextHeight
+                    ));
                   }}
                   placeholder={editingMessageId ? 'Edit your message' : 'Ask AtlasAI'}
                   placeholderTextColor="#B0B0B0"
@@ -1808,6 +1813,7 @@ export default function AIChatBox({
                   <View style={styles.composerAttachment}>
                     <Image source={{ uri: attachedImageUri }} style={styles.composerAttachmentImage} />
                     <Pressable accessibilityRole="button" accessibilityLabel="Remove attached image" onPress={() => {
+                      if (!inputText) setInputContentHeight(21);
                       setAttachedImageUri(null);
                       setAttachedImageBase64(null);
                     }} style={styles.composerAttachmentRemove}>
@@ -1818,11 +1824,19 @@ export default function AIChatBox({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Add image"
-                  disabled={pending || sessionInitializing}
+                  disabled={imageAttachmentDisabled}
                   onPress={() => { void pickChatImage(); }}
-                  style={({ pressed }) => [styles.composerLeadingAction, pressed && styles.utilityButtonPressed]}
+                  style={({ pressed }) => [
+                    styles.composerLeadingAction,
+                    imageAttachmentDisabled && styles.composerLeadingActionDisabled,
+                    pressed && !imageAttachmentDisabled && styles.utilityButtonPressed,
+                  ]}
                 >
-                  <PlusIcon size={22} weight="regular" color={COLOR.foreground} />
+                  <PlusIcon
+                    size={22}
+                    weight="regular"
+                    color={imageAttachmentDisabled ? '#B4B4B4' : COLOR.primary}
+                  />
                 </Pressable>
               </Animated.View>
             ) : (
@@ -1831,10 +1845,10 @@ export default function AIChatBox({
                   <KeyboardIcon size={20} weight="regular" color="#202024" />
                 </Pressable>
                 <VoiceInputButton
-                  label="Tap to speak"
-                  tapToToggle
+                  label="Hold to speak"
                   disabled={pending || sessionInitializing}
                   onRecordingChange={setVoiceRecording}
+                  onError={(message) => showDialog({ title: 'Voice input unavailable', message, tone: 'warning' })}
                   onTranscript={(text) => {
                     setVoiceMode(false);
                     void handleSend(text);
@@ -2190,9 +2204,10 @@ const styles = StyleSheet.create({
     left: 16,
   },
   composerInputWithAttachment: {
-    // Start beside the preview, not beneath it: placing the input below the
-    // attachment leaves only a few pixels above the persistent bottom actions.
-    left: 92,
+    // The preview occupies its own row, leaving the input full-width so its
+    // placeholder never competes with the thumbnail.
+    top: 96,
+    left: 16,
   },
   composerLeadingAction: {
     position: 'absolute',
@@ -2204,6 +2219,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  composerLeadingActionDisabled: {
+    opacity: 0.72,
+    backgroundColor: 'rgba(180,180,180,0.22)',
+  },
   utilityButtonPressed: {
     opacity: 0.5,
     transform: [{ scale: 0.94 }],
@@ -2211,27 +2230,31 @@ const styles = StyleSheet.create({
   voiceModeWrap: {
     position: 'absolute',
     top: 0,
-    bottom: 8,
+    bottom: 6,
     left: 12,
     right: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 10,
   },
   voiceModeButton: {
     flex: 1,
-    height: 32,
-    borderRadius: 16,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#E9FBF1',
+    borderWidth: 1,
+    borderColor: '#C5EDD8',
   },
   voiceModeKeyboard: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4E4E7',
   },
   composerTrailingActions: {
     position: 'absolute',
@@ -2268,7 +2291,7 @@ const styles = StyleSheet.create({
   composerAttachment: {
     position: 'absolute',
     top: 12,
-    left: 12,
+    left: 16,
     width: 68,
     height: 68,
     borderRadius: 8,

@@ -176,6 +176,32 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["pending_action"]["kind"], "save_places")
         self.assertEqual(result["pending_action"]["places"][0]["name"], "Museum One")
 
+    async def test_screen_locations_reuses_paste_research_and_proposes_atlas(self):
+        locations = [{
+            "name": "Walter White House", "latitude": 35.125, "longitude": -106.535,
+            "full_address": "3828 Piermont Dr NE, Albuquerque, NM", "category": "Tourist Attractions",
+        }]
+        model = _ToolModel([
+            tool_call("research_screen_locations", {"query": "Give me Breaking Bad's 10 filming locations."}),
+            AIMessage(content="I prepared a filming-location Atlas for review."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.smart_text_service.analyze_smart_text", new=AsyncMock(return_value={
+                "title": "Breaking Bad filming locations", "locations": locations,
+                "route": {"ordered_locations": locations},
+            })) as analyze,
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "Give me Breaking Bad's 10 filming locations.")
+
+        analyze.assert_awaited_once_with("Give me Breaking Bad's 10 filming locations.", use_web_search=True)
+        self.assertEqual(result["tool_calls_used"], ["research_screen_locations"])
+        self.assertEqual(result["presentation"]["kind"], "atlas_draft")
+        self.assertEqual(result["pending_action"]["kind"], "create_atlas")
+        self.assertEqual(result["pending_action"]["places"][0]["name"], "Walter White House")
+        self.assertEqual(result["pending_action"]["places"][0]["latitude"], 35.125)
+
     async def test_create_atlas_is_a_draft_until_confirmed(self):
         places = [{
             "name": "Stop One", "latitude": 47.61, "longitude": -122.33,
