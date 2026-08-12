@@ -10,7 +10,11 @@ session.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import random
+import time
+from collections import deque
 from typing import Any, Optional
 
 import httpx
@@ -37,6 +41,20 @@ SUGGEST_TTL_S = 300
 RETRIEVE_TTL_S = 3600
 
 MAX_LIMIT = 10
+
+# Mapbox Search Box permits 10 requests per second per access token. This
+# process-wide limiter deliberately leaves headroom for clock boundaries and
+# other Mapbox traffic sharing the token. It protects both suggest and retrieve
+# calls, including calls initiated by concurrent mobile clients.
+MAX_REQUESTS_PER_SECOND = 8
+MAX_CONCURRENT_REQUESTS = 2
+MAX_429_RETRIES = 1
+MAX_RETRY_AFTER_S = 5.0
+
+_request_timestamps: deque[float] = deque()
+_rate_limit_lock = asyncio.Lock()
+_request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+_retrieve_in_flight: dict[str, asyncio.Task[list[dict]]] = {}
 
 
 class SearchUnavailable(Exception):
@@ -96,19 +114,29 @@ async def _get_json(url: str, params: dict) -> dict:
     if not MAPBOX_TOKEN:
         raise SearchUnavailable("MAPBOX_ACCESS_TOKEN is not configured")
 
-    try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
-            response = await client.get(url, params={**params, "access_token": MAPBOX_TOKEN})
-    except httpx.HTTPError as exc:
-        # Name the exception class: httpx's network errors (ReadTimeout,
-        # ConnectError, ...) all stringify to '', so interpolating only the
-        # message produces "failed: " and loses which failure it was.
-        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-        raise SearchUnavailable(f"Mapbox search request failed: {detail}") from exc
+    for attempt in range(MAX_429_RETRIES + 1):
+        await _wait_for_request_slot()
+        try:
+            async with _request_semaphore:
+                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+                    response = await client.get(url, params={**params, "access_token": MAPBOX_TOKEN})
+        except httpx.HTTPError as exc:
+            # Name the exception class: httpx's network errors (ReadTimeout,
+            # ConnectError, ...) all stringify to '', so interpolating only the
+            # message produces "failed: " and loses which failure it was.
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            raise SearchUnavailable(f"Mapbox search request failed: {detail}") from exc
 
-    if response.status_code == 429:
-        retry_after = response.headers.get("retry-after")
-        raise RateLimited(int(retry_after) if retry_after and retry_after.isdigit() else None)
+        if response.status_code != 429:
+            break
+
+        retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+        if attempt == MAX_429_RETRIES:
+            raise RateLimited(int(retry_after) if retry_after.is_integer() else None)
+        # Honor the provider's delay when present. A small random component
+        # prevents queued clients from retrying in the same instant.
+        await asyncio.sleep(min(retry_after, MAX_RETRY_AFTER_S) + random.uniform(0, 0.25))
+
     if response.status_code >= 400:
         raise SearchUnavailable(f"Mapbox search returned {response.status_code}")
 
@@ -116,6 +144,28 @@ async def _get_json(url: str, params: dict) -> dict:
         return response.json()
     except ValueError as exc:
         raise SearchUnavailable("Mapbox search returned a non-JSON body") from exc
+
+
+async def _wait_for_request_slot() -> None:
+    """Reserve one of this process's rolling one-second Mapbox slots."""
+    while True:
+        async with _rate_limit_lock:
+            now = time.monotonic()
+            while _request_timestamps and now - _request_timestamps[0] >= 1.0:
+                _request_timestamps.popleft()
+            if len(_request_timestamps) < MAX_REQUESTS_PER_SECOND:
+                _request_timestamps.append(now)
+                return
+            delay = max(0.0, 1.0 - (now - _request_timestamps[0]))
+        await asyncio.sleep(delay)
+
+
+def _retry_after_seconds(value: Optional[str]) -> float:
+    """Use Retry-After delta seconds when Mapbox supplies a valid value."""
+    try:
+        return max(0.0, float(value)) if value is not None else 0.5
+    except ValueError:
+        return 0.5
 
 
 def _to_suggestion(raw: dict) -> Optional[dict]:
@@ -243,6 +293,22 @@ async def retrieve(mapbox_id: str, session_token: str) -> list[dict]:
     if cached is not None:
         return cached
 
+    # A fast double-tap or two UI surfaces selecting the same result can arrive
+    # before the first response populates the cache. Coalesce that work so it
+    # remains one Mapbox retrieve, while preserving the caller's session token
+    # for the request that actually reaches Mapbox.
+    task = _retrieve_in_flight.get(mapbox_id)
+    if task is None:
+        task = asyncio.create_task(_retrieve_and_cache(mapbox_id, session_token, cache_key))
+        _retrieve_in_flight[mapbox_id] = task
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if task.done() and _retrieve_in_flight.get(mapbox_id) is task:
+            _retrieve_in_flight.pop(mapbox_id, None)
+
+
+async def _retrieve_and_cache(mapbox_id: str, session_token: str, cache_key: str) -> list[dict]:
     payload = await _get_json(
         f"{RETRIEVE_URL}/{mapbox_id}",
         {"session_token": session_token},

@@ -114,6 +114,7 @@ const PLANNING_HOURS = Array.from({ length: 17 }, (_, index) => {
 const CONTINENTAL_US_CENTER = [-98.5, 46.0] as [number, number];
 const CONTINENTAL_US_ZOOM = 1.9;
 const FOCUS_SAVED_PLACES_RADIUS_KM = 65;
+const SEARCH_DEBOUNCE_MS = 350;
 
 function boundsFromPolygon(polygon: Array<[number, number]>, padding = 0.06) {
   const minLng = Math.min(...polygon.map(([lng]) => lng));
@@ -592,10 +593,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       ? [geographicResult, ...remote.filter((result) => result.kind !== 'remote' || normalize(result.name) !== normalize(geographicResult?.kind === 'remote' ? geographicResult.name : ''))].slice(0, 8)
       : remote;
 
-    // Suggestions are the interaction-critical request. Do not wait for the
-    // separate area lookup before showing them: legacy geocoding can be slow
-    // on a weak connection, while Search Box can already render a useful list.
-    void suggestPlaces(
+    // Search Box is capped at 10 requests/s per access token. Waiting briefly
+    // after typing stops avoids turning each keystroke into an upstream call.
+    const timer = setTimeout(() => void suggestPlaces(
       trimmed,
       searchSession,
       isCreateAtlasLanding
@@ -623,7 +623,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       }
     }).finally(() => {
       if (!controller.signal.aborted) setSearching(false);
-    });
+    }), SEARCH_DEBOUNCE_MS);
 
     // This corrects ambiguous names such as California and Beijing after the
     // fast list is already visible. It never delays the search interaction.
@@ -642,7 +642,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         setResults((current) => withGeographicResult(current));
       });
     }
-    return () => controller.abort();
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [isCreateAtlasLanding, mapCenter, query, savedPlaces, searchSession]);
 
   const hideTransientUI = useCallback(() => {
