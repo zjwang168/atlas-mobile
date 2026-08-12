@@ -153,6 +153,48 @@ offset logic was not undone.
 
 ---
 
+## Open items the merge surfaced
+
+**The home map is slow with a large saved set.** Measured against ~320 saved
+places. Not a resolution mistake — Jay's new map rendering meeting a dataset
+bigger than it was built against. Three costs stack:
+
+- `mapMarkers` renders every saved place unconditionally: no clustering, no
+  viewport filtering at the React level.
+- Each marker is now an animated `MarkerDot` holding five reanimated values, and
+  `markers.map(...)` is not memoised per marker, so any parent render walks all
+  of them. MapboxMap went 283 → 836 lines across this merge; dev's marker was a
+  static `View`.
+- `labelOwnerPoints` is O(n²) — for each candidate it scans every existing group
+  and member. It *is* correctly throttled (rAF-coalesced with a camera-state
+  dedupe key), so at most once per frame, but at ~300 on-screen points that is
+  ~100k rect tests per frame on the JS thread.
+- `prefetchPlacePhotos` fires one `Image.prefetch` per photo with no concurrency
+  cap. It is deferred behind `InteractionManager`, but the batch still lands at
+  once.
+
+Best first fix by a distance: clip markers to the viewport plus a margin. That
+one change shrinks all three costs together. Then bucket `labelOwnerPoints` into
+a grid, and cap the prefetch at 4–6 in flight.
+
+**Jay's marker-delete animation has no trigger.** The plumbing was threaded
+through HJ's structure in S1 and removed again in S2, because their own S2
+deleted the handler from HomeScreen. What remains is the atlas builder's own
+`deletingMarkerId`. HJ's redesigned AllPlaces has no delete affordance for the
+My Places version to attach to, so re-adding it is a UI decision, not a merge one.
+
+**Their scan button was dropped** with the old TopNav structure it hung off
+(`showScanButton` in LeftNav). Re-add against HJ's design if it is still wanted.
+
+**The AI tab was dropped** from HomeTabBar in S1 — it was a second entry keyed
+`'chat'` with the same action as HJ's Chat tab, which React rejected as a
+duplicate key. Now that S4's sidekick has landed, decide whether the AI needs
+its own entry.
+
+**My Plan ownership is still open.** It currently hosts Jay's AtlasBuilder;
+HJ's plan grid is one `git checkout dev -- src/features/my-plan/MyPlan.tsx`
+away, and CreatePlan keeps its own HomeScreen overlay entry.
+
 ## After the merge
 
 1. **Dependencies** — six new packages (`expo-audio`, `expo-media-library`,
