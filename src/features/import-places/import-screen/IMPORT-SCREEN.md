@@ -50,8 +50,9 @@ type ImportScreenProps = {
   `Read text` / `Identify location` toggle.
 - Pan-down-to-close remains enabled. The back button returns from a category
   to the four-category menu.
-- Keyboard behaviour is `"interactive"` so the expanded sheet follows the
-  keyboard.
+- The composer follows keyboard events itself. The sheet uses its stable
+  expanded snap point while an input is active, preventing iOS keyboard-frame
+  updates from resetting the detail view or remounting the input.
 
 ## Integration
 
@@ -63,7 +64,7 @@ contract changes are required:
 - `redditLinks` → `/parse_link`
 - `youtubeLinks` → `/parse_youtube`
 - `smartText` → `/parse_text`
-- `anyLinks` → `/scan_url`
+- `anyLinks` → `/parse_link` (Universal Web Agent: HTTP reader, then Playwright for JavaScript pages)
 - `findTextPlaces` → `/scan_images_base64`
 - `findImagePlaces` → `/find_image_places`
 

@@ -1,40 +1,46 @@
 import { Badge } from '@/components/ui/badge';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Alert, ScrollView, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { ScrollView, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { AtlasCard } from './AtlasCard';
 
 const CATEGORY_PILLS = ['All', 'Restaurants', 'Museums', 'Trails', 'Cafes', 'Landmarks'];
-
-function promptCreateAtlas(createAtlas: (title: string) => Promise<unknown>) {
-  Alert.prompt(
-    'New Atlas',
-    'Name your new atlas',
-    [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Create',
-        onPress: (name?: string) => {
-          const trimmed = name?.trim();
-          if (!trimmed) return;
-          createAtlas(trimmed).then((result) => {
-            if (result === null) {
-              Alert.alert('Couldn’t create atlas', 'Something went wrong saving your new atlas. Please try again.');
-            }
-          });
-        },
-      },
-    ],
-    'plain-text',
-  );
-}
 
 function CategoryPillsRow() {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
   const { createAtlas } = useHome();
+  const { show: showDialog } = useAppDialog();
+
+  const handleCreateAtlas = () => {
+    showDialog({
+      title: 'New Atlas',
+      message: 'Give this collection a name you will recognize later.',
+      input: { placeholder: 'e.g. Tokyo coffee spots' },
+      actions: [
+        { label: 'Cancel' },
+        {
+          label: 'Create',
+          variant: 'primary',
+          onPress: (name) => {
+            const trimmed = name.trim();
+            if (!trimmed) {
+              showDialog({ title: 'Add a name first', message: 'A short name will help you find this atlas later.', tone: 'warning' });
+              return;
+            }
+            createAtlas(trimmed).then((result) => {
+              if (result === null) {
+                showDialog({ title: 'We couldn\'t create this atlas', message: 'Nothing has changed. Please try again in a moment.', tone: 'warning' });
+              }
+            });
+          },
+        },
+      ],
+    });
+  };
 
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8, gap: 8 }}>
@@ -61,7 +67,7 @@ function CategoryPillsRow() {
       <TouchableOpacity>
         <Ionicons name="list-outline" size={20} color={foreground} />
       </TouchableOpacity>
-      <TouchableOpacity onPress={() => promptCreateAtlas(createAtlas)}>
+      <TouchableOpacity onPress={handleCreateAtlas}>
         <Ionicons name="add" size={20} color={foreground} />
       </TouchableOpacity>
     </View>

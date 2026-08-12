@@ -182,6 +182,26 @@ def _scrape_html(subreddit: str, post_id: str) -> dict:
     }
 
 
+def fetch_reddit_json_post(url: str) -> dict:
+    """Fetch only the JSON specialist path, without the HTML fallback."""
+    parsed = _extract_post_id(url)
+    if parsed is None:
+        raise ValueError(f"Could not extract Reddit post ID from URL: {url}")
+    subreddit, post_id = parsed
+    result = _try_json_api(subreddit, post_id)
+    if result is None:
+        raise ValueError("Reddit JSON endpoint unavailable")
+    return result
+
+
+def fetch_reddit_legacy_post(url: str) -> dict:
+    """Fetch only the old.reddit HTML fallback path."""
+    parsed = _extract_post_id(url)
+    if parsed is None:
+        raise ValueError(f"Could not extract Reddit post ID from URL: {url}")
+    return _scrape_html(*parsed)
+
+
 def fetch_reddit_post(url: str) -> dict:
     """Fetch a Reddit post. Tries JSON API first, then falls back to HTML scraping.
 
@@ -192,16 +212,7 @@ def fetch_reddit_post(url: str) -> dict:
         ValueError: if the URL is not a valid Reddit post URL.
         httpx.HTTPError: if both fetch methods fail.
     """
-    parsed = _extract_post_id(url)
-    if parsed is None:
-        raise ValueError(f"Could not extract Reddit post ID from URL: {url}")
-
-    subreddit, post_id = parsed
-
-    # Try JSON API first
-    result = _try_json_api(subreddit, post_id)
-    if result is not None:
-        return result
-
-    # Fallback to HTML scraping
-    return _scrape_html(subreddit, post_id)
+    try:
+        return fetch_reddit_json_post(url)
+    except ValueError:
+        return fetch_reddit_legacy_post(url)

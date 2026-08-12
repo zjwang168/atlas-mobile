@@ -40,6 +40,7 @@ Output ONLY valid JSON in this exact shape:
 {{
   "title": "short human-friendly title",
   "inferred_region": "city/region if known, otherwise null",
+  "region_tagline": "2-4 English words that evoke the inferred region, or null",
   "places": [
     {{
       "name": "place name",
@@ -62,6 +63,7 @@ Rules:
 6. If you know the exact address, include it; otherwise leave it null.
 7. Keep descriptions concise.
 8. Output in English.
+9. Set region_tagline to exactly 2-4 refined English words, not a sentence.
 
 Input:
 {query}
@@ -79,9 +81,9 @@ def _current_date_line() -> str:
 async def analyze_smart_text(query: str, use_web_search: bool = False, request_id: str | None = None) -> dict:
     """Analyze a smart-text query into geocoded places.
 
-    The current product behavior always uses a qwen->deepseek cascade, even
-    when web search is not explicitly toggled on. The `use_web_search` flag is
-    preserved for compatibility but does not change the pipeline anymore.
+    Pasted notes and itineraries are parsed directly. Live research remains an
+    explicit opt-in for short discovery queries where the source text itself
+    does not contain the needed place information.
     """
     text = (query or "").strip()
     text = await translate_to_english(text, request_id=request_id)
@@ -96,19 +98,29 @@ async def analyze_smart_text(query: str, use_web_search: bool = False, request_i
             pass
 
     from backend.services import progress
-    progress.stream_note(request_id, "smart_text:web_search", {"detail": "Searching live web sources."})
-    search_context = await _run_tavily_web_research(text, request_id=request_id)
-    if not search_context or NO_PLACE_INFO in search_context:
-        raise ValueError(NO_PLACE_INFO)
+    source_text = text
+    if use_web_search:
+        progress.stream_note(request_id, "smart_text:web_search", {"detail": "Searching live web sources."})
+        source_text = await _run_tavily_web_research(text, request_id=request_id)
+        if not source_text or NO_PLACE_INFO in source_text:
+            raise ValueError(NO_PLACE_INFO)
 
-    progress.stream_note(request_id, "smart_text:deepseek", {"detail": "Converting raw search results into structured places."})
-    parsed = await _extract_places_from_text(search_context, request_id=request_id)
+    progress.stream_note(
+        request_id,
+        "smart_text:deepseek",
+        {"detail": "Converting raw search results into structured places." if use_web_search else "Converting pasted content into structured places."},
+    )
+    parsed = await _extract_places_from_text(source_text, request_id=request_id)
     if not parsed.get("places"):
         raise ValueError(NO_PLACE_INFO)
 
     title = parsed.get("title") or text[:80]
     inferred_region = parsed.get("inferred_region")
+    region_tagline = parsed.get("region_tagline")
+    if inferred_region:
+        progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     places = parsed.get("places", [])
+    progress.stream_identified_places(request_id, places)
     geocoded = await _geocode_places(places, inferred_region, request_id=request_id)
     if not geocoded:
         raise ValueError(NO_PLACE_INFO)
@@ -122,6 +134,7 @@ async def analyze_smart_text(query: str, use_web_search: bool = False, request_i
         "removed_noise": parsed.get("removed_noise", []),
         "removed_hierarchy": parsed.get("removed_hierarchy", []),
         "inferred_region": inferred_region,
+        "region_tagline": region_tagline,
         "source_type": "smart_text_web",
         "is_multi_region": False,
     }
@@ -130,12 +143,17 @@ async def analyze_smart_text(query: str, use_web_search: bool = False, request_i
 async def _run_tavily_web_research(query: str, request_id: str | None = None) -> str:
     search_queries = _build_search_queries(query)
     raw_results: list[dict] = []
-    for search_query in search_queries[:3]:
+
+    async def search_one(search_query: str) -> tuple[str, str]:
         progress_note = {"detail": f"Searching: {search_query}"}
         from backend.services import progress
 
         progress.stream_note(request_id, "smart_text:web_search", progress_note)
         search_output = await asyncio.to_thread(web_search, search_query, 5)
+        return search_query, search_output
+
+    searches = await asyncio.gather(*(search_one(search_query) for search_query in search_queries[:3]))
+    for search_query, search_output in searches:
         try:
             parsed = json.loads(search_output)
         except json.JSONDecodeError:
@@ -192,6 +210,7 @@ async def _extract_places_from_text(text: str, request_id: str | None = None) ->
     return {
         "title": parsed.get("title"),
         "inferred_region": parsed.get("inferred_region"),
+        "region_tagline": parsed.get("region_tagline"),
         "places": filtered["locations"] or deduped,
         "removed_noise": parsed.get("removed_noise", []),
         "removed_hierarchy": filtered["removed_hierarchy"],

@@ -80,8 +80,17 @@ export type ParseProgressEvent = {
 
 export type ParseProgress = {
   request_id: string;
-  status: 'running' | 'finished' | 'failed' | 'unknown';
+  status: 'running' | 'finished' | 'failed' | 'cancelled' | 'unknown';
   events: ParseProgressEvent[];
+};
+
+export type ParseRequestIdHandler = (requestId: string) => void;
+
+export type LinkPreview = {
+  kind: 'youtube' | 'reddit' | 'tiktok' | 'instagram' | 'facebook' | 'web' | 'unknown';
+  title: string;
+  image_url: string | null;
+  hostname: string;
 };
 
 export type AtlasChatResponse = {
@@ -196,7 +205,7 @@ function createRequestId(): string {
 async function pollProgress(
   requestId: string,
   onProgress?: (progress: ParseProgress) => void,
-): Promise<() => void> {
+): Promise<{ stop: () => void; refresh: () => Promise<void> }> {
   let stopped = false;
 
   const tick = async () => {
@@ -204,7 +213,7 @@ async function pollProgress(
     try {
       const progress = await getJson<ParseProgress>(`/parse_progress/${requestId}`);
       onProgress(progress);
-      if (progress.status === 'finished' || progress.status === 'failed') {
+      if (progress.status === 'finished' || progress.status === 'failed' || progress.status === 'cancelled') {
         stopped = true;
       }
     } catch (error) {
@@ -215,9 +224,14 @@ async function pollProgress(
   const intervalId = setInterval(tick, 1000);
   await tick();
 
-  return () => {
-    stopped = true;
-    clearInterval(intervalId);
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(intervalId);
+    },
+    // The response is only returned after the backend finishes, so one final
+    // refresh captures the terminal user-facing stage before the UI advances.
+    refresh: tick,
   };
 }
 
@@ -225,13 +239,17 @@ async function postParseWithProgress<T>(
   path: string,
   body: Record<string, unknown>,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<T> {
   const requestId = createRequestId();
-  const stopPolling = await pollProgress(requestId, onProgress);
+  onRequestId?.(requestId);
+  const progressPolling = await pollProgress(requestId, onProgress);
   try {
-    return await postJson<T>(path, { ...body, request_id: requestId });
+    const result = await postJson<T>(path, { ...body, request_id: requestId });
+    await progressPolling.refresh();
+    return result;
   } finally {
-    stopPolling();
+    progressPolling.stop();
   }
 }
 
@@ -244,8 +262,9 @@ async function postParseWithProgress<T>(
 export async function parseLink(
   url: string,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/parse_link', { url }, onProgress);
+  return postParseWithProgress<ParseResult>('/parse_link', { url }, onProgress, onRequestId);
 }
 
 /**
@@ -261,8 +280,9 @@ export async function parseText(
   text: string,
   webSearch = false,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/parse_text', { text, web_search: webSearch }, onProgress);
+  return postParseWithProgress<ParseResult>('/parse_text', { text, web_search: webSearch }, onProgress, onRequestId);
 }
 
 export async function createChatSession(payload?: {
@@ -297,22 +317,62 @@ export async function chatWithAtlas(
 export async function discoverAtlasPlaces(
   query: string,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/atlas_ai/discover', { query }, onProgress);
+  return postParseWithProgress<ParseResult>('/atlas_ai/discover', { query }, onProgress, onRequestId);
 }
 
 export async function scanUrl(
   url: string,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/scan_url', { url }, onProgress);
+  // Compatibility route for older clients. New Any Links imports use parseLink
+  // so every generic URL shares the Universal Web Agent pipeline.
+  return postParseWithProgress<ParseResult>('/scan_url', { url }, onProgress, onRequestId);
+}
+
+export async function getLinkPreview(url: string, signal?: AbortSignal): Promise<LinkPreview> {
+  const response = await fetch(`${API_BASE_URL}/link_preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({ url }),
+    signal,
+  });
+  if (!response.ok) throw new Error('Unable to load link preview');
+  return response.json() as Promise<LinkPreview>;
 }
 
 export async function parseYoutube(
   url: string,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/parse_youtube', { url }, onProgress);
+  return postParseWithProgress<ParseResult>('/parse_youtube', { url }, onProgress, onRequestId);
+}
+
+export async function parseTikTok(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_tiktok', { url }, onProgress, onRequestId);
+}
+
+export async function parseInstagramReel(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_instagram_reel', { url }, onProgress, onRequestId);
+}
+
+export async function parseFacebookReel(
+  url: string,
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/parse_facebook_reel', { url }, onProgress, onRequestId);
 }
 
 /**
@@ -322,8 +382,28 @@ export async function parseYoutube(
 export async function findImagePlace(
   imageBase64: string,
   onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
 ): Promise<ParseResult> {
-  return postParseWithProgress<ParseResult>('/find_image_places', { image: imageBase64 }, onProgress);
+  return postParseWithProgress<ParseResult>('/find_image_places', { image: imageBase64 }, onProgress, onRequestId);
+}
+
+export async function scanImagesBase64(
+  images: string[],
+  onProgress?: (progress: ParseProgress) => void,
+  onRequestId?: ParseRequestIdHandler,
+): Promise<ParseResult> {
+  return postParseWithProgress<ParseResult>('/scan_images_base64', { images }, onProgress, onRequestId);
+}
+
+export async function cancelParseRequest(requestId: string): Promise<{ cancelled: boolean }> {
+  return postJson<{ cancelled: boolean }>(`/parse_progress/${encodeURIComponent(requestId)}/cancel`, {});
+}
+
+export type RegionPhotoResponse = { region: string; photo_url: string | null; photo_urls?: string[] };
+
+export async function getRegionPhoto(region: string): Promise<RegionPhotoResponse> {
+  const query = encodeURIComponent(region.trim());
+  return getJson<RegionPhotoResponse>(`/region_photo?query=${query}`);
 }
 
 export type PlaceSuggestResponse = {

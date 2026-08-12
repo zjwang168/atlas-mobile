@@ -3,7 +3,8 @@ import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, useColorScheme, View } from 'react-native';
+import { FlatList, Pressable, useColorScheme, View } from 'react-native';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 
 import ContentPanel from '../../../../components/content-panel/ContentPanel';
 import { useHome } from '../../../home/HomeContext';
@@ -27,6 +28,7 @@ type AtlasDetailProps = {
 };
 
 export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightChange }: AtlasDetailProps) {
+  const { show: showDialog } = useAppDialog();
   const { atlases, savedPlaces, setOverlay, atlasPlaces, addPlacesToAtlas, removePlaceFromAtlas, deleteAtlas } = useHome();
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -87,24 +89,23 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     const message = placeCount > 0
       ? `Delete "${atlas.title}"? Its ${placeCount} ${placeCount === 1 ? 'place' : 'places'} will stay in My Places but won't be grouped in this atlas anymore. This can't be undone.`
       : `Delete "${atlas.title}"? This can't be undone.`;
-    Alert.alert(
-      'Delete Atlas',
+    showDialog({
+      title: 'Delete Atlas?',
       message,
-      [
-        { text: 'Cancel', style: 'cancel' },
+      tone: 'danger',
+      actions: [
+        { label: 'Keep Atlas' },
         {
-          text: 'Delete',
-          style: 'destructive',
+          label: 'Delete',
+          variant: 'destructive',
           onPress: () => {
             deleteAtlas(atlasId);
-            // The atlas is gone — nothing to return to, so close the panel
-            // instead of leaving it visible with no content.
             setOverlay({ kind: 'none' });
           },
         },
       ],
-    );
-  }, [atlasId, atlas, places.length, deleteAtlas, setOverlay]);
+    });
+  }, [atlasId, atlas, places.length, deleteAtlas, setOverlay, showDialog]);
 
   const renderItem = useCallback(
     ({ item }: { item: PlaceDetailType }) => <PlaceCard item={item} onDelete={handleDelete} />,

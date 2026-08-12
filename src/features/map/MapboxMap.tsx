@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View, ViewStyle, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Reanimated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 const MAPBOX_ACCESS_TOKEN: string =
   (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
@@ -34,10 +35,14 @@ interface MapboxMapProps {
   routeMarkers?: MapMarker[];
   /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
   padding?: MapPadding;
+  /** Duration for prop-driven camera changes. The Save screen needs a brief
+      settle after its sheet enters; the home map keeps its slower transition. */
+  cameraAnimationDurationMs?: number;
   selectedMarkerId?: string | null;
   /** Draw the current-position puck. Only pass true once location permission
       is granted — see the render site. */
   showUserLocation?: boolean;
+  deletingMarkerId?: string | null;
 }
 
 // Small ease applied to every live padding update so the map visibly trails
@@ -47,6 +52,19 @@ const PADDING_FOLLOW_DURATION_MS = 300;
 /** Close enough to read street names when recentring on the user. */
 const LOCATE_ZOOM_LEVEL = 15;
 const LOCATE_ANIMATION_MS = 800;
+
+function MarkerDot({ selected, deleting }: { selected: boolean; deleting: boolean }) {
+  const exit = useSharedValue(0);
+  useEffect(() => {
+    exit.value = deleting ? withTiming(1, { duration: 440 }) : withTiming(0, { duration: 160 });
+  }, [deleting, exit]);
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: 1 - exit.value,
+    backgroundColor: interpolateColor(exit.value, [0, 1], [selected ? '#12C170' : '#007AFF', '#DC2626']),
+    transform: [{ scale: 1 - exit.value * 0.76 }],
+  }));
+  return <Reanimated.View style={[styles.marker, selected && styles.markerSelected, animatedStyle]} />;
+}
 
 export interface MapboxMapHandle {
   /**
@@ -64,6 +82,9 @@ export interface MapboxMapHandle {
    * unchanged coordinate do nothing.
    */
   flyTo: (coordinate: [number, number], zoomLevel?: number) => void;
+  /** Same idea as `flyTo` but tuned for the atlas camera — a much shorter
+      animation, and no prop-diffing bookkeeping. */
+  focusCoordinate: (coordinate: [number, number], zoomLevel?: number, durationMs?: number) => void;
 }
 
 const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap({
@@ -75,8 +96,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   routeGeoJSON,
   routeMarkers,
   padding,
+  cameraAnimationDurationMs = 2000,
   selectedMarkerId,
   showUserLocation = false,
+  deletingMarkerId,
 }, ref) {
   const displayMarkers = routeMarkers ?? markers;
   const { width, height } = useWindowDimensions();
@@ -92,13 +115,13 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   useEffect(() => {
     try {
       if (!MAPBOX_ACCESS_TOKEN) {
-        setError('Mapbox access token is missing. Check MAPBOX_ACCESS_TOKEN in .env and rebuild.');
+        setError('The map is unavailable right now. Please try again in a moment.');
         return;
       }
       MapboxGL.setAccessToken(MAPBOX_ACCESS_TOKEN);
       setIsReady(true);
     } catch (err) {
-      setError('Failed to initialise Mapbox: ' + (err instanceof Error ? err.message : String(err)));
+      setError('The map is unavailable right now. Please try again in a moment.');
     }
   }, []);
 
@@ -122,10 +145,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     cameraRef.current?.setCamera({
       centerCoordinate,
       zoomLevel,
-      animationDuration: 2000,
+      animationDuration: cameraAnimationDurationMs,
       padding,
     });
-  }, [centerCoordinate, zoomLevel, padding]);
+  }, [cameraAnimationDurationMs, centerCoordinate, zoomLevel, padding]);
 
   useImperativeHandle(ref, () => ({
     setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
@@ -146,6 +169,14 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         zoomLevel: zoom,
         animationDuration: LOCATE_ANIMATION_MS,
         padding: prevPaddingRef.current,
+      });
+    },
+    focusCoordinate: (coordinate, nextZoomLevel = 15, durationMs = 90) => {
+      cameraRef.current?.setCamera({
+        centerCoordinate: coordinate,
+        zoomLevel: nextZoomLevel,
+        padding: prevPaddingRef.current,
+        animationDuration: durationMs,
       });
     },
   }), []);
@@ -182,7 +213,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       >
         <MapboxGL.Camera
           ref={cameraRef}
-          defaultSettings={{ centerCoordinate, zoomLevel }}
+          defaultSettings={{ centerCoordinate, zoomLevel, padding }}
         />
 
         {/* Gated on the caller having permission already. Rendering the puck
@@ -211,10 +242,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             coordinate={[marker.longitude, marker.latitude]}
           >
             <View style={styles.markerContainer} onTouchEnd={() => onMarkerPress?.(marker)}>
-              <View style={[
-                styles.marker,
-                selectedMarkerId === marker.id && styles.markerSelected,
-              ]} />
+              <MarkerDot selected={selectedMarkerId === marker.id} deleting={deletingMarkerId === marker.id} />
             </View>
           </MapboxGL.MarkerView>
         ))}

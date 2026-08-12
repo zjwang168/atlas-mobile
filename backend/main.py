@@ -52,8 +52,14 @@ from pydantic import BaseModel
 from backend.services import progress
 from backend.services.conversation_manager import conversation_manager
 from backend.services.gemini_computer_use import extract_web_text
-from backend.services.place_image_service.place_image_service import enrich_locations_with_photos, enrich_response_with_photos, get_or_build_response
+from backend.services.place_image_service.place_image_service import (
+    enrich_locations_with_photos,
+    enrich_response_with_photos,
+    fetch_photos_for_places,
+    get_or_build_response,
+)
 from backend.services import place_search_service
+from backend.services.link_preview import build_link_preview
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
 
@@ -167,6 +173,7 @@ class NoiseInfo(BaseModel):
 
 class ParseResponse(BaseModel):
     title: str
+    source_thumbnail: Optional[str] = None
     locations: list[LocationItem]
     route: RouteResult
     removed_noise: Optional[list[NoiseInfo | str]] = None
@@ -209,6 +216,25 @@ class ScanUrlRequest(BaseModel):
 class YouTubeParseRequest(BaseModel):
     url: str
     request_id: Optional[str] = None
+
+
+class TikTokParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class InstagramReelParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class FacebookReelParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class LinkPreviewRequest(BaseModel):
+    url: str
 
 
 class ErrorResponse(BaseModel):
@@ -296,7 +322,11 @@ async def scrape_url(req: ScrapeUrlRequest):
 @app.post("/scan_url", response_model=ParseResponse,
           responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def scan_url(req: ScanUrlRequest):
-    """Use Gemini computer-use screenshots, OCR them with GLM, then reuse image-scan parsing."""
+    """Legacy Any Links endpoint, now backed by the Universal Web Agent.
+
+    Kept for installed clients; new clients call /parse_link directly. Both
+    routes use the same HTTP reader -> Playwright -> place extraction pipeline.
+    """
     url = req.url.strip()
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
@@ -306,17 +336,17 @@ async def scan_url(req: ScanUrlRequest):
 
     try:
         progress.start(req.request_id, "Opening page.") if req.request_id else None
-        progress.stream_note(req.request_id, "Reading screenshots", {"detail": "Opening screenshots and preparing OCR."})
+        progress.stream_note(req.request_id, "Fetching source", {"detail": "Reading the webpage and its travel details."})
         state = await atlas_graph_app.ainvoke(
             {
-                "task_type": "scan_url",
+                "task_type": "parse_link",
                 "url": url,
                 "request_id": req.request_id,
                 "session": session,
             },
             config={
                 "configurable": {"thread_id": req.request_id or session.session_id},
-                "run_name": "AtlasApp:scan_url",
+                "run_name": "AtlasApp:universal_web",
             },
         )
         result = state.get("result", {})
@@ -325,8 +355,6 @@ async def scan_url(req: ScanUrlRequest):
             "resolved_count": len(result.get("locations", [])),
         })
         progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
-        # Keep Gemini/scan-derived responses on the same photo contract as
-        # parse_link even though this endpoint does not use the URL parse cache.
         await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
@@ -334,7 +362,7 @@ async def scan_url(req: ScanUrlRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         progress.fail(req.request_id, str(e))
-        raise HTTPException(status_code=500, detail=f"Any Links scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Any Links import failed: {e}")
 
 
 @app.post("/parse_youtube", response_model=ParseResponse,
@@ -390,6 +418,129 @@ async def parse_youtube(req: YouTubeParseRequest):
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"YouTube parse failed: {e}")
+
+
+@app.post("/parse_tiktok", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_tiktok(req: TikTokParseRequest):
+    """Identify places from a public TikTok video's caption and metadata."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No TikTok URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening TikTok video.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_tiktok",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_tiktok",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "tiktok_links"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"TikTok parse failed: {e}")
+
+
+@app.post("/parse_instagram_reel", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_instagram_reel(req: InstagramReelParseRequest):
+    """Identify places from a public Instagram Reel and optional transcript."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No Instagram Reel URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening Instagram Reel.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_instagram_reel",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_instagram_reel",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "instagram_reels"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Instagram Reel parse failed: {e}")
+
+
+@app.post("/parse_facebook_reel", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_facebook_reel(req: FacebookReelParseRequest):
+    """Identify places from a public Facebook Reel or share video."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No Facebook Reel URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening Facebook Reel.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_facebook_reel",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_facebook_reel",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "facebook_reels"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Facebook Reel parse failed: {e}")
 
 
 @app.post("/parse_link", response_model=ParseResponse,
@@ -468,6 +619,15 @@ async def parse_link(req: ParseRequest) -> ParseResponse:
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+
+@app.post("/link_preview")
+async def link_preview(req: LinkPreviewRequest) -> dict:
+    """Return lightweight display metadata before a user imports a link."""
+    try:
+        return await build_link_preview(req.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # --- Chat & Conversation Endpoints ---
@@ -838,10 +998,38 @@ async def parse_progress(request_id: str) -> dict:
     return progress.get(request_id)
 
 
+@app.post("/parse_progress/{request_id}/cancel")
+async def cancel_parse_progress(request_id: str) -> dict:
+    """Cancel an active parse, or reserve a just-created request ID as cancelled."""
+    return {"cancelled": progress.cancel(request_id)}
+
+
+@app.get("/region_photo")
+async def region_photo(query: str = Query(..., min_length=1, max_length=160)) -> dict:
+    """Return several representative Wikipedia images for an inferred region."""
+    region = query.strip()
+    photos = await fetch_photos_for_places([
+        f"{region} skyline",
+        f"{region} waterfront",
+        f"{region} landmark",
+        region,
+    ])
+    unique_photos: list[str] = []
+    for photo in photos:
+        if photo and photo not in unique_photos:
+            unique_photos.append(photo)
+    return {
+        "region": region,
+        "photo_url": unique_photos[0] if unique_photos else None,
+        "photo_urls": unique_photos[:3],
+    }
+
+
 # ---- Find Image Places ----
 
 class FindImagePlaceRequest(BaseModel):
     image: str  # base64-encoded image data
+    request_id: Optional[str] = None
 
 
 @app.post("/find_image_places", response_model=ParseResponse,
@@ -856,10 +1044,12 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
         raise HTTPException(status_code=400, detail="No image provided.")
 
     try:
+        progress.start(req.request_id, "Inspecting image.") if req.request_id else None
         result_state = await atlas_graph_app.ainvoke(
             {
                 "task_type": "find_image_places",
                 "image": req.image,
+                "request_id": req.request_id,
             },
             config={
                 "configurable": {"thread_id": f"find_image_{id(req)}"},
@@ -878,10 +1068,13 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
         # Landmark/image identification returns the same ParseResponse shape,
         # so enrich it before Pydantic serializes LocationItem.
         await enrich_response_with_photos(result)
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
         return ParseResponse(**result)
     except ValueError as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Find image place failed: {e}")
 
 
@@ -890,6 +1083,7 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
 
 class ScanImagesBase64Request(BaseModel):
     images: list[str]  # base64-encoded image data
+    request_id: Optional[str] = None
 
 
 @app.post("/scan_images_base64", response_model=ParseResponse,
@@ -915,7 +1109,8 @@ async def scan_images_base64_endpoint(req: ScanImagesBase64Request):
 
     from backend.services.image_scanner import scan_images as run_scan
     try:
-        result = await run_scan(image_bytes)
+        progress.start(req.request_id, "Inspecting image text.") if req.request_id else None
+        result = await run_scan(image_bytes, request_id=req.request_id)
         response_data = {
             "title": result.get("title", "Scanned places from image"),
             "locations": result.get("locations", []),
@@ -938,10 +1133,13 @@ async def scan_images_base64_endpoint(req: ScanImagesBase64Request):
         # Image scans bypass atlas_graph parse_link caching; enrich the
         # normalized response payload directly.
         await enrich_response_with_photos(response_data)
+        progress.finish(req.request_id, {"location_count": len(response_data["locations"])})
         return ParseResponse(**response_data)
     except ValueError as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Image scan failed: {e}")
 
 

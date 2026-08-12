@@ -192,7 +192,7 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   }));
 
   const { data, error } = await withTimeout(
-    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, photo_url, created_at'),
+    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at'),
   );
   if (error) throw new Error(`Failed to save queued places: ${error.message}`);
 

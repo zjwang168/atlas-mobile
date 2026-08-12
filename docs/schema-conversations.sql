@@ -1,5 +1,6 @@
 
--- Conversation persistence tables for the agent memory system
+-- Conversation persistence tables for chat history and attached place snapshots.
+-- Chat history is product data; it is not automatically injected as user memory.
 
 -- Reverse-engineered from backend/services/supabase_service.py:
 

@@ -10,7 +10,6 @@
  * session and tighten RLS to `created_by = auth.uid()`.
  */
 
-import Constants from 'expo-constants';
 import type { PlaceDetail } from '@/types/place';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
@@ -18,6 +17,7 @@ import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, type SavedPlacesIndexEntry, withTimeout } from '../local/syncQueue';
 import { supabase } from '../supabase/supabaseClient';
+import { staticMapThumbnail } from './staticMapThumbnail';
 
 export type SavedPlace = {
   id: string;
@@ -30,6 +30,8 @@ export type SavedPlace = {
   region: string | null;
   external_place_id?: string | null;
   external_source?: string | null;
+  city?: string | null;
+  country?: string | null;
   photo_url?: string | null;
   note?: string | null;
   created_at: string;
@@ -42,7 +44,7 @@ export type SavedPlace = {
  * that silently fall back to fuzzy matching.
  */
 const PLACE_COLUMNS =
-  'id, name, subtitle, category, latitude, longitude, region, external_place_id, external_source, photo_url, created_at';
+  'id, name, subtitle, category, latitude, longitude, region, external_place_id, external_source, city, country, photo_url, created_at';
 
 type SavedPlacesListener = (places: SavedPlace[]) => void;
 
@@ -77,6 +79,20 @@ function withStableKey(place: SavedPlace): SavedPlace {
     ...place,
     stableKey: makeStableKey(place),
   };
+}
+
+async function recordPinHistory(eventType: 'saved' | 'deleted', places: SavedPlace[]): Promise<void> {
+  if (!places.length) return;
+  const rows = places.map((place) => ({
+    place_id: place.id,
+    stable_key: place.stableKey ?? makeStableKey(place),
+    name: place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    event_type: eventType,
+  }));
+  const { error } = await supabase.from('place_pin_history').insert(rows);
+  if (error) throw new Error(`Saving pin history failed: ${error.message}`);
 }
 
 async function setSavedPlacesCache(userId: string, places: SavedPlace[]): Promise<void> {
@@ -314,6 +330,8 @@ export async function savePlaces(
     // next dedup reads from, and a row without them falls back to fuzzy matching.
     external_place_id: row.external_place_id,
     external_source: row.external_source,
+    city: row.city,
+    country: row.country,
     photo_url: row.photo_url,
     created_at: new Date().toISOString(),
   }));
@@ -386,6 +404,7 @@ export async function savePlaces(
       return localIndex >= 0 ? (savedRows[localIndex] ?? row) : row;
     })
   ));
+  recordPinHistory('saved', savedRows).catch((error) => console.warn('[placeService] pin history insert failed:', error));
 
   // Record provenance (best-effort; a failure here shouldn't lose the places).
   if (source?.url && data) {
@@ -427,22 +446,6 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   return fetchFresh();
 }
 
-const MAPBOX_TOKEN: string =
-  (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
-  (process.env.MAPBOX_ACCESS_TOKEN as string) ||
-  '';
-
-/** Static map thumbnail centered on the place (Mapbox Static Images API).
-    Note: Mapbox expects LONGITUDE first. */
-function staticMapThumb(lat: number, lng: number): string {
-  if (!MAPBOX_TOKEN) return '';
-  return (
-    `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-    `pin-s+3b82f6(${lng},${lat})/${lng},${lat},14,0/200x200@2x` +
-    `?access_token=${MAPBOX_TOKEN}`
-  );
-}
-
 /**
  * Resolve a place's thumbnail: the real saved photo if there is one, otherwise
  * whatever `fallback` asks for.
@@ -459,7 +462,7 @@ export function resolvePlaceThumbnail(
   options: { fallback?: 'staticMap' | 'none' } = {},
 ): string {
   if (place.photo_url) return place.photo_url;
-  return options.fallback === 'none' ? '' : staticMapThumb(place.latitude, place.longitude);
+  return options.fallback === 'none' ? '' : staticMapThumbnail(place.latitude, place.longitude);
 }
 
 /** Adapt a DB row to the PlaceDetail shape the detail screens expect.
@@ -494,7 +497,14 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
 export async function deletePlace(id: string): Promise<void> {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot delete places before auth is ready');
-  await updateSavedPlacesCache(userId, (current) => current.filter((place) => place.id !== id));
+  let deletedPlace: SavedPlace | undefined;
+  await updateSavedPlacesCache(userId, (current) => {
+    deletedPlace = current.find((place) => place.id === id);
+    return current.filter((place) => place.id !== id);
+  });
+  if (deletedPlace) {
+    recordPinHistory('deleted', [deletedPlace]).catch((error) => console.warn('[placeService] pin history delete record failed:', error));
+  }
 
   if (id.startsWith('local-')) {
     await enqueueWrite(userId, { kind: 'deletePlace', placeId: id });

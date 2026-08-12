@@ -5,6 +5,7 @@ import TopNav, { type TopMode } from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
+import type { PlaceDetail as PlaceDetailRecord } from '../../types/place';
 import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
 import { SNAP_HEIGHTS } from '../../components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '../../components/content-panel/ContentPanelSnapProvider';
@@ -19,6 +20,7 @@ import DebugPanel from '@/dev/DebugPanel';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
 import HomeTabBar, {
+  TAB_CHAT,
   TAB_PLACES,
   TAB_PLAN,
   TAB_PROFILE,
@@ -100,11 +102,8 @@ function HomeScreenContent({
     overlay,
     setOverlay,
     tabBarVisible,
-    chatHistory,
-    setChatHistory,
     parsedPlaces,
     setParsedPlaces,
-    refreshSavedPlaces,
     selectedPlaceCoordinate,
     setSelectedPlaceCoordinate,
     selectedPlaceId,
@@ -142,10 +141,15 @@ function HomeScreenContent({
   const [topMode, setTopMode] = useState<TopMode>('saved');
   const [accountOpen, setAccountOpen] = useState(false);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
+  const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
   const [chatPresented, setChatPresented] = useState(false);
   const [mainSheetPaused, setMainSheetPaused] = useState(false);
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
+  // Their marker-delete animation. `homePanelVisible` is deliberately not
+  // carried over — the native sheet's own visibility model (mainSheetVisible)
+  // replaced it.
+  const [deletingMarker, setDeletingMarker] = useState<MapMarker | null>(null);
   const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
   // Use parsedPlaces from HomeContext (set by App.tsx after parse)
@@ -174,9 +178,11 @@ function HomeScreenContent({
 
   // 合并标记：有 parsedPlaces 时优先显示解析结果，否则显示已保存地点
   const mapMarkers = useMemo(() => {
-    if (hasParsedPlaces) return parsedMarkers;
-    return savedMarkers;
-  }, [savedMarkers, parsedMarkers, hasParsedPlaces]);
+    const markers = hasParsedPlaces ? parsedMarkers : savedMarkers;
+    return deletingMarker && !markers.some((marker) => marker.id === deletingMarker.id)
+      ? [...markers, deletingMarker]
+      : markers;
+  }, [savedMarkers, parsedMarkers, hasParsedPlaces, deletingMarker]);
 
   // 动态 zoom 级别
   const mapZoom = useMemo(() => {
@@ -186,8 +192,9 @@ function HomeScreenContent({
   }, [selectedPlaceCoordinate, hasParsedPlaces]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
-  const historyChatVisible = activeSidekick === 'aiChat' && panelVisible;
-  const chatVisible = standaloneChatVisible || historyChatVisible;
+  const historyChatRequested = activeSidekick === 'aiChat' && panelVisible;
+  const chatRequested = standaloneChatVisible || historyChatRequested;
+  const chatVisible = chatPresentationVisible;
   const effectiveTabBarVisible = tabBarVisible && !chatVisible;
   // On iOS the persistent native sheet owns the only visible tab bar.
   // Keeping the React Native copy hidden prevents it flashing through while
@@ -228,6 +235,18 @@ function HomeScreenContent({
     pendingSheetActionRef.current = null;
     pendingAction?.();
   }, []);
+
+  useEffect(() => {
+    if (!chatRequested) {
+      setChatPresentationVisible(false);
+      return;
+    }
+    // Let the selector travel from My Places to Chat before the chat surface
+    // covers the tab bar, so opening AI feels like one continuous transition.
+    setActiveTab(TAB_CHAT);
+    const timeoutId = setTimeout(() => setChatPresentationVisible(true), 280);
+    return () => clearTimeout(timeoutId);
+  }, [chatRequested]);
 
   useEffect(() => {
     Animated.timing(tabBarOpacity, {
@@ -280,6 +299,7 @@ function HomeScreenContent({
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
   const bottomPanelHeightRef = useRef(settledBottomPanelHeight);
   const mapRef = useRef<MapboxMapHandle>(null);
+  const deletingMarkerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Recomputed whenever the active bottom panel toggles OR its resolved snap state
   // changes, so a discrete camera recenter (e.g. selecting a different marker while
   // the panel is at a non-default snap height) uses padding matching the panel's
@@ -339,6 +359,7 @@ function HomeScreenContent({
   const handleTabChange = useCallback((tab: string) => {
     animateToTab(tab);
   }, [animateToTab]);
+
   useEffect(() => {
     animateToTab(activeTab);
   }, []);
@@ -365,6 +386,21 @@ function HomeScreenContent({
     setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
   }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
 
+  const handleDeleteInitiated = useCallback((place: PlaceDetailRecord) => {
+    if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
+    setDeletingMarker({ id: place.id, longitude: place.longitude, latitude: place.latitude, title: place.name, description: place.subtitle });
+    deletingMarkerTimerRef.current = setTimeout(() => setDeletingMarker(null), 470);
+  }, []);
+
+  useEffect(() => () => {
+    if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (hasParsedPlaces || !selectedPlaceId || savedPlaces.some((place) => place.id === selectedPlaceId)) return;
+    setSelectedPlaceId(null);
+  }, [hasParsedPlaces, savedPlaces, selectedPlaceId, setSelectedPlaceId]);
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
@@ -377,6 +413,7 @@ function HomeScreenContent({
         zoomLevel={mapZoom}
         padding={mapPadding}
         selectedMarkerId={selectedPlaceId}
+        deletingMarkerId={deletingMarker?.id}
         onMarkerPress={handleMarkerPress}
         showUserLocation={locationStatus === 'granted'}
       />
@@ -409,6 +446,7 @@ function HomeScreenContent({
                 visible={panelVisible && activeTab === TAB_PLACES}
                 onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
                 onSearchPress={handleSearchPress}
+                onDeleteInitiated={handleDeleteInitiated}
               />
             ) : null}
           </View>
@@ -441,6 +479,7 @@ function HomeScreenContent({
           onHeightChange={mainSheetVisible ? handlePanelHeightChange : undefined}
           onDismissed={handleMainSheetDismissed}
           onSearchPress={handleSearchPress}
+          onDeleteInitiated={handleDeleteInitiated}
           bottomBar={effectiveTabBarVisible ? (
             <HomeTabBar
               activeTab={activeTab}
@@ -464,6 +503,7 @@ function HomeScreenContent({
           setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
           setActiveSidekick('none');
+          animateToTab(TAB_PLACES);
         }}
         onOpenHistory={onOpenChatHistory}
         onNewChat={handleNewChat}
@@ -471,56 +511,6 @@ function HomeScreenContent({
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatPresented}
         conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
-        onPlacesCommitted={(newPlaces, action) => {
-          const currentItem = standaloneChatVisible ? null : activeHistoryItem;
-          if (!currentItem) {
-            if (action === 'pin_in_chat' || action === 'both') {
-              const merged = [...parsedPlaces];
-              newPlaces.forEach((place) => {
-                const duplicate = merged.some(
-                  (item) =>
-                    item.name === place.name &&
-                    Math.abs(item.latitude - place.latitude) < 0.0002 &&
-                    Math.abs(item.longitude - place.longitude) < 0.0002,
-                );
-                if (!duplicate) merged.push(place);
-              });
-              setParsedPlaces(merged);
-              if (merged[0]) {
-                setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
-              }
-            }
-            refreshSavedPlaces().catch((error) => {
-              console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
-            });
-            return;
-          }
-
-          const existing = currentItem.places ?? [];
-          const merged = [...existing];
-          newPlaces.forEach((place) => {
-            const duplicate = merged.some(
-              (item) =>
-                item.name === place.name &&
-                Math.abs(item.latitude - place.latitude) < 0.0002 &&
-                Math.abs(item.longitude - place.longitude) < 0.0002,
-            );
-            if (!duplicate) merged.push(place);
-          });
-
-          const nextItem = {
-            ...currentItem,
-            places: merged,
-            locationCount: merged.length,
-          };
-          setActiveHistoryItem(nextItem);
-          setParsedPlaces(merged);
-          setSelectedPlaceCoordinate([merged[0].longitude, merged[0].latitude]);
-          setChatHistory(chatHistory.map((item) => (item.id === nextItem.id ? nextItem : item)));
-          refreshSavedPlaces().catch((error) => {
-            console.warn('[HomeScreen] refreshSavedPlaces after chat commit failed:', error);
-          });
-        }}
       />
 
       {/* Native tab bar — fades out when overlay features request it */}

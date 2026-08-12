@@ -5,15 +5,17 @@ import { useHome } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { memo, useRef } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
 type PlaceCardProps = {
   item: PlaceDetail;
+  selected?: boolean;
   onPress?: (place: PlaceDetail) => void;
   onDelete: (id: string) => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
 const DELETE_BUTTON_WIDTH = 72;
@@ -42,24 +44,39 @@ function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; o
 /** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
     frames) don't force every visible row to re-render — only rows whose
     own props actually changed do. */
-export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: PlaceCardProps) {
+export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPress, onDelete, onDeleteInitiated }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
-  const { overlay, setOverlay } = useHome();
+  const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
+  const [locallySelected, setLocallySelected] = useState(false);
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { overlay, setOverlay, selectedPlaceId } = useHome();
+
+  useEffect(() => {
+    if (selectedPlaceId !== item.id) setLocallySelected(false);
+  }, [item.id, selectedPlaceId]);
+  useEffect(() => () => {
+    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+  }, []);
 
   const handleDelete = () => {
-    swipeableRef.current?.close();
-    onDelete(item.id);
+    onDeleteInitiated?.(item);
+    deleteTimerRef.current = setTimeout(() => {
+      onDelete(item.id);
+    }, 450);
   };
 
   const handleOpenDetail = () => {
+    setLocallySelected(true);
     onPress?.(item);
-    // Remember whatever panel is currently open (e.g. AtlasDetail, or 'none'
-    // for the plain My Places list) so PlaceDetail can return to it on close.
-    setOverlay({ kind: 'placeDetail', placeId: item.id, returnTo: overlay });
+    // A detail-to-detail tap replaces the existing detail instead of nesting
+    // another return target. One close always gets back to My Places.
+    const returnTo = overlay.kind === 'placeDetail' ? { kind: 'none' as const } : overlay;
+    setOverlay({ kind: 'placeDetail', placeId: item.id, returnTo });
   };
 
   return (
     <View style={{ paddingHorizontal: 16 }}>
+      <View style={[styles.cardShell, (selected || locallySelected) && styles.cardShellSelected]}>
       <ReanimatedSwipeable
         ref={swipeableRef}
         friction={2}
@@ -70,7 +87,7 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
         renderRightActions={(progress) => <DeleteAction progress={progress} onDelete={handleDelete} />}
       >
         <TouchableOpacity onPress={handleOpenDetail} activeOpacity={0.7}>
-          <View style={{ flexDirection: 'row', gap: 24, alignItems: 'flex-start' }}>
+          <View style={styles.cardContent}>
             <View style={{ flex: 1 }}>
               <Text
                 className="text-text-primary"
@@ -93,15 +110,17 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
                 height: 86,
                 borderRadius: 16,
                 overflow: 'hidden',
-                backgroundColor: '#e5e5ea',
                 flexShrink: 0,
               }}
             >
-              {item.thumbnailUrl ? (
+              {/* Their broken-image guard now falls through to the cover
+                  instead of leaving an empty square. */}
+              {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
                 <Image
                   source={{ uri: item.thumbnailUrl }}
                   style={{ width: '100%', height: '100%' }}
                   resizeMode="cover"
+                  onError={() => setFailedImageUri(item.thumbnailUrl)}
                 />
               ) : (
                 <PlaceCover category={item.category} iconSize={24} />
@@ -128,6 +147,7 @@ export const PlaceCard = memo(function PlaceCard({ item, onPress, onDelete }: Pl
           ))}
         </ScrollView>
       ) : null}
+      </View>
     </View>
   );
 });
@@ -146,8 +166,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  cardContent: {
+    flexDirection: 'row',
+    gap: 24,
+    alignItems: 'flex-start',
+  },
+  cardShell: {
+    borderRadius: 8,
+    padding: 8,
+    marginHorizontal: -8,
+    marginVertical: -7,
+  },
+  cardShellSelected: {
+    backgroundColor: '#E9FBF1',
+    borderWidth: 1,
+    borderColor: 'rgba(18,193,112,0.28)',
+  },
   tagsRow: {
-    marginTop: 12,
+    marginTop: 10,
   },
   tagsRowContent: {
     flexDirection: 'row',

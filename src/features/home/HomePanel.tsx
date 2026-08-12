@@ -2,7 +2,7 @@ import { memo, useCallback, type ReactNode } from 'react';
 import { Platform, View } from 'react-native';
 import type { TopMode } from '../../components/top-nav/TopNav';
 import ContentPanel from '../../components/content-panel/ContentPanel';
-import { Place } from '../../types/place';
+import { Place, PlaceDetail } from '../../types/place';
 import { type PlacesView } from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import { useHome } from './HomeContext';
@@ -22,6 +22,7 @@ type HomePanelProps = {
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
   onSearchPress?: () => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
   placesView?: PlacesView;
   bottomBar?: ReactNode;
 };
@@ -37,6 +38,7 @@ function HomePanel({
   onHeightChange,
   onDismissed,
   onSearchPress,
+  onDeleteInitiated,
   placesView = 'all',
   bottomBar,
 }: HomePanelProps) {
@@ -58,6 +60,7 @@ function HomePanel({
         onHeightChange={onHeightChange}
         onDismissed={onDismissed}
         onSearchPress={onSearchPress}
+        onDeleteInitiated={onDeleteInitiated}
         bottomBar={bottomBar}
       />
     );
@@ -75,6 +78,7 @@ function HomePanel({
         onHeightChange={onHeightChange}
         onDismissed={onDismissed}
         onSearchPress={onSearchPress}
+        onDeleteInitiated={onDeleteInitiated}
         bottomBar={bottomBar}
       />
     );

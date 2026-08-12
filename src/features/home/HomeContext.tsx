@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AppState } from 'react-native';
+import { AppState } from 'react-native';
+import { useAppDialog } from '../../components/feedback/AppDialog';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
 import { createAtlas as createAtlasService, deleteAtlas as deleteAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
 import { addPlacesToAtlas as addPlacesToAtlasService, fetchAtlasPlaces, removePlaceFromAtlas as removePlaceFromAtlasService, subscribeAtlasPlaces } from '../../services/atlas/atlasPlacesService';
@@ -175,6 +176,7 @@ function mergeHistoryItems(existing: ChatHistoryItem[], incoming: ChatHistoryIte
 }
 
 export function HomeProvider({ children }: { children: React.ReactNode }) {
+  const { show: showDialog } = useAppDialog();
   const [overlay, setOverlay] = useState<Overlay>({ kind: 'none' });
   const [tabBarVisible, setTabBarVisible] = useState(true);
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
@@ -254,27 +256,27 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       await deleteAtlasService(id);
     } catch (e) {
       console.error('[HomeContext] deleteAtlas failed:', e);
-      Alert.alert('Couldn’t delete atlas', 'Something went wrong deleting this atlas. Please try again.');
+      showDialog({ title: 'We couldn\'t delete this atlas', message: 'Nothing has changed. Please try again in a moment.', tone: 'warning' });
     }
-  }, []);
+  }, [showDialog]);
 
   const addPlacesToAtlas = useCallback(async (atlasId: string, placeIds: string[]) => {
     try {
       await addPlacesToAtlasService(atlasId, placeIds);
     } catch (e) {
       console.error('[HomeContext] addPlacesToAtlas failed:', e);
-      Alert.alert('Couldn’t add places', 'Something went wrong adding those places to the atlas. Please try again.');
+      showDialog({ title: 'We couldn\'t update this atlas', message: 'Those places are still in My Places. Please try again in a moment.', tone: 'warning' });
     }
-  }, []);
+  }, [showDialog]);
 
   const removePlaceFromAtlas = useCallback(async (joinRowId: string) => {
     try {
       await removePlaceFromAtlasService(joinRowId);
     } catch (e) {
       console.error('[HomeContext] removePlaceFromAtlas failed:', e);
-      Alert.alert('Couldn’t remove place', 'Something went wrong removing that place from the atlas. Please try again.');
+      showDialog({ title: 'We couldn\'t update this atlas', message: 'That place is still in the atlas. Please try again in a moment.', tone: 'warning' });
     }
-  }, []);
+  }, [showDialog]);
 
   // 初始加载已保存地点，让地图在启动时显示已保存的标记
   useEffect(() => {
@@ -305,15 +307,20 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
         flushQueue(previousUserId)
           .then((result) => {
             if (!result.success || result.remaining > 0) {
-              Alert.alert(
-                'Unsynced local changes discarded',
-                `${result.remaining} queued change${result.remaining === 1 ? '' : 's'} could not be synced before switching accounts.`,
-              );
+              showDialog({
+                title: 'Some recent changes could not sync',
+                message: 'A few changes were still waiting to upload when the account changed. Please check your saved places after signing in again.',
+                tone: 'warning',
+              });
             }
           })
           .catch((error) => {
             console.warn('[HomeContext] final queue flush failed:', error);
-            Alert.alert('Unsynced local changes discarded', 'Some queued local changes could not be synced before switching accounts.');
+            showDialog({
+              title: 'Some recent changes could not sync',
+              message: 'A few changes were still waiting to upload when the account changed. Please check your saved places after signing in again.',
+              tone: 'warning',
+            });
           })
           .finally(() => {
             clearUserCache(previousUserId).catch((error) => console.warn('[HomeContext] clearUserCache failed:', error));
@@ -332,7 +339,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       data.subscription.unsubscribe();
     };
-  }, [refreshSavedPlaces, refreshAtlases, refreshAtlasPlaces]);
+  }, [refreshSavedPlaces, refreshAtlases, refreshAtlasPlaces, showDialog]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {

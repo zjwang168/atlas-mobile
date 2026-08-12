@@ -27,7 +27,7 @@ import type { SnapState } from '@/components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '@/components/content-panel/ContentPanelSnapProvider';
 import TopBlurFade from '@/components/ui/top-blur-fade';
 import type { TopMode } from '@/components/top-nav/TopNav';
-import type { Place } from '@/types/place';
+import type { Place, PlaceDetail } from '@/types/place';
 import Discover from '../discover/Discover';
 import MyPlaces, { type PlacesView } from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
@@ -53,6 +53,7 @@ type PlacesBottomSheetProps = {
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
   onSearchPress?: () => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
   bottomBar?: ReactNode;
 };
 
@@ -85,6 +86,7 @@ function PlacesBottomSheet({
   onHeightChange,
   onDismissed,
   onSearchPress,
+  onDeleteInitiated,
   bottomBar,
 }: PlacesBottomSheetProps) {
   const { width, height } = useWindowDimensions();
@@ -169,6 +171,7 @@ function PlacesBottomSheet({
                       active={topMode === 'saved'}
                       onPlacePress={onPlacePress}
                       bottomInset={BOTTOM_BAR_CLEARANCE}
+                      onDeleteInitiated={onDeleteInitiated}
                       activeView={activeView}
                       verticalScrollEnabled={
                         groupSnapState === 'tall' || groupSnapState === 'full'

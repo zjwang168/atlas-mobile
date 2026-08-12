@@ -1,4 +1,5 @@
-import { Alert, Dimensions, View } from 'react-native';
+import { Dimensions, View } from 'react-native';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { Text } from '@/components/ui/text';
@@ -46,6 +47,7 @@ const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function Create
   { onClose, onPlanCreated, reportScrollY, inline },
   ref,
 ) {
+  const { show: showDialog } = useAppDialog();
   const [step, setStep] = useState<CreatePlanStep>('destination');
   const [location, setLocation] = useState('');
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
@@ -107,12 +109,15 @@ const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function Create
           variant="secondary"
           size="icon"
           className="rounded-full w-8 h-8"
-          onPress={() =>
-            Alert.alert('Discard plan?', 'Your progress will be lost if you leave now.', [
-              { text: 'Continue editing', style: 'cancel' },
-              { text: 'Discard', style: 'destructive', onPress: onClose },
-            ])
-          }
+          onPress={() => showDialog({
+            title: 'Discard this plan?',
+            message: 'Your destination, dates, and selected places will be cleared.',
+            tone: 'danger',
+            actions: [
+              { label: 'Keep Editing' },
+              { label: 'Discard', variant: 'destructive', onPress: onClose },
+            ],
+          })}
         >
           <Ionicons name="close" size={18} color="#3a3a3c" />
         </Button>

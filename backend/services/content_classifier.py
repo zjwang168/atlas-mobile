@@ -73,6 +73,15 @@ async def classify_location_content(text: str, source_type: str = "generic") -> 
     if ADDRESS_HINT_RE.search(sample) and len(sample) < 1200:
         return "address_first"
 
+    # Travel posts and videos almost always contain named POIs. Do not spend a
+    # serial LLM call classifying them unless the text has a genuine mixture of
+    # address and prose signals that the deterministic checks cannot resolve.
+    address_hits = len(ADDRESS_HINT_RE.findall(sample))
+    if address_hits == 0:
+        return "named_poi"
+    if address_hits >= 2:
+        return "address_first"
+
     try:
         result = await asyncio.to_thread(
             call_llm,
@@ -94,4 +103,3 @@ async def classify_location_content(text: str, source_type: str = "generic") -> 
         return mode
     except Exception:
         return _heuristic_mode(sample)
-

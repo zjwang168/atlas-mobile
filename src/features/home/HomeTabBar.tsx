@@ -8,6 +8,7 @@ import type { Icon } from 'phosphor-react-native';
 import { MapPinLineIcon } from 'phosphor-react-native/src/icons/MapPinLine';
 import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { SparkleIcon } from 'phosphor-react-native/src/icons/Sparkle';
 import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -52,6 +53,12 @@ type TabItem = {
 };
 
 const TAB_ITEMS: TabItem[] = [
+  {
+    key: TAB_CHAT,
+    label: 'AI',
+    icon: SparkleIcon,
+    action: 'chat',
+  },
   {
     key: TAB_PLACES,
     label: 'My Places',
