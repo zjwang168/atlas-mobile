@@ -2032,33 +2032,7 @@ export default function AIChatBox({
         <View style={[styles.header, { paddingTop: headerTop }]}>
           <View style={styles.headerControls}>
             <GlassIconButton icon={XIcon} label="Close chat" onPress={onClose} />
-            <View style={styles.headerActionGroupShadowSingle}>
-              <View style={styles.headerActionGroupSingle}>
-                {LIQUID_GLASS_AVAILABLE ? (
-                  <GlassView
-                    pointerEvents="none"
-                    style={StyleSheet.absoluteFill}
-                    glassEffectStyle="regular"
-                    tintColor="rgba(255,255,255,0.35)"
-                  />
-                ) : (
-                  <View pointerEvents="none" style={styles.glassButtonFallback} />
-                )}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Open chat history"
-                  onPress={onOpenHistory}
-                  disabled={!onOpenHistory}
-                  style={({ pressed }) => [
-                    styles.headerActionButton,
-                    pressed && styles.glassButtonPressed,
-                    !onOpenHistory && styles.glassButtonDisabled,
-                  ]}
-                >
-                  <ClockIcon size={24} weight="regular" color={COLOR.foreground} />
-                </Pressable>
-              </View>
-            </View>
+            <GlassIconButton icon={ClockIcon} label="Open chat history" onPress={onOpenHistory} />
           </View>
         </View>
 
