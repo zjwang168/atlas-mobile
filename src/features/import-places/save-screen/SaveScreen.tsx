@@ -97,16 +97,21 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
   const recognitionConfidence = result.places.length === 1 ? result.places[0]?.confidence : null;
   const recognizedPlaceName = result.places[0]?.name;
 
+  const selectedPlace = result.places.find((place) => place.id === selectedPlaceId);
   const markers: MapMarker[] = useMemo(
     () =>
-      result.places.map((p) => ({
-        id: p.id,
-        latitude: p.latitude,
-        longitude: p.longitude,
-        title: p.name,
-        description: p.subtitle,
-      })),
-    [result.places]
+      result.places
+        // The focused marker is green. Remove duplicate blue markers before
+        // rendering so MarkerView draw order can never expose both states.
+        .filter((place) => !selectedPlace || place.id === selectedPlace.id || !isSamePlace(place, selectedPlace))
+        .map((place) => ({
+          id: place.id,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          title: place.name,
+          description: place.subtitle,
+        })),
+    [result.places, selectedPlace]
   );
 
   const toggleOne = (id: string) => {
@@ -142,7 +147,6 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
   const startPanelHeight = useRef(panelHeight);
   const mapRef = useRef<MapboxMapHandle>(null);
   const [mapPaddingBottom, setMapPaddingBottom] = useState(panelHeight);
-  const selectedPlace = result.places.find((place) => place.id === selectedPlaceId);
   const mapCenter = selectedPlace
     ? [selectedPlace.longitude, selectedPlace.latitude] as [number, number]
     : result.centerCoordinate;

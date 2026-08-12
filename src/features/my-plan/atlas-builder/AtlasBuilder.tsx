@@ -296,6 +296,12 @@ function isWithinBounds(place: { latitude: number; longitude: number }, bounds?:
   return withinLatitude && withinLongitude;
 }
 
+function isMarkerOverlap(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) {
+  const latitudeDistance = (a.latitude - b.latitude) * 111_320;
+  const longitudeDistance = (a.longitude - b.longitude) * 111_320 * Math.cos((a.latitude + b.latitude) * Math.PI / 360);
+  return Math.hypot(latitudeDistance, longitudeDistance) < 48;
+}
+
 function deriveFocusAreas(places: SavedPlace[]): FocusArea[] {
   const areas = new Map<string, SavedPlace[]>();
   places.forEach((place) => {
@@ -1412,17 +1418,23 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   const mapMarkers = useMemo<MapMarker[]>(() => {
     const selected = new Set(items.map((item) => item.id));
-    const saved = savedPlaces.map((place) => ({
+    const focusedAtlasItem = focused ? items.find((item) => item.id === focused.id) : undefined;
+    const saved = savedPlaces
+      .filter((place) => !focused || !isMarkerOverlap(place, focused))
+      .map((place) => ({
       id: place.id,
       latitude: place.latitude,
       longitude: place.longitude,
       title: place.name,
       description: place.subtitle,
-      tone: focused?.id === place.id ? 'focused' as const : 'saved' as const,
+      tone: 'saved' as const,
     }));
     const recommended = recommendedPlaces
-      .filter((place) => place.source === 'recommended' && !savedPlaces.some((savedPlace) => savedPlace.id === place.id) && !selected.has(place.id))
-      .map((place) => ({ id: place.id, latitude: place.latitude, longitude: place.longitude, title: place.name, description: place.subtitle, labelHint: place.aiDescription ?? undefined, ai: true, tone: focused?.id === place.id ? 'focused' as const : 'recommended' as const }));
+      .filter((place) => place.source === 'recommended'
+        && !selected.has(place.id)
+        && !savedPlaces.some((savedPlace) => isMarkerOverlap(savedPlace, place))
+        && (!focused || !isMarkerOverlap(place, focused)))
+      .map((place) => ({ id: place.id, latitude: place.latitude, longitude: place.longitude, title: place.name, description: place.subtitle, labelHint: place.aiDescription ?? undefined, ai: true, tone: 'recommended' as const }));
     const atlasItems = [...items, ...(removingPlace && !items.some((item) => item.id === removingPlace.id) ? [removingPlace] : [])]
       .map((item, index) => ({
         id: item.id,
@@ -1430,21 +1442,19 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         longitude: item.longitude,
         title: item.name,
         description: item.subtitle,
-        tone: 'atlas' as const,
+        tone: focused?.id === item.id ? 'focused' as const : 'atlas' as const,
         order: items.findIndex((entry) => entry.id === item.id) + 1,
         entering: enteringPlaceIds.has(item.id),
         pulsing: savingKind !== null,
       }));
-    const focusedSearch = focused && !selected.has(focused.id)
-      && !savedPlaces.some((place) => place.id === focused.id)
-      && !recommendedPlaces.some((place) => place.id === focused.id && place.source === 'recommended')
+    const focusedMarker = focused && !focusedAtlasItem
       ? [{ id: focused.id, latitude: focused.latitude, longitude: focused.longitude, title: focused.name, description: focused.subtitle, labelHint: focused.aiDescription ?? undefined, ai: focused.source === 'recommended', tone: 'focused' as const }]
       : [];
     const byId = new Map<string, MapMarker>();
     saved.forEach((marker) => byId.set(marker.id, marker));
     recommended.forEach((marker) => { if (!byId.has(marker.id)) byId.set(marker.id, marker); });
     atlasItems.forEach((marker) => byId.set(marker.id, marker));
-    focusedSearch.forEach((marker) => { if (!byId.has(marker.id)) byId.set(marker.id, marker); });
+    focusedMarker.forEach((marker) => byId.set(marker.id, marker));
     return savingKind ? [...byId.values()].map((marker) => ({ ...marker, title: undefined, labelHint: undefined })) : [...byId.values()];
   }, [enteringPlaceIds, focused, items, recommendedPlaces, removingPlace, savedPlaces, savingKind]);
 
@@ -1480,7 +1490,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     {!savingKind ? mapSearchOverlay : null}
     {!savingKind && (popupVisible && focused || started || Boolean(atlasId)) ? <Animated.View pointerEvents="box-none" style={[styles.mapCandidateLayer, panelTranslateY ? { bottom: 12, transform: [{ translateY: panelTranslateY }] } : { bottom: popupBottom }]}>
       {popupVisible && focused ? <Animated.View style={{ opacity: popupOpacity, transform: [{ scale: popupScale }] }}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View> : null}
-      <View pointerEvents="none" style={styles.mapCandidateGuide}><Text numberOfLines={1} style={styles.mapCandidateGuideText}>Search or tap saved pins to add</Text></View>
     </Animated.View> : null}
   </>, [addPlace, atlasId, focused, items, mapSearchOverlay, panelTranslateY, popupBottom, popupOpacity, popupScale, popupVisible, recommendedPlaces.length, savingKind, started]);
 
@@ -1534,6 +1543,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text style={styles.heading}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
+          {atlasId || started || handoffStarted ? <Text style={styles.editGuide}>Search or tap saved pins to add</Text> : null}
           {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
         <View style={styles.headerRight}>
@@ -1813,8 +1823,6 @@ const styles = StyleSheet.create({
   addResultButtonPending: { backgroundColor: '#94A3B8' },
   focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F766E' },
   mapCandidateLayer: { position: 'absolute', left: 16, right: 16, bottom: '60%', alignItems: 'center', zIndex: 30 },
-  mapCandidateGuide: { width: 312, marginTop: 5, paddingHorizontal: 4 },
-  mapCandidateGuideText: { color: '#667085', fontSize: 10, lineHeight: 13, fontWeight: '600', textAlign: 'center' },
   mapPopup: { width: 312, minHeight: 76, borderRadius: 14, backgroundColor: '#FFFFFF', paddingHorizontal: 15, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', shadowColor: '#111827', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
   mapPopupArrow: { position: 'absolute', top: -7, left: '50%', marginLeft: -7, width: 14, height: 14, backgroundColor: '#FFFFFF', transform: [{ rotate: '45deg' }] },
   mapPinActionWrap: { width: 34, height: 34, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },
@@ -1842,5 +1850,6 @@ const styles = StyleSheet.create({
   transportOptionText: { color: '#475569', fontSize: 15, fontWeight: '600' },
   transportOptionTextSelected: { color: '#0F766E' },
   root: { flex: 1, backgroundColor: '#FFFFFF' }, header: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E4ECEA' }, headerCopy: { flex: 1, minWidth: 0, paddingRight: 12 }, heading: { fontSize: 24, fontWeight: '700', color: '#183431' }, landingLabel: { color: '#0F766E', fontSize: 12, fontWeight: '800', marginTop: 4 }, subheading: { fontSize: 12, color: '#74747B', marginTop: 2 }, headerIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F0F4F3', alignItems: 'center', justifyContent: 'center' }, searchLayer: { paddingHorizontal: 16, zIndex: 4 }, searchBox: { minHeight: 46, borderRadius: 14, backgroundColor: '#F4F5F6', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8 }, searchInput: { flex: 1, fontSize: 16, color: '#1D1D21', paddingVertical: 9 }, results: { marginTop: 6, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, resultRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 10, gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E7E8EA' }, resultCopy: { flex: 1 }, resultTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, resultName: { color: '#1B1B1D', fontSize: 14, fontWeight: '600', flexShrink: 1 }, resultAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, savedTag: { backgroundColor: '#E9F3FF', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }, savedTagText: { color: '#2F78B4', fontSize: 10, fontWeight: '700' }, addResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF' }, pinPopup: { marginHorizontal: 16, marginTop: 10, borderRadius: 14, backgroundColor: '#FFFFFF', padding: 12, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, pinName: { color: '#19191B', fontSize: 14, fontWeight: '700' }, pinAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, pinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }, addedPill: { flexDirection: 'row', gap: 3, alignItems: 'center', backgroundColor: '#FFF0E6', borderRadius: 13, paddingHorizontal: 9, paddingVertical: 6 }, addedPillText: { color: '#B5551B', fontSize: 11, fontWeight: '700' }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 7 }, listHeading: { color: '#1A1A1C', fontSize: 18, fontWeight: '700' }, routeButton: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 34, paddingHorizontal: 10, borderWidth: 1, borderColor: '#B7D8D2', borderRadius: 10, backgroundColor: '#FFFFFF' }, routeButtonActive: { backgroundColor: '#0F766E', borderColor: '#0F766E' }, routeButtonText: { color: '#0F766E', fontSize: 12, fontWeight: '700' }, routeButtonTextActive: { color: '#FFF' }, timeTags: { paddingHorizontal: 16, paddingBottom: 5, gap: 6 }, routeTimeTag: { borderRadius: 12, backgroundColor: '#F2F5F7', paddingHorizontal: 9, paddingVertical: 5 }, routeTimeTagText: { color: '#53616B', fontSize: 11, fontWeight: '600' }, emptyList: { flex: 1, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14 }, emptyText: { color: '#71827F', fontSize: 14, lineHeight: 20, maxWidth: 260 }, focusSection: { marginTop: 18, flexDirection: 'row', gap: 10, height: 122 }, focusList: { flex: 1 }, focusListContent: { gap: 10, paddingBottom: 16 }, focusRow: { minHeight: 70, padding: 10, borderRadius: 14, backgroundColor: '#F6F8F7', flexDirection: 'row', alignItems: 'center', gap: 10 }, focusText: { color: '#274845', fontSize: 14, fontWeight: '700', flexShrink: 1 }, focusRail: { width: 23, borderRadius: 12, backgroundColor: '#EFF1F2', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 6 }, focusRailPaused: { backgroundColor: '#E0EDF7' }, focusRailThumb: { width: 4, height: 30, borderRadius: 2, backgroundColor: '#94B1C5' }, list: { flex: 1, paddingHorizontal: 15 }, listContent: { paddingBottom: 10 }, timeTag: { alignSelf: 'flex-start', borderRadius: 10, backgroundColor: '#EAF4FF', paddingHorizontal: 9, paddingVertical: 4, marginBottom: 5 }, timeTagText: { color: '#3179B7', fontSize: 11, fontWeight: '700' }, dividerAdd: { height: 19, alignItems: 'center', justifyContent: 'center' }, swipeShell: { marginBottom: 1, overflow: 'hidden', borderRadius: 14 }, deleteReveal: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 63, backgroundColor: '#E05252', borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, deleteHidden: { opacity: 0 }, item: { minHeight: 70, padding: 9, borderRadius: 14, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, orderBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F5822A', alignItems: 'center', justifyContent: 'center' }, orderBadgeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' }, itemImage: { width: 50, height: 50, borderRadius: 11, backgroundColor: '#E9EEF2' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, itemCopy: { flex: 1, minWidth: 0 }, itemName: { fontSize: 14, fontWeight: '700', color: '#212124' }, itemAddress: { fontSize: 12, color: '#85858C', marginTop: 2 }, itemNote: { color: '#48708C', fontSize: 11, lineHeight: 15, marginTop: 4, fontStyle: 'italic' }, noteButton: { width: 40, height: 30, borderRadius: 9, backgroundColor: '#EEF6FD' }, dragHandle: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, footer: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#DDE7E5', backgroundColor: '#FFFFFF' }, secondarySave: { flex: 0.82, height: 50, borderRadius: 18, backgroundColor: '#EDF2F1', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, secondarySaveText: { color: '#1F3938', fontSize: 14, fontWeight: '700' }, primarySave: { flex: 1.45, height: 50, borderRadius: 18, backgroundColor: '#0F766E', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, primarySaveText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.28)' }, modalSheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFF', paddingBottom: 28 }, modalHeader: { minHeight: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5E8' }, modalCancel: { color: '#6D6D73', fontSize: 16 }, modalTitle: { color: '#1D1D20', fontSize: 16, fontWeight: '700', textAlign: 'center' }, modalSubtitle: { color: '#85858C', fontSize: 11, textAlign: 'center', marginTop: 2 }, modalSave: { color: '#007AFF', fontSize: 16, fontWeight: '700' }, wheels: { height: 236, flexDirection: 'row', paddingHorizontal: 30 }, wheelContent: { paddingVertical: 72, flexGrow: 1 }, wheelDivider: { width: StyleSheet.hairlineWidth, backgroundColor: '#E8E8EC', marginVertical: 25 }, wheelOption: { minHeight: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 10 }, wheelOptionSelected: { backgroundColor: '#EAF4FF' }, wheelOptionLocked: { opacity: 0.32 }, wheelText: { color: '#6A6A70', fontSize: 16 }, wheelTextSelected: { color: '#1874B8', fontWeight: '700' }, wheelTextLocked: { color: '#9CA3AF' }, noDayNote: { color: '#6B7280', fontSize: 12, lineHeight: 17, marginHorizontal: 30, marginTop: -12, textAlign: 'center' },
+  editGuide: { color: '#667085', fontSize: 10, lineHeight: 14, fontWeight: '600', marginTop: 3 },
   timeConflictToast: { position: 'absolute', top: 70, left: 18, right: 18, minHeight: 38, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: '#FFF7E8', borderWidth: 1, borderColor: '#F3D29B', flexDirection: 'row', alignItems: 'center', gap: 7, zIndex: 10, shadowColor: '#9A6B2F', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 }, timeConflictText: { flex: 1, color: '#8A5600', fontSize: 12, lineHeight: 16, fontWeight: '600' },
 });
