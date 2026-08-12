@@ -152,15 +152,14 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
     : result.centerCoordinate;
 
   const scrollRef = useRef<ScrollView>(null);
+  const rowOffsetsRef = useRef<Record<string, number>>({});
+  const [measuredRows, setMeasuredRows] = useState(0);
 
   useEffect(() => {
-    if (selectedPlaceId && result.places.length > 0) {
-      const idx = result.places.findIndex((p) => p.id === selectedPlaceId);
-      if (idx >= 0) {
-        scrollRef.current?.scrollTo({ y: idx * 76, animated: true });
-      }
-    }
-  }, [selectedPlaceId, result.places]);
+    if (!selectedPlaceId) return;
+    const offset = rowOffsetsRef.current[selectedPlaceId];
+    if (offset !== undefined) scrollRef.current?.scrollTo({ y: offset, animated: true });
+  }, [measuredRows, selectedPlaceId]);
 
   const mapZoom = selectedPlaceId ? 15 : 12;
 
@@ -290,6 +289,12 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
                   selectedPlaceId === place.id && styles.rowActive,
                 ]}
                 onPress={() => setSelectedPlaceId(place.id)}
+                onLayout={(event) => {
+                  const offset = event.nativeEvent.layout.y;
+                  if (rowOffsetsRef.current[place.id] === offset) return;
+                  rowOffsetsRef.current[place.id] = offset;
+                  setMeasuredRows((count) => count + 1);
+                }}
               >
                 <PlaceThumbnail uri={place.imageUri} />
                 <View style={styles.rowText}>

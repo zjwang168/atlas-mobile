@@ -2,6 +2,7 @@ import unittest
 
 from backend.services.instagram_reels_service import (
     _canonical_instagram_reel_url,
+    _matches_inferred_region,
     _needs_transcript,
     _source_text_from_item,
     _trim_duplicate_instagram_url,
@@ -37,3 +38,15 @@ class InstagramReelsTests(unittest.TestCase):
     def test_transcript_only_runs_for_non_specific_metadata(self):
         self.assertFalse(_needs_transcript({"locations": [{"name": "Louvre Museum", "hierarchy_level": 0}]}))
         self.assertTrue(_needs_transcript({"locations": [{"name": "Paris", "hierarchy_level": 2}]}))
+
+    def test_accepts_geocoder_city_alias_for_inferred_region(self):
+        self.assertTrue(_matches_inferred_region(
+            {"full_address": "New York, New York, United States"},
+            "New York City",
+        ))
+
+    def test_rejects_geocode_outside_inferred_region(self):
+        self.assertFalse(_matches_inferred_region(
+            {"full_address": "Los Angeles, California, United States"},
+            "New York City",
+        ))

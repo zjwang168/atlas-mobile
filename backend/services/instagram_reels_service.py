@@ -227,8 +227,18 @@ def _matches_inferred_region(geocoded: dict, inferred_region: str | None) -> boo
     if not address.strip():
         return False
     ignored = {"us", "usa", "united states", "uk", "united kingdom", "france", "italy", "japan", "china"}
-    candidates = [re.sub(r"[^a-z0-9]+", " ", part.lower()).strip() for part in inferred_region.split(",")]
-    candidates = [candidate for candidate in candidates if len(candidate) > 2 and candidate not in ignored]
+    candidates: set[str] = set()
+    for part in inferred_region.split(","):
+        candidate = re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+        if len(candidate) <= 2 or candidate in ignored:
+            continue
+        candidates.add(candidate)
+        # Geocoders commonly omit administrative suffixes from their formatted
+        # address (for example, "New York City" becomes "New York, NY").
+        # Keep the geographic name while still rejecting another city.
+        shortened = re.sub(r"\b(city|county|municipality|metropolitan area)\b$", "", candidate).strip()
+        if len(shortened) > 2 and shortened not in ignored:
+            candidates.add(shortened)
     return any(re.search(rf"\b{re.escape(candidate)}\b", address) for candidate in candidates)
 
 
