@@ -1,10 +1,12 @@
 import MapboxMap, { type MapMarker } from '@/features/map/MapboxMap';
 import type { AtlasChatPresentation } from '@/services/api/apiService';
 import { CheckIcon } from 'phosphor-react-native/src/icons/Check';
+import { ArrowSquareOutIcon } from 'phosphor-react-native/src/icons/ArrowSquareOut';
 import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { Image, Linking, Pressable, StyleSheet, View, type ImageStyle } from 'react-native';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Text } from '@/components/ui/text';
 
 const GOOGLE_MAPS_ICON = require('../../../../assets/icons/google-maps2.png');
@@ -18,6 +20,11 @@ type Props = {
     places: AtlasChatPresentation['places'];
     special_role?: 'home' | 'office' | 'school' | null;
     operation?: 'create' | 'update' | 'delete' | null;
+  } | null;
+  completedAction?: {
+    kind: 'save_special_place';
+    special_role: 'home' | 'office' | 'school';
+    placeName: string;
   } | null;
   onConfirm?: () => void;
   onCancel?: () => void;
@@ -60,8 +67,8 @@ function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?:
   return { ne: [east + lngPad, north + latPad] as [number, number], sw: [west - lngPad, south - latPad] as [number, number] };
 }
 
-export default function AtlasChatResultCard({ presentation, pendingAction, onConfirm, onCancel, onOpenMap }: Props) {
-  const hasPendingAction = Boolean(pendingAction);
+export default function AtlasChatResultCard({ presentation, pendingAction, completedAction, onConfirm, onCancel, onOpenMap }: Props) {
+  const hasActionStatus = Boolean(pendingAction || completedAction);
   const featuredPlace = presentation.places[0];
   const specialPlaceName = pendingAction?.places[0]?.name?.trim();
   const specialRole = pendingAction?.special_role;
@@ -71,7 +78,12 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       .filter(Boolean)
       .join(' · ')
     : '';
-  const mapPlaces = [...(presentation.special_places ?? []), ...presentation.places];
+  const commuteDestination = presentation.commute_destination ?? null;
+  const specialPlaces = [
+    ...(presentation.special_places ?? []).filter((place) => place.role !== commuteDestination?.role),
+    ...(commuteDestination ? [commuteDestination] : []),
+  ];
+  const mapPlaces = [...specialPlaces, ...presentation.places];
   const commuteRoute = presentation.commute_route?.route;
   const markers: MapMarker[] = [
     ...(presentation.user_location ? [{
@@ -81,12 +93,12 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       tone: 'location' as const,
       pulsing: true,
     }] : []),
-    ...(presentation.special_places ?? []).map((place) => ({
+    ...specialPlaces.map((place) => ({
       id: `chat-special-${place.role}`,
       latitude: place.latitude,
       longitude: place.longitude,
       title: place.name || place.role[0].toUpperCase() + place.role.slice(1),
-      tone: commuteRoute ? 'atlas' as const : place.role,
+      tone: commuteDestination?.role === place.role ? 'atlas' as const : place.role,
     })),
     ...presentation.places.map((place, index) => ({
       id: place.external_id || 'chat-place-' + index,
@@ -125,8 +137,10 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
               paddingLeft: 24,
             }}
             cameraKey={presentation.kind + ':' + presentation.title + ':' + presentation.places.map((place) => place.name).join('|')}
-            routeGeoJSON={commuteRoute ?? presentation.route?.route}
-            routeVariant={commuteRoute ? 'commute' : undefined}
+            // The regular route ends at the recommendation, not at School/
+            // Office/Home. Do not show it as a false commute fallback.
+            routeGeoJSON={commuteDestination ? commuteRoute : presentation.route?.route}
+            routeVariant={commuteDestination && commuteRoute ? 'commute' : undefined}
             style={styles.map}
             compassEnabled={false}
           />
@@ -160,18 +174,26 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
           </View>
         ) : null}
       </View>
-      {hasPendingAction ? (
+      {hasActionStatus ? (
         <View style={styles.confirmRow}>
-          <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${specialRole}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} ${specialPlaceName || 'this location'} as your ${specialRole}?` : 'Ready to add these places?'}</Text>
-          <View style={styles.actions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={onCancel} style={styles.cancelButton}>
-              <XIcon size={17} color="#52525B" weight="bold" />
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={onConfirm} style={styles.confirmButton}>
-              <CheckIcon size={17} color="#FFFFFF" weight="bold" />
-              <Text style={styles.confirmButtonText}>{pendingAction?.kind === 'create_atlas' ? 'Create' : pendingAction?.kind === 'delete_special_place' ? 'Delete' : pendingAction?.kind === 'save_special_place' ? 'Save' : 'Add'}</Text>
-            </Pressable>
-          </View>
+          {completedAction ? <Animated.View key="saved" entering={FadeIn.duration(220)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
+            <Text style={styles.confirmText}>Saved {completedAction.placeName} as your {completedAction.special_role}.</Text>
+            <Animated.View entering={FadeIn.duration(220)} style={styles.savedButton}>
+              <CheckIcon size={17} color="#71717A" weight="bold" />
+              <Text style={styles.savedButtonText}>Saved</Text>
+            </Animated.View>
+          </Animated.View> : <Animated.View key="pending" entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
+            <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${specialRole}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} ${specialPlaceName || 'this location'} as your ${specialRole}?` : 'Ready to add these places?'}</Text>
+            <View style={styles.actions}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={onCancel} style={styles.cancelButton}>
+                <XIcon size={17} color="#52525B" weight="bold" />
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={onConfirm} style={styles.confirmButton}>
+                <CheckIcon size={17} color="#FFFFFF" weight="bold" />
+                <Text style={styles.confirmButtonText}>{pendingAction?.kind === 'create_atlas' ? 'Create' : pendingAction?.kind === 'delete_special_place' ? 'Delete' : pendingAction?.kind === 'save_special_place' ? 'Save' : 'Add'}</Text>
+              </Pressable>
+            </View>
+          </Animated.View>}
         </View>
       ) : null}
       {hasSinglePlace ? (
@@ -185,6 +207,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
               style={({ pressed }) => [styles.googleMapsAction, styles.googleMapsViewAction, pressed && styles.actionPressed]}
             >
               <Image source={GOOGLE_MAPS_ICON} style={styles.googleMapsIcon} />
+              <ArrowSquareOutIcon style={styles.googleMapsExternalIcon} size={10} color="#4B5563" weight="bold" />
             </Pressable>
             <Pressable
               accessibilityRole="link"
@@ -215,18 +238,22 @@ const styles = StyleSheet.create({
   placeCopy: { flex: 1, minWidth: 0, paddingRight: 5 },
   placeName: { color: '#18181B', fontSize: 16, lineHeight: 21, fontWeight: '700' },
   placeSubtitle: { color: '#626267', fontSize: 13, lineHeight: 18, marginTop: 2 },
-  confirmRow: { minHeight: 58, paddingHorizontal: 2, paddingTop: 12, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  confirmRow: { minHeight: 58, paddingHorizontal: 2, paddingTop: 12, paddingBottom: 2 },
+  confirmContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   confirmText: { flex: 1, color: '#3F3F46', fontSize: 13, lineHeight: 18 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cancelButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#F4F4F5', alignItems: 'center', justifyContent: 'center' },
   confirmButton: { minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#121212', flexDirection: 'row', alignItems: 'center', gap: 6 },
   confirmButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  savedButton: { minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#E4E4E7', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  savedButtonText: { color: '#71717A', fontSize: 13, fontWeight: '700' },
   googleMapsRow: { minHeight: 58, paddingHorizontal: 2, paddingTop: 12, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 10 },
   googleMapsPrompt: { flex: 1, color: '#3F3F46', fontSize: 13, lineHeight: 18 },
   googleMapsActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  googleMapsAction: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  googleMapsAction: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   googleMapsViewAction: { backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DADCE0' },
   googleMapsNavigateAction: { backgroundColor: '#16A34A' },
-  googleMapsIcon: { width: 26, height: 26, resizeMode: 'contain' },
+  googleMapsIcon: { width: 27, height: 27, resizeMode: 'contain' },
+  googleMapsExternalIcon: { position: 'absolute', right: 3, top: 3, padding: 1, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.94)' },
   actionPressed: { transform: [{ scale: 0.95 }], opacity: 0.86 },
 });

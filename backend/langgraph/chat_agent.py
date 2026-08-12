@@ -1043,6 +1043,10 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
                 **existing_presentation,
                 "special_places": merged_special_places,
                 "commute_route": commute_route,
+                # Keep destination intent separate from the route result. The
+                # mobile client can draw the destination and retry its route
+                # if this request is delayed or temporarily unavailable.
+                "commute_destination": special_places[0] if is_new_destination else existing_presentation.get("commute_destination"),
             }
         else:
             state["presentation"] = {
@@ -1256,6 +1260,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             "user_location": {"longitude": origin_tuple[0], "latitude": origin_tuple[1]} if origin_tuple else None,
             "places": places,
             "special_places": anchors,
+            "commute_destination": anchors[0] if anchors else None,
             "route": route,
             "commute_route": commute_route,
         }

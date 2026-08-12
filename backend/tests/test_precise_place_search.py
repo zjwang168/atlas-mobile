@@ -212,3 +212,4 @@ class PrecisePlaceSearchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state["presentation"]["special_places"][0]["role"], "school")
         self.assertEqual(state["presentation"]["commute_route"], direct_route)
+        self.assertEqual(state["presentation"]["commute_destination"]["name"], "Stanford University")

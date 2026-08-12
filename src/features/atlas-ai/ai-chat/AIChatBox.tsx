@@ -60,6 +60,7 @@ import {
   createImportChatWelcome,
   createAtlasChatWelcome,
   fetchConversation,
+  getPlacePhoto,
   requestAtlasRoute,
   type AtlasChatPresentation,
 } from '@/services/api/apiService';
@@ -103,6 +104,11 @@ const ATLAS_STARTER_PROMPTS = [
   'Build a day-by-day schedule for this Atlas',
   'What should I add near one of these stops?',
 ] as const;
+const CHAT_PLACE_PHOTO_CACHE = new Map<string, string | null>();
+const CHAT_PLACE_PHOTO_REQUESTS = new Map<string, Promise<string | null>>();
+const CHAT_PLACE_PHOTO_CONCURRENCY = 2;
+let activeChatPlacePhotoRequests = 0;
+const queuedChatPlacePhotoRequests: Array<() => void> = [];
 
 type Message = {
   id: string;
@@ -124,9 +130,70 @@ type Message = {
     special_role?: 'home' | 'office' | 'school' | null;
     operation?: 'create' | 'update' | 'delete' | null;
   } | null;
+  completedAction?: {
+    kind: 'save_special_place';
+    special_role: 'home' | 'office' | 'school';
+    placeName: string;
+  } | null;
 };
 
 type MessageFeedback = 'up' | 'down';
+
+type ChatPresentationPlace = AtlasChatPresentation['places'][number];
+
+function limitChatPlacePhotoRequest<T>(work: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activeChatPlacePhotoRequests += 1;
+      void work()
+        .then(resolve, reject)
+        .finally(() => {
+          activeChatPlacePhotoRequests -= 1;
+          queuedChatPlacePhotoRequests.shift()?.();
+        });
+    };
+    if (activeChatPlacePhotoRequests < CHAT_PLACE_PHOTO_CONCURRENCY) run();
+    else queuedChatPlacePhotoRequests.push(run);
+  });
+}
+
+function chatPlacePhotoKey(place: Pick<ChatPresentationPlace, 'name' | 'latitude' | 'longitude'>): string {
+  return `${place.name.trim().toLocaleLowerCase()}:${place.latitude.toFixed(4)}:${place.longitude.toFixed(4)}`;
+}
+
+async function fetchChatPlacePhoto(place: ChatPresentationPlace): Promise<string | null> {
+  const key = chatPlacePhotoKey(place);
+  if (CHAT_PLACE_PHOTO_CACHE.has(key)) return CHAT_PLACE_PHOTO_CACHE.get(key) ?? null;
+  const existingRequest = CHAT_PLACE_PHOTO_REQUESTS.get(key);
+  if (existingRequest) return existingRequest;
+  const request = limitChatPlacePhotoRequest(() => getPlacePhoto(place.name))
+    .then((response) => response.photo_url || null)
+    .catch((error) => {
+      console.warn('[AIChatBox] map card photo lookup failed:', error);
+      return null;
+    })
+    .then((photoUrl) => {
+      CHAT_PLACE_PHOTO_CACHE.set(key, photoUrl);
+      CHAT_PLACE_PHOTO_REQUESTS.delete(key);
+      return photoUrl;
+    });
+  CHAT_PLACE_PHOTO_REQUESTS.set(key, request);
+  return request;
+}
+
+function applyChatPlacePhoto(
+  presentation: AtlasChatPresentation,
+  key: string,
+  photoUrl: string,
+): AtlasChatPresentation {
+  let changed = false;
+  const places = presentation.places.map((place) => {
+    if (place.photo_url || chatPlacePhotoKey(place) !== key) return place;
+    changed = true;
+    return { ...place, photo_url: photoUrl };
+  });
+  return changed ? { ...presentation, places } : presentation;
+}
 
 function stripActionMarkers(text: string): string {
   return text
@@ -419,6 +486,56 @@ export default function AIChatBox({
   const [voiceMode, setVoiceMode] = useState(false);
   const [attachedImageUri, setAttachedImageUri] = useState<string | null>(null);
   const [attachedImageBase64, setAttachedImageBase64] = useState<string | null>(null);
+  const photoHydrationActiveRef = useRef(true);
+  const scheduledChatPhotoKeysRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    photoHydrationActiveRef.current = visible;
+    if (visible) scheduledChatPhotoKeysRef.current.clear();
+  }, [visible]);
+
+  useEffect(() => () => {
+    photoHydrationActiveRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    const targets = messages.flatMap((message) => (
+      message.presentation?.places
+        .filter((place) => !place.photo_url)
+        .map((place) => ({ messageId: message.id, place })) ?? []
+    )).filter((target) => {
+      const key = `${target.messageId}:${chatPlacePhotoKey(target.place)}`;
+      if (scheduledChatPhotoKeysRef.current.has(key)) return false;
+      scheduledChatPhotoKeysRef.current.add(key);
+      return true;
+    });
+    if (!targets.length) return;
+
+    const hydrate = async () => {
+      let cursor = 0;
+      const worker = async () => {
+        while (photoHydrationActiveRef.current && cursor < targets.length) {
+          const target = targets[cursor++];
+          const photoUrl = await fetchChatPlacePhoto(target.place);
+          if (!photoUrl || !photoHydrationActiveRef.current) continue;
+          const key = chatPlacePhotoKey(target.place);
+          setMessages((current) => current.map((message) => (
+            message.id === target.messageId && message.presentation
+              ? { ...message, presentation: applyChatPlacePhoto(message.presentation, key, photoUrl) }
+              : message
+          )));
+          setChatMapPresentation((current) => (
+            current ? applyChatPlacePhoto(current, key, photoUrl) : current
+          ));
+        }
+      };
+      await Promise.all(Array.from(
+        { length: Math.min(CHAT_PLACE_PHOTO_CONCURRENCY, targets.length) },
+        () => worker(),
+      ));
+    };
+    void hydrate();
+  }, [messages]);
 
   useEffect(() => {
     if (initialPrompt && !inputText && !messages.length) setInputText(initialPrompt);
@@ -438,6 +555,7 @@ export default function AIChatBox({
   const [chatMapSaveBusy, setChatMapSaveBusy] = useState(false);
   const [chatMapSavedMarkerId, setChatMapSavedMarkerId] = useState<string | null>(null);
   const [chatMapNotice, setChatMapNotice] = useState<string | null>(null);
+  const [chatSaveNotice, setChatSaveNotice] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const hydratedConversationIdRef = useRef<string | null>(null);
@@ -461,6 +579,7 @@ export default function AIChatBox({
   const conversationIdRef = useRef<string | null>(null);
   const chatMapRouteRequestRef = useRef(0);
   const chatMapNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chatSaveNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestChatMapStateKeyRef = useRef<string | null>(null);
   const resolvingActionIdsRef = useRef(new Set<string>());
   const chatAbortControllerRef = useRef<AbortController | null>(null);
@@ -617,6 +736,7 @@ export default function AIChatBox({
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
     if (responseScrollFrameRef.current !== null) cancelAnimationFrame(responseScrollFrameRef.current);
     if (chatMapNoticeTimerRef.current) clearTimeout(chatMapNoticeTimerRef.current);
+    if (chatSaveNoticeTimerRef.current) clearTimeout(chatSaveNoticeTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -962,6 +1082,13 @@ export default function AIChatBox({
     markerId: chatMapPlaceId(place, index),
   })), [chatMapPresentation?.places]);
 
+  const chatMapCommuteDestination = chatMapPresentation?.commute_destination ?? null;
+  const chatMapSpecialPlaces = useMemo(() => [
+    ...(chatMapPresentation?.special_places ?? []).filter((place) => place.role !== chatMapCommuteDestination?.role),
+    ...(chatMapCommuteDestination ? [chatMapCommuteDestination] : []),
+  ], [chatMapCommuteDestination, chatMapPresentation?.special_places]);
+  const chatMapIsCommute = Boolean(chatMapCommuteDestination);
+
   const chatMapMarkers = useMemo<MapMarker[]>(() => [
     ...(chatMapOrigin ? [{
       id: 'chat-user-location',
@@ -971,7 +1098,7 @@ export default function AIChatBox({
       tone: 'location' as const,
       pulsing: true,
     }] : []),
-    ...(chatMapPresentation?.special_places ?? []).map((place) => ({
+    ...chatMapSpecialPlaces.map((place) => ({
       id: `chat-special-${place.role}`,
       latitude: place.latitude,
       longitude: place.longitude,
@@ -979,7 +1106,7 @@ export default function AIChatBox({
       description: place.full_address,
       // The destination of a commute remains visually distinct from the
       // purple recommendation and green origin, including before it is saved.
-      tone: chatMapPresentation?.commute_route?.route ? 'atlas' as const : place.role,
+      tone: chatMapCommuteDestination?.role === place.role ? 'atlas' as const : place.role,
       preserveToneOnSelect: true,
     })),
     ...chatMapPlaces.map((place, index) => ({
@@ -992,7 +1119,7 @@ export default function AIChatBox({
       preserveToneOnSelect: chatMapPresentation?.kind !== 'atlas_draft',
       order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
     })),
-  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.commute_route?.route, chatMapPresentation?.kind, chatMapPresentation?.special_places]);
+  ], [chatMapCommuteDestination?.role, chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind, chatMapSpecialPlaces]);
 
   const selectedChatMapPlace = useMemo(
     () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
@@ -1011,6 +1138,15 @@ export default function AIChatBox({
     chatMapNoticeTimerRef.current = setTimeout(() => {
       chatMapNoticeTimerRef.current = null;
       setChatMapNotice(null);
+    }, 4000);
+  }, []);
+
+  const showChatSaveNotice = useCallback((notice: string) => {
+    setChatSaveNotice(notice);
+    if (chatSaveNoticeTimerRef.current) clearTimeout(chatSaveNoticeTimerRef.current);
+    chatSaveNoticeTimerRef.current = setTimeout(() => {
+      chatSaveNoticeTimerRef.current = null;
+      setChatSaveNotice(null);
     }, 4000);
   }, []);
 
@@ -1092,10 +1228,12 @@ export default function AIChatBox({
       setChatMapOverviewRouteVisible(true);
       return;
     }
-    const coordinates = [
-      ...(chatMapOrigin ? [chatMapOrigin] : []),
-      ...chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number]),
-    ];
+    const coordinates = chatMapCommuteDestination && chatMapOrigin
+      ? [chatMapOrigin, [chatMapCommuteDestination.longitude, chatMapCommuteDestination.latitude] as [number, number]]
+      : [
+        ...(chatMapOrigin ? [chatMapOrigin] : []),
+        ...chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number]),
+      ];
     if (coordinates.length < 2) return;
     setChatMapRouteLoading(true);
     try {
@@ -1112,7 +1250,7 @@ export default function AIChatBox({
     } finally {
       setChatMapRouteLoading(false);
     }
-  }, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, clearChatMapSelection, showDialog]);
+  }, [chatMapCommuteDestination, chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, clearChatMapSelection, showDialog]);
 
   const returnFromPresentationMap = useCallback(() => {
     clearChatMapSelection();
@@ -1131,7 +1269,7 @@ export default function AIChatBox({
 
   const chatMapRoute = chatMapSelectedRoute
     ?? (chatMapOverviewRouteVisible ? chatMapOverviewRoute : null);
-  const chatMapRouteVariant = chatMapSelectedRoute ? undefined : chatMapPresentation?.commute_route?.route && chatMapOverviewRouteVisible ? 'commute' as const : undefined;
+  const chatMapRouteVariant = chatMapSelectedRoute ? undefined : chatMapIsCommute && chatMapOverviewRouteVisible ? 'commute' as const : undefined;
   const chatMapRouteKey = useMemo(
     () => chatMapRoute ? JSON.stringify(chatMapRoute.geometry.coordinates) : 'none',
     [chatMapRoute],
@@ -1155,8 +1293,8 @@ export default function AIChatBox({
     placePopup={chatMapPopup}
     atlasItinerary={chatMapPresentation?.kind === 'atlas_draft' ? <AtlasChatMapItinerary presentation={chatMapPresentation} /> : null}
     notice={chatMapNotice}
-    routeToggle={chatMapPresentation?.commute_route?.route ? { visible: chatMapOverviewRouteVisible, loading: chatMapRouteLoading, onPress: () => { void toggleChatMapOverviewRoute(); } } : null}
-  />, [chatMapNotice, chatMapOverviewRouteVisible, chatMapPopup, chatMapPresentation, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
+    routeToggle={chatMapIsCommute ? { visible: chatMapOverviewRouteVisible, loading: chatMapRouteLoading, onPress: () => { void toggleChatMapOverviewRoute(); } } : null}
+  />, [chatMapIsCommute, chatMapNotice, chatMapOverviewRouteVisible, chatMapPopup, chatMapPresentation, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
   const chatMapStateKey = [
     chatMapCameraKey,
     chatMapPresentation?.kind ?? 'none',
@@ -1197,18 +1335,40 @@ export default function AIChatBox({
   }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
-    chatMapRouteRequestRef.current += 1;
+    const requestId = chatMapRouteRequestRef.current + 1;
+    chatMapRouteRequestRef.current = requestId;
+    const destination = presentation.commute_destination;
+    const origin = presentation.user_location
+      ? [presentation.user_location.longitude, presentation.user_location.latitude] as [number, number]
+      : userLocation;
     setChatMapPresentation(presentation);
     setChatMapSelectedId(null);
     setChatMapSelectedRoute(null);
-    setChatMapOverviewRoute(presentation.commute_route?.route ?? presentation.route?.route ?? null);
+    // A normal route points to the recommended venue. It must never stand in
+    // for the direct commute route while that route is still being fetched.
+    setChatMapOverviewRoute(destination
+      ? (presentation.commute_route?.route ?? null)
+      : (presentation.route?.route ?? null));
     // A commute map opens on the direct origin-to-destination route. Selecting
     // a recommendation temporarily retains the established orange route.
-    setChatMapOverviewRouteVisible(Boolean(presentation.commute_route?.route));
-    setChatMapRouteLoading(false);
+    setChatMapOverviewRouteVisible(Boolean(destination || presentation.commute_route?.route));
+    setChatMapRouteLoading(Boolean(destination && !presentation.commute_route?.route && origin));
     setChatMapCameraKey(Date.now());
     onPresentationMapOpen?.();
-  }, [onPresentationMapOpen]);
+    if (destination && origin && !presentation.commute_route?.route) {
+      void requestAtlasRoute([origin, [destination.longitude, destination.latitude]])
+        .then((result) => {
+          if (chatMapRouteRequestRef.current === requestId) setChatMapOverviewRoute(result.route);
+        })
+        .catch((error) => {
+          console.warn('[AIChatBox] could not load direct commute route:', error);
+          if (chatMapRouteRequestRef.current === requestId) setChatMapOverviewRouteVisible(false);
+        })
+        .finally(() => {
+          if (chatMapRouteRequestRef.current === requestId) setChatMapRouteLoading(false);
+        });
+    }
+  }, [onPresentationMapOpen, userLocation]);
 
   const resolveAction = async (messageId: string, accepted: boolean) => {
     const message = messages.find((item) => item.id === messageId);
@@ -1278,8 +1438,17 @@ export default function AIChatBox({
           saved_place_count: 1,
         }).catch((error) => console.warn('[AIChatBox] special-place action audit failed:', error));
         setMessages((current) => current.map((item) => (
-          item.id === messageId ? { ...item, pendingAction: null } : item
+          item.id === messageId ? {
+            ...item,
+            pendingAction: null,
+            completedAction: {
+              kind: 'save_special_place',
+              special_role: action.special_role!,
+              placeName: place.name,
+            },
+          } : item
         )));
+        showChatSaveNotice(`Saved "${place.name}" as ${action.special_role[0].toUpperCase()}${action.special_role.slice(1)} in My Places`);
         return;
       }
       if (accepted && action.kind === 'delete_special_place') {
@@ -1441,6 +1610,7 @@ export default function AIChatBox({
                 <AtlasChatResultCard
                   presentation={item.presentation}
                   pendingAction={item.pendingAction}
+                  completedAction={item.completedAction}
                   onOpenMap={() => openPresentationMap(item.presentation!)}
                   onConfirm={() => { void resolveAction(item.id, true); }}
                   onCancel={() => { void resolveAction(item.id, false); }}
@@ -1683,6 +1853,10 @@ export default function AIChatBox({
             showsVerticalScrollIndicator={false}
           />
         ) : null}
+
+        {chatSaveNotice ? <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(220)} pointerEvents="none" style={[styles.chatSaveNotice, { bottom: composerHeight + composerBottom + 20 }]}>
+          <Text style={styles.chatSaveNoticeText}>{chatSaveNotice}</Text>
+        </Animated.View> : null}
 
         <TopBlurFade
           height={headerMaterialHeight}
@@ -2181,6 +2355,8 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 3,
   },
+  chatSaveNotice: { position: 'absolute', left: 24, right: 24, zIndex: 5, alignSelf: 'center', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(39,39,42,0.94)', shadowColor: '#18181B', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6 },
+  chatSaveNoticeText: { color: '#FFFFFF', fontSize: 13, lineHeight: 18, fontWeight: '700', textAlign: 'center' },
   bottomMaterial: {
     position: 'absolute',
     left: 0,

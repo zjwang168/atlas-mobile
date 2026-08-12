@@ -205,6 +205,14 @@ export type AtlasChatPresentation = {
     longitude: number;
     full_address?: string;
   }>;
+  /** The explicitly requested end point of a commute, even while its route loads. */
+  commute_destination?: {
+    role: 'home' | 'office' | 'school';
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+  } | null;
   route?: {
     route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
     distance_km?: number;
