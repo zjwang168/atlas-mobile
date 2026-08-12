@@ -65,6 +65,10 @@ function HomePanel({
         onDismissed={onDismissed}
         onSearchPress={onSearchPress}
         onDeleteInitiated={onDeleteInitiated}
+        // On iOS the sheet — not the ContentPanel branch below — is what
+        // renders MyPlan, so these have to reach it here too.
+        isActive={isActive}
+        onExitPlan={onExitPlan}
         bottomBar={bottomBar}
       />
     );

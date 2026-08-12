@@ -68,13 +68,17 @@ export async function fetchAtlasPlaces(): Promise<AtlasPlace[]> {
   return fetchFresh();
 }
 
+export type AtlasPlaceSnapshot = Pick<AtlasPlace, 'place_name' | 'place_subtitle' | 'latitude' | 'longitude' | 'photo_url' | 'city' | 'region' | 'country'>;
+
 /**
- * Add places to an atlas. Writes optimistic local rows immediately so the UI
- * reflects the new membership before the network round-trip, then syncs to
- * Supabase — queued for retry via syncQueue when offline or the request
- * fails with a retryable error. Places already in the atlas are skipped.
+ * Add places to an atlas. Its snapshot makes each Atlas own its orange pin's
+ * coordinates, including when the membership write has to be queued offline.
  */
-export async function addPlacesToAtlas(atlasId: string, placeIds: string[]): Promise<AtlasPlace[]> {
+export async function addPlacesToAtlas(
+  atlasId: string,
+  placeIds: string[],
+  snapshotsByPlaceId?: ReadonlyMap<string, AtlasPlaceSnapshot>,
+): Promise<AtlasPlace[]> {
   if (placeIds.length === 0) return [];
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot add places to an atlas before auth is ready');
@@ -87,20 +91,33 @@ export async function addPlacesToAtlas(atlasId: string, placeIds: string[]): Pro
 
   const now = new Date().toISOString();
   let nextSortOrder = existingForAtlas.length;
-  const localRows: AtlasPlace[] = toAdd.map((placeId) => ({
-    id: createLocalId(),
-    atlas_id: atlasId,
-    place_id: placeId,
-    added_by: null,
-    note: null,
-    sort_order: nextSortOrder++,
-    created_at: now,
-  }));
+  const localRows: AtlasPlace[] = toAdd.map((placeId) => {
+    const snapshot = snapshotsByPlaceId?.get(placeId);
+    return {
+      id: createLocalId(),
+      atlas_id: atlasId,
+      place_id: placeId,
+      added_by: null,
+      note: null,
+      sort_order: nextSortOrder++,
+      created_at: now,
+      place_name: snapshot?.place_name ?? null,
+      place_subtitle: snapshot?.place_subtitle ?? null,
+      latitude: snapshot?.latitude ?? null,
+      longitude: snapshot?.longitude ?? null,
+      photo_url: snapshot?.photo_url ?? null,
+      city: snapshot?.city ?? null,
+      region: snapshot?.region ?? null,
+      country: snapshot?.country ?? null,
+    };
+  });
 
   await updateAtlasPlacesCache(userId, (current) => [...current, ...localRows]);
 
   try {
-    const rows = localRows.map(({ atlas_id, place_id, sort_order }) => ({ atlas_id, place_id, sort_order }));
+    const rows = localRows.map(({ atlas_id, place_id, sort_order, place_name, place_subtitle, latitude, longitude, photo_url, city, region, country }) => ({
+      atlas_id, place_id, sort_order, place_name, place_subtitle, latitude, longitude, photo_url, city, region, country,
+    }));
     const { data, error } = await withTimeout(
       supabase.from('atlas_places').insert(rows).select(ATLAS_PLACES_SELECT_COLUMNS),
       'Adding places to atlas timed out',
@@ -182,27 +199,61 @@ export async function addAtlasOwnedPlaces(atlasId: string, places: AtlasOwnedPla
   }
 }
 
-export type AtlasPlacePatch = Pick<AtlasPlace, 'note' | 'sort_order' | 'timeline_day' | 'timeline_time'>;
+export type AtlasPlacePatch = Pick<AtlasPlace, 'note' | 'sort_order' | 'timeline_day' | 'timeline_time'> & AtlasPlaceSnapshot;
 
-/** Update one Atlas item. This backs notes, time dividers, and drag ordering. */
-export async function updateAtlasPlace(joinRowId: string, patch: Partial<AtlasPlacePatch>): Promise<void> {
+/**
+ * Apply an Atlas edit in one cache transaction and one PostgREST request.
+ * Saving used to call updateAtlasPlace once per stop, repeatedly parsing and
+ * rewriting the full atlas_places cache and re-rendering every subscriber.
+ */
+export async function updateAtlasPlaces(
+  updates: Array<{ joinRowId: string; patch: Partial<AtlasPlacePatch> }>,
+): Promise<void> {
+  if (!updates.length) return;
   const userId = await getCurrentUserId();
-  if (!userId) throw new Error('Cannot update an atlas before auth is ready');
+  if (!userId) throw new Error('Cannot update Atlas items before auth is ready');
 
-  await updateAtlasPlacesCache(userId, (current) => current.map((row) => (
-    row.id === joinRowId ? { ...row, ...patch } : row
-  )));
-  if (joinRowId.startsWith('local-')) return;
+  const patchesById = new Map(updates.map(({ joinRowId, patch }) => [joinRowId, patch]));
+  const nextRows = await updateAtlasPlacesCache(userId, (current) => current.map((row) => {
+    const patch = patchesById.get(row.id);
+    return patch ? { ...row, ...patch } : row;
+  }));
+  const remoteRows = nextRows.filter((row) => patchesById.has(row.id) && !row.id.startsWith('local-'));
+  if (!remoteRows.length) return;
+
+  const payload = remoteRows.map((row) => ({
+    id: row.id,
+    atlas_id: row.atlas_id,
+    place_id: row.place_id,
+    note: row.note,
+    sort_order: row.sort_order,
+    timeline_day: row.timeline_day ?? null,
+    timeline_time: row.timeline_time ?? null,
+    place_name: row.place_name ?? null,
+    place_subtitle: row.place_subtitle ?? null,
+    latitude: row.latitude ?? null,
+    longitude: row.longitude ?? null,
+    photo_url: row.photo_url ?? null,
+    external_place_id: row.external_place_id ?? null,
+    city: row.city ?? null,
+    region: row.region ?? null,
+    country: row.country ?? null,
+  }));
   const { error } = await withTimeout(
-    supabase.from('atlas_places').update(patch).eq('id', joinRowId),
-    'Updating atlas item timed out',
+    supabase.from('atlas_places').upsert(payload, { onConflict: 'id' }),
+    'Updating Atlas items timed out',
   );
-  if (error) throw new Error(`Failed to update atlas item: ${error.message}`);
+  if (error) throw new Error(`Failed to update Atlas items: ${error.message}`);
 }
 
-/** Apply a whole ordering in a sequence so each drag operation survives reload. */
+/** Update one Atlas item. This backs notes and time dividers. */
+export async function updateAtlasPlace(joinRowId: string, patch: Partial<AtlasPlacePatch>): Promise<void> {
+  await updateAtlasPlaces([{ joinRowId, patch }]);
+}
+
+/** Apply a whole ordering in one cache write and one remote request. */
 export async function reorderAtlasPlaces(rows: Array<{ id: string; sort_order: number }>): Promise<void> {
-  await Promise.all(rows.map(({ id, sort_order }) => updateAtlasPlace(id, { sort_order })));
+  await updateAtlasPlaces(rows.map(({ id, sort_order }) => ({ joinRowId: id, patch: { sort_order } })));
 }
 
 /**

@@ -1,5 +1,5 @@
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import type { AtlasCameraPresentation } from '@/features/map/atlasCamera';
 import { typography } from '@/theme/typography';
 import { memo } from 'react';
 import { Image, Pressable, View } from 'react-native';
@@ -8,25 +8,21 @@ type AtlasCardProps = {
   atlasId: string;
   emoji: string;
   title: string;
+  coverUri: string | null;
+  camera?: AtlasCameraPresentation;
+  onOpen: (atlasId: string, camera?: AtlasCameraPresentation) => void;
 };
 
 /** Memoized — rendered inside a 3-per-row grid of atlases; keeps unrelated
     section re-renders from forcing every card to re-render. */
-export const AtlasCard = memo(function AtlasCard({ atlasId, emoji, title }: AtlasCardProps) {
-  const { setOverlay, savedPlaces, atlasPlaces } = useHome();
-  const coverUri = (() => {
-    const rows = atlasPlaces.filter((row) => row.atlas_id === atlasId).sort((a, b) => a.sort_order - b.sort_order);
-    const savedById = new Map(savedPlaces.map((place) => [place.id, place]));
-    for (const row of rows) {
-      const uri = row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url;
-      if (uri) return uri;
-    }
-    return null;
-  })();
-
+export const AtlasCard = memo(function AtlasCard({ atlasId, emoji, title, coverUri, camera, onOpen }: AtlasCardProps) {
   return (
     <Pressable
-      onPress={() => setOverlay({ kind: 'atlasDetail', atlasId })}
+      onPress={() => {
+        // This must run synchronously before the detail overlay is mounted:
+        // otherwise HomeScreen briefly receives its GPS fallback camera.
+        onOpen(atlasId, camera);
+      }}
       style={{ flexBasis: '31%', flexGrow: 0 }}
     >
       <View

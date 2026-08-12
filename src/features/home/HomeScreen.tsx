@@ -28,9 +28,6 @@ import AccountModal from '../auth/AccountModal';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
-// Atlas panels already occupy a large bottom area. A small additional camera
-// clearance keeps all stops visible without lifting the map focus too high.
-const ATLAS_PANEL_CAMERA_CLEARANCE = 7;
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
 // 200 / mass 0.9) — see below for why the map's padding recompute waits this long
 // after a group snap change instead of reacting immediately.
@@ -260,6 +257,7 @@ function HomeScreenContent({
         ? screenHeight * 0.94
         : screenHeight * 0.54
     : SNAP_HEIGHTS[settledPanelSnapState];
+  const atlasCameraVerticalOffset = atlasMapState?.cameraVerticalOffset ?? 0;
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
@@ -273,15 +271,16 @@ function HomeScreenContent({
   // the map padding smoothly. Per-frame drag tracking stays on the ref-based path below.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    // HJ's settledBottomPanelHeight (the native sheet's detents are screen
-    // fractions, not SNAP_HEIGHTS) plus Jay's atlas clearance. Taking either
-    // side alone breaks the other's camera.
+    // The agreed formula: HJ's settledBottomPanelHeight, because the native
+    // sheet's detents are screen fractions rather than SNAP_HEIGHTS, plus
+    // Jay's atlasCameraVerticalOffset. Either side alone breaks the other's
+    // camera. Math.max(0, …) is Jay's — the offset can be negative.
     paddingBottom: bottomPanelActive
-      ? settledBottomPanelHeight + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0)
+      ? Math.max(0, settledBottomPanelHeight + atlasCameraVerticalOffset)
       : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [atlasMapState, bottomPanelActive, settledBottomPanelHeight]);
+  }), [atlasCameraVerticalOffset, bottomPanelActive, settledBottomPanelHeight]);
   useEffect(() => {
     bottomPanelHeightRef.current = mapPadding.paddingBottom;
   }, [mapPadding]);
@@ -289,18 +288,23 @@ function HomeScreenContent({
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
-    mapRef.current?.setPaddingBottom(bottomPanelActive ? height + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0) : 0);
+    // Bounds-owned Atlas cameras must only be moved by fitBounds. A native
+    // padding-only setCamera call after fitBounds can replace its calculated
+    // zoom with the Camera's previous state.
+    if (!atlasMapState?.bounds) {
+      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + atlasCameraVerticalOffset) : 0);
+    }
     atlasMapState?.onPanelHeightChange?.(height);
-  }, [atlasMapState, bottomPanelActive]);
+  }, [atlasCameraVerticalOffset, atlasMapState, bottomPanelActive]);
 
   // A panel may already be resting when the Atlas overlay mounts, so its
   // height listener is not guaranteed to emit an initial frame. Seed the
   // popup position from the current snap height immediately.
   useEffect(() => {
     if (!atlasMapState?.onPanelHeightChange || !bottomPanelActive) return;
-    const panelHeight = Math.max(0, mapPadding.paddingBottom - (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0));
+    const panelHeight = Math.max(0, mapPadding.paddingBottom - atlasCameraVerticalOffset);
     atlasMapState.onPanelHeightChange(panelHeight);
-  }, [atlasMapState?.onPanelHeightChange, bottomPanelActive, mapPadding.paddingBottom]);
+  }, [atlasCameraVerticalOffset, atlasMapState?.onPanelHeightChange, bottomPanelActive, mapPadding.paddingBottom]);
 
   const handleAddPress = useCallback(() => {
     if (!onOpenImport) return;
@@ -393,6 +397,7 @@ function HomeScreenContent({
         cameraAnimationDurationMs={atlasMapState?.cameraAnimationDurationMs ?? (atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200)}
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
+        cameraScreenOffsetY={atlasMapState?.cameraScreenOffsetY}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
         routeDistanceLabels={atlasMapState?.routeDistanceLabels}
         selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}
@@ -576,7 +581,10 @@ function HomeScreenContent({
 
       <AtlasDetail
         atlasId={overlay.kind === 'atlasDetail' ? overlay.atlasId : null}
-        onDismiss={() => setOverlay({ kind: 'none' })}
+        onDismiss={() => {
+          setOverlay({ kind: 'none' });
+          animateToTab(TAB_PLACES);
+        }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
       />

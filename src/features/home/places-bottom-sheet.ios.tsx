@@ -54,6 +54,10 @@ type PlacesBottomSheetProps = {
   onDismissed?: () => void;
   onSearchPress?: () => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
+  /** MyPlan opens the Atlas builder only while its tab is active, and it
+      defaults to inactive — without this the plan tab renders an empty view. */
+  isActive?: boolean;
+  onExitPlan?: () => void;
   bottomBar?: ReactNode;
 };
 
@@ -87,6 +91,8 @@ function PlacesBottomSheet({
   onDismissed,
   onSearchPress,
   onDeleteInitiated,
+  isActive = true,
+  onExitPlan,
   bottomBar,
 }: PlacesBottomSheetProps) {
   const { width, height } = useWindowDimensions();
@@ -152,6 +158,8 @@ function PlacesBottomSheet({
               {activeTab === TAB_PLAN ? (
                 <MyPlan
                   snapTo={handleSnapTo}
+                  active={isActive}
+                  onExit={onExitPlan}
                 />
               ) : (
                 <>

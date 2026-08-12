@@ -45,6 +45,11 @@ type PlacesBottomSheetProps = {
   onDismissed?: () => void;
   onSearchPress?: () => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
+  /** Declared to keep both platform variants type-compatible. This one never
+      renders MyPlan — off iOS the plan tab goes through HomePanel's
+      ContentPanel branch instead — so neither is read here. */
+  isActive?: boolean;
+  onExitPlan?: () => void;
   bottomBar?: ReactNode;
 };
 
