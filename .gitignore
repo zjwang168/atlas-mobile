@@ -63,3 +63,6 @@ backend/.cache/
 *.backup
 *.log
 yarn.lock
+
+# experiments — fetch output, regenerate with experiments/fetch_dmv_events.py
+experiments/dmv-events.json
