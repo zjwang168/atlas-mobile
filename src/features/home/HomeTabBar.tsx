@@ -8,7 +8,6 @@ import type { Icon } from 'phosphor-react-native';
 import { MapPinLineIcon } from 'phosphor-react-native/src/icons/MapPinLine';
 import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
-import { SparkleIcon } from 'phosphor-react-native/src/icons/Sparkle';
 import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -53,12 +52,10 @@ type TabItem = {
 };
 
 const TAB_ITEMS: TabItem[] = [
-  {
-    key: TAB_CHAT,
-    label: 'AI',
-    icon: SparkleIcon,
-    action: 'chat',
-  },
+  // Their branch added a second 'chat'-keyed entry here (an "AI" sparkle tab)
+  // with the same action as HJ's Chat tab below, which React rejected as a
+  // duplicate key. Dropped in favour of HJ's; revisit when the ai-chat
+  // sidekick itself lands in S4.
   {
     key: TAB_PLACES,
     label: 'My Places',
