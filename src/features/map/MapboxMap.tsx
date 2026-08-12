@@ -696,25 +696,23 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             <MapboxGL.LineLayer
               id="routeCasing"
               style={{
-                lineColor: routeVariant === 'commute' ? '#167D78' : '#C9693C',
-                lineWidth: routeVariant === 'commute' ? 9 : 13,
-                lineOpacity: routeVariant === 'commute' ? 0.16 : 0.12,
+                lineColor: routeVariant === 'commute' ? '#8BB8F2' : '#C9693C',
+                lineWidth: 13,
+                lineOpacity: routeVariant === 'commute' ? 0.24 : 0.12,
                 lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
-                ...(routeVariant === 'commute' ? { lineDasharray: [1.4, 1.2] } : {}),
               }}
             />
             <MapboxGL.LineLayer
               id="routeLine"
               style={{
-                lineColor: routeVariant === 'commute' ? '#167D78' : '#F29A69',
-                lineWidth: routeVariant === 'commute' ? 5 : 8,
-                lineOpacity: 0.9,
+                lineColor: routeVariant === 'commute' ? '#6FA7EE' : '#F29A69',
+                lineWidth: 8,
+                lineOpacity: routeVariant === 'commute' ? 0.9 : 0.9,
                 lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
-                ...(routeVariant === 'commute' ? { lineDasharray: [1.4, 1.2] } : {}),
               }}
             />
           </MapboxGL.ShapeSource>

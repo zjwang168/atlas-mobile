@@ -29,6 +29,25 @@ class _StreamingFakeChatModel:
         yield AIMessage(content="answer.")
 
 
+class _StatusFakeChatModel:
+    def __init__(self):
+        self.responses = iter([
+            AIMessage(content="", tool_calls=[{
+                "name": "web_search",
+                "args": {"query": "private query that must not reach the UI"},
+                "id": "status-call",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="A researched answer."),
+        ])
+
+    def bind_tools(self, _tools):
+        return self
+
+    async def ainvoke(self, _messages):
+        return next(self.responses)
+
+
 class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.session = conversation_manager.create_session("baseline-test-session")
@@ -110,6 +129,20 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.messages[-1]["content"], "A streamed answer.")
         self.assertEqual(len(model.calls), 1)
         save.assert_awaited_once()
+
+    async def test_chat_stream_exposes_only_safe_agent_statuses(self):
+        model = _StatusFakeChatModel()
+        with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
+             patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")):
+            events = [event async for event in stream_chat("baseline-test-session", "Research this place.")]
+
+        labels = [event["label"] for event in events if event["type"] == "status"]
+        self.assertEqual(labels, [
+            "Understanding your request",
+            "Researching current information",
+            "Preparing your response",
+        ])
+        self.assertNotIn("private query that must not reach the UI", " ".join(labels))
 
     async def test_import_welcome_is_assistant_first_and_maps_only_saved_selection(self):
         self.session.messages = []

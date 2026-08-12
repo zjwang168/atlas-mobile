@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, AsyncIterator
 
 import httpx
@@ -43,6 +44,35 @@ _PRECISE_CONSTRAINT_RE = re.compile(
 _PRECISE_CONSTRAINT_CJK_TERMS = (
     "评分", "评价", "价格", "菜单", "素食", "纯素", "早餐", "早午餐", "外带", "打包", "顺路", "通勤", "路上",
 )
+
+# These labels intentionally describe only Atlas operations. They must never
+# include model reasoning, tool inputs, search queries, or tool output.
+_AGENT_STATUS_LABELS = {
+    "resolve_special_place": "Locating the address",
+    "propose_special_place_change": "Preparing the location update",
+    "find_places_between_special_places": "Finding places along the route",
+    "find_nearby_places": "Searching nearby places",
+    "find_verified_places": "Checking live venue details",
+    "find_similar_places": "Finding comparable places",
+    "extract_pasted_places": "Extracting places from your text",
+    "research_screen_locations": "Researching locations",
+    "propose_add_places": "Preparing places to save",
+    "propose_create_atlas": "Preparing your Atlas",
+    "web_search": "Researching current information",
+}
+
+
+async def _emit_agent_status(
+    on_status: Callable[[str], Awaitable[None]] | None,
+    label: str,
+) -> None:
+    if not on_status:
+        return
+    try:
+        await on_status(label)
+    except Exception:
+        # Progress display must never affect an otherwise valid chat request.
+        pass
 
 
 def _content_to_text(content: Any) -> str:
@@ -156,6 +186,9 @@ Tool rules:
   Use a concrete POI query, not a loose description: for example use "dog park"
   for a park where dogs can be walked. A POI match alone does not prove rules
   such as leash policy, opening hours, or whether dogs are currently allowed.
+  When the user says "near my Home/Office/School" or "near home/office/school",
+  pass anchor_role="home", "office", or "school" respectively. Those requests
+  search around the saved special-place coordinate, never around device GPS.
 - For a place request with rating, price, menu, dietary, availability, or
   route/commute constraints, call find_verified_places instead. It uses live
   web research to find named venues and Mapbox only to resolve those venues to
@@ -616,6 +649,42 @@ def _nearby_title(categories: list[str]) -> str:
     return f"Nearby {', '.join(categories[:-1])}, and {categories[-1]}"
 
 
+def _nearby_special_place_role(text: str) -> str | None:
+    """Identify a Home/Office/School-centered nearby request."""
+    normalized = str(text or "").casefold()
+    patterns = (
+        ("home", r"\b(?:near|nearby|around|by) (?:my )?home\b|(?:我)?家(?:附近|周边|旁边)"),
+        ("office", r"\b(?:near|nearby|around|by) (?:my )?(?:office|company|work)\b|(?:我)?(?:公司|办公室|单位)(?:附近|周边|旁边)"),
+        ("school", r"\b(?:near|nearby|around|by) (?:my )?(?:school|campus|university)\b|(?:我)?(?:学校|校园|大学)(?:附近|周边|旁边)"),
+    )
+    return next((role for role, pattern in patterns if re.search(pattern, normalized)), None)
+
+
+def _special_place_anchor(session: Any, role: str | None) -> dict[str, Any] | None:
+    """Read a valid saved special-place coordinate for local search."""
+    if role not in {"home", "office", "school"}:
+        return None
+    place = next((
+        item for item in (getattr(session, "special_places", []) or [])
+        if isinstance(item, dict) and str(item.get("role") or "").lower() == role
+    ), None)
+    if not place:
+        return None
+    try:
+        longitude, latitude = float(place["longitude"]), float(place["latitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
+        return None
+    return {
+        "role": role,
+        "name": str(place.get("name") or role.title()),
+        "longitude": longitude,
+        "latitude": latitude,
+        "full_address": place.get("full_address"),
+    }
+
+
 def _parse_json_object(value: str) -> dict[str, Any]:
     """Parse a model JSON object even when it wrapped the object in prose."""
     text = (value or "").strip()
@@ -833,6 +902,106 @@ def _commute_anchors_for_requirements(
         school = roles.get("school")
         return (current_place, school) if school else None
     return _commute_anchors(session)
+
+
+def _current_location_commute_role(requirements: str) -> str | None:
+    """Return the explicitly requested destination role for a GPS-origin commute."""
+    text = requirements.casefold()
+    from_current = bool(re.search(
+        r"\bfrom (?:my place|where i am|my location)\b|从我的地方(?:出发)?|从我这(?:里|儿)?出发|从当前位置出发",
+        text,
+    ))
+    if not from_current:
+        return None
+    role_patterns = (
+        ("office", r"\b(?:to|toward|going to) (?:my )?(?:office|company|work)\b|(?:去|到)(?:我的)?(?:公司|办公室|单位)"),
+        ("home", r"\b(?:to|back to|going home) (?:my )?home\b|回(?:我的)?家"),
+        ("school", r"\b(?:to|toward|going to) (?:my )?(?:school|campus|university)\b|(?:去|到)(?:我的)?(?:学校|校园|大学)"),
+    )
+    return next((role for role, pattern in role_patterns if re.search(pattern, text)), None)
+
+
+async def _finalize_commute_presentation(session: Any, state: dict[str, Any]) -> None:
+    """Make commute map output independent of the model's tool-call order."""
+    presentation = state.get("presentation")
+    if not isinstance(presentation, dict) or not isinstance(presentation.get("places"), list):
+        return
+    recent_user_messages = [
+        str(item.get("content") or "")
+        for item in (getattr(session, "messages", []) or [])[-8:]
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    destination: dict[str, Any] | None = None
+    action = state.get("pending_action")
+    current_message = str(state.get("user_message") or "")
+    action_role = (
+        str(action.get("special_role") or "").lower()
+        if isinstance(action, dict) and action.get("kind") == "save_special_place"
+        else None
+    )
+    # A missing destination is commonly supplied one turn after the commute
+    # request. Only that active confirmation may consult recent context;
+    # ordinary later searches must not inherit stale commute intent.
+    role = _current_location_commute_role(current_message)
+    if not role and action_role:
+        context = "\n".join([*recent_user_messages[-3:], current_message])
+        contextual_role = _current_location_commute_role(context)
+        role = action_role if contextual_role == action_role else None
+    if not role:
+        return
+
+    if (
+        isinstance(action, dict)
+        and action.get("kind") == "save_special_place"
+        and action.get("special_role") == role
+        and isinstance(action.get("places"), list)
+        and action["places"]
+    ):
+        proposed = action["places"][0]
+        if isinstance(proposed, dict):
+            destination = {
+                "role": role,
+                "name": proposed.get("name") or role.title(),
+                "latitude": proposed.get("latitude"),
+                "longitude": proposed.get("longitude"),
+                "full_address": proposed.get("full_address") or proposed.get("description"),
+            }
+    if destination is None:
+        destination = next((
+            item for item in (getattr(session, "special_places", []) or [])
+            if isinstance(item, dict) and str(item.get("role") or "").lower() == role
+        ), None)
+    current = getattr(session, "user_location", None)
+    if not destination or not current or len(current) != 2:
+        return
+    try:
+        origin_lng, origin_lat = float(current[0]), float(current[1])
+        destination_lng = float(destination["longitude"])
+        destination_lat = float(destination["latitude"])
+    except (KeyError, TypeError, ValueError):
+        return
+
+    normalized_destination = {
+        **destination,
+        "role": role,
+        "longitude": destination_lng,
+        "latitude": destination_lat,
+    }
+    special_places = [
+        item for item in (presentation.get("special_places") or [])
+        if isinstance(item, dict) and item.get("role") != role
+    ]
+    presentation["special_places"] = [*special_places, normalized_destination]
+    presentation["commute_destination"] = normalized_destination
+    presentation["user_location"] = presentation.get("user_location") or {
+        "longitude": origin_lng,
+        "latitude": origin_lat,
+    }
+    if not (presentation.get("commute_route") or {}).get("route"):
+        presentation["commute_route"] = await _road_route([
+            (origin_lng, origin_lat),
+            (destination_lng, destination_lat),
+        ], profile="driving")
 
 
 async def _rank_by_commute_detour(
@@ -1100,12 +1269,22 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         limit_per_category: int | None = None,
         limit: int | None = None,
         radius_km: int | None = None,
+        anchor_role: str | None = None,
     ) -> dict[str, Any]:
-        """Find POIs within a local GPS radius, never returning distant global matches."""
+        """Find POIs near GPS or a saved Home, Office, or School anchor."""
         current = getattr(session, "user_location", None)
-        if not current or len(current) != 2:
+        requested_anchor_role = str(anchor_role or "").strip().lower()
+        inferred_anchor_role = _nearby_special_place_role(str(state.get("user_message") or ""))
+        resolved_anchor_role = requested_anchor_role if requested_anchor_role in {"home", "office", "school"} else inferred_anchor_role
+        anchor = _special_place_anchor(session, resolved_anchor_role)
+        if resolved_anchor_role and not anchor:
+            return {"error": f"Your saved {resolved_anchor_role.title()} location is unavailable."}
+        if anchor:
+            longitude, latitude = anchor["longitude"], anchor["latitude"]
+        elif current and len(current) == 2:
+            longitude, latitude = float(current[0]), float(current[1])
+        else:
             return {"error": "Current device location is unavailable."}
-        longitude, latitude = float(current[0]), float(current[1])
         from backend.services import place_search_service
 
         requested_categories = _nearby_categories(categories, query)
@@ -1183,9 +1362,10 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         session.locations = places
         session.route = route
         state["presentation"] = {
-            "kind": "nearby_map", "title": _nearby_title(displayed_categories),
+            "kind": "nearby_map", "title": f"{_nearby_title(displayed_categories)} near {anchor['name']}" if anchor else _nearby_title(displayed_categories),
             "user_location": {"longitude": longitude, "latitude": latitude},
             "places": places,
+            "special_places": [anchor] if anchor else [],
             "groups": [{"category": category, "places": category_places} for category, category_places in groups.items()],
             "route": route,
         }
@@ -1195,6 +1375,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             "places": places,
             "route": route,
             "radius_km": search_radius_km,
+            "anchor": anchor,
             "not_found_categories": not_found_categories,
         }
 
@@ -1209,8 +1390,13 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             return {"error": "This request has no precise constraint requiring live verification."}
         candidate_limit = max(1, min(int(limit or 3), CONSTRAINED_PLACE_MAX_CANDIDATES))
         origin = getattr(session, "user_location", None)
-        origin_tuple = (float(origin[0]), float(origin[1])) if origin and len(origin) == 2 else None
-        researched = await _research_precise_places(requirements, area, candidate_limit)
+        anchor = _special_place_anchor(session, _nearby_special_place_role(requirements))
+        origin_tuple = (
+            (anchor["longitude"], anchor["latitude"])
+            if anchor else (float(origin[0]), float(origin[1])) if origin and len(origin) == 2 else None
+        )
+        research_area = area or (anchor.get("full_address") or anchor.get("name") if anchor else None)
+        researched = await _research_precise_places(requirements, research_area, candidate_limit)
         resolved = await asyncio.gather(*[
             _mapbox_resolve_researched_place(candidate, origin_tuple)
             for candidate in researched
@@ -1256,10 +1442,10 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         session.route = route
         state["presentation"] = {
             "kind": "nearby_map",
-            "title": "Live-verified nearby places",
+            "title": f"Live-verified places near {anchor['name']}" if anchor else "Live-verified nearby places",
             "user_location": {"longitude": origin_tuple[0], "latitude": origin_tuple[1]} if origin_tuple else None,
             "places": places,
-            "special_places": anchors,
+            "special_places": [anchor] if anchor else anchors,
             "commute_destination": anchors[0] if anchors else None,
             "route": route,
             "commute_route": commute_route,
@@ -1493,10 +1679,16 @@ def _image_data_url(image_base64: str | None) -> str | None:
     return f"data:{media_type};base64,{value}"
 
 
-async def _run_agent(session: Any, user_message: str, image_base64: str | None = None) -> dict[str, Any]:
+async def _run_agent(
+    session: Any,
+    user_message: str,
+    image_base64: str | None = None,
+    on_status: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     message = (user_message or "").strip()
     if not message:
         raise ValueError("Message cannot be empty")
+    await _emit_agent_status(on_status, "Understanding your request")
     if _is_special_place_confirmation_ack(message, getattr(session, "pending_chat_action", None)):
         action = session.pending_chat_action
         role = str(action.get("special_role") or "place").title()
@@ -1555,6 +1747,7 @@ async def _run_agent(session: Any, user_message: str, image_base64: str | None =
                 final_response = response
                 calls = list(getattr(response, "tool_calls", None) or [])
                 if not calls:
+                    await _emit_agent_status(on_status, "Preparing your response")
                     answer = _content_to_text(getattr(response, "content", response))
                     break
                 prompt.append(response)
@@ -1562,6 +1755,10 @@ async def _run_agent(session: Any, user_message: str, image_base64: str | None =
                     name = str(call.get("name") or "")
                     call_id = str(call.get("id") or uuid.uuid4())
                     tool_calls_used.append(name)
+                    await _emit_agent_status(
+                        on_status,
+                        _AGENT_STATUS_LABELS.get(name, "Working on your request"),
+                    )
                     selected = tools_by_name.get(name)
                     if not selected:
                         result: dict[str, Any] = {"error": f"Unsupported tool: {name}"}
@@ -1579,6 +1776,15 @@ async def _run_agent(session: Any, user_message: str, image_base64: str | None =
     except Exception as error:
         answer, status, partial = f"Sorry, I couldn't answer that right now: {error}", "error", True
     answer = answer or "I don't have a response for that yet."
+    await _finalize_commute_presentation(session, state)
+    # Persist the final, order-independent map model alongside the tool log.
+    # History restoration otherwise sees whichever tool happened to run last
+    # and can lose the commute destination marker and route controls.
+    if isinstance(state.get("presentation"), dict):
+        tool_results.append({
+            "name": "chat_presentation",
+            "result": {"presentation": state["presentation"]},
+        })
     session.chat_presentation = state["presentation"]
     session.add_message("assistant", answer, tool_calls=tool_calls_used or None, tool_results=tool_results or None)
     try:
@@ -1642,8 +1848,29 @@ async def stream_chat(session_id: str, user_message: str, image_base64: str | No
             "presentation": None, "place_cards": [], "metrics": {"latency_ms": 0, "tool_call_count": 0},
         }
         return
-    result = await _run_agent(session, user_message, image_base64)
-    answer = result["response"]
-    for index in range(0, len(answer), 36):
-        yield {"type": "token", "delta": answer[index:index + 36]}
-    yield {"type": "complete", **result}
+    status_events: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+    async def publish_status(label: str) -> None:
+        await status_events.put({"type": "status", "label": label})
+
+    agent_task = asyncio.create_task(_run_agent(session, user_message, image_base64, publish_status))
+    try:
+        while not agent_task.done():
+            try:
+                yield await asyncio.wait_for(status_events.get(), timeout=0.2)
+            except TimeoutError:
+                continue
+        result = await agent_task
+        while not status_events.empty():
+            yield status_events.get_nowait()
+        answer = result["response"]
+        for index in range(0, len(answer), 36):
+            yield {"type": "token", "delta": answer[index:index + 36]}
+        yield {"type": "complete", **result}
+    finally:
+        if not agent_task.done():
+            agent_task.cancel()
+            try:
+                await agent_task
+            except asyncio.CancelledError:
+                pass

@@ -109,7 +109,7 @@ export function AtlasChatMapControls({ topInset, onReturn, onClose, placePopup, 
       </Pressable>
     </View>
     <View pointerEvents="none" style={[styles.noticeLayer, { top: topInset + 62 }]}><MapNotice notice={notice} /></View>
-    {routeToggle ? <View pointerEvents="box-none" style={styles.routeToggleLayer}><Pressable accessibilityRole="button" accessibilityLabel={routeToggle.visible ? 'Hide Route' : 'Show Route'} disabled={routeToggle.loading} onPress={routeToggle.onPress} style={({ pressed }) => [styles.routeToggle, pressed && !routeToggle.loading && styles.controlPressed]}>{routeToggle.loading ? <ActivityIndicator size="small" color="#167D78" /> : <Ionicons name={routeToggle.visible ? 'eye-off-outline' : 'git-branch-outline'} size={16} color="#167D78" />}<Text style={styles.routeToggleText}>{routeToggle.visible ? 'Hide Route' : 'Show Route'}</Text></Pressable></View> : null}
+    {routeToggle ? <View pointerEvents="box-none" style={styles.routeToggleLayer}><Pressable accessibilityRole="button" accessibilityLabel={routeToggle.visible ? 'Hide Route' : 'Show Route'} disabled={routeToggle.loading} onPress={routeToggle.onPress} style={({ pressed }) => [styles.routeToggle, pressed && !routeToggle.loading && styles.controlPressed]}>{routeToggle.loading ? <ActivityIndicator size="small" color="#6FA7EE" /> : <Ionicons name={routeToggle.visible ? 'eye-off-outline' : 'git-branch-outline'} size={16} color="#6FA7EE" />}<Text style={styles.routeToggleText}>{routeToggle.visible ? 'Hide Route' : 'Show Route'}</Text></Pressable></View> : null}
     <View pointerEvents="box-none" style={[styles.placePopupLayer, Boolean(atlasItinerary) && styles.placePopupAboveItinerary]}><MapPlacePopupTransition content={placePopup} /></View>
     {atlasItinerary ? <View pointerEvents="box-none" style={styles.itineraryLayer}>{atlasItinerary}</View> : null}
   </View>;
@@ -196,8 +196,8 @@ const styles = StyleSheet.create({
   notice: { alignItems: 'center' },
   noticeText: { minHeight: 34, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 17, backgroundColor: 'rgba(24,24,27,0.94)', color: '#FFFFFF', fontSize: 13, lineHeight: 18, fontWeight: '700', overflow: 'hidden' },
   routeToggleLayer: { position: 'absolute', right: 16, bottom: 32, zIndex: 28 },
-  routeToggle: { minHeight: 38, paddingHorizontal: 13, borderRadius: 19, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(22,125,120,0.25)', shadowColor: '#111827', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
-  routeToggleText: { color: '#167D78', fontSize: 13, lineHeight: 18, fontWeight: '800' },
+  routeToggle: { minHeight: 38, paddingHorizontal: 13, borderRadius: 19, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(111,167,238,0.35)', shadowColor: '#111827', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  routeToggleText: { color: '#6FA7EE', fontSize: 13, lineHeight: 18, fontWeight: '800' },
   placePopupLayer: { position: 'absolute', left: 16, right: 16, bottom: 150, alignItems: 'center', zIndex: 30 },
   placePopupAboveItinerary: { bottom: 322 },
   itineraryLayer: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 20 },

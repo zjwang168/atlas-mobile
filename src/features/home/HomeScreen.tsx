@@ -356,7 +356,17 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
           animateToTab(TAB_PLACES);
         }}
         initialPrompt={null}
-        onOpenHistory={onOpenChatHistory}
+        onOpenHistory={() => {
+          // Chat history is mounted by AppContent, outside this screen. The
+          // full-screen chat surface has a higher local z-index, so leave it
+          // before opening history instead of rendering the sheet beneath it.
+          setChatMapOpen(false);
+          setChatPresentationVisible(false);
+          setStandaloneChatVisible(false);
+          setActiveHistoryItem(null);
+          setActiveSidekick('none');
+          onOpenChatHistory?.();
+        }}
         onNewChat={handleNewChat}
         showLanding={standaloneChatVisible}
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}

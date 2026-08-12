@@ -227,11 +227,13 @@ export type AtlasChatPresentation = {
 
 type AtlasChatStreamEvent =
   | { type: 'token'; delta: string }
+  | { type: 'status'; label: string }
   | { type: 'complete' } & AtlasChatResponse
   | { type: 'error'; message: string };
 
 type AtlasChatStreamHandlers = {
   onToken: (delta: string) => void;
+  onStatus?: (label: string) => void;
 };
 
 export type AtlasRouteResponse = {
@@ -602,6 +604,8 @@ export async function chatWithAtlasStream(
       const event = JSON.parse(line) as AtlasChatStreamEvent;
       if (event.type === 'token') {
         handlers.onToken(event.delta);
+      } else if (event.type === 'status') {
+        handlers.onStatus?.(event.label);
       } else if (event.type === 'complete') {
         completed = event;
       } else {

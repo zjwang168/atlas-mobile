@@ -119,6 +119,7 @@ type Message = {
   thinkingStartedAt?: number;
   thoughtDurationSeconds?: number;
   thoughtText?: string;
+  agentStatus?: string;
   presentation?: AtlasChatPresentation | null;
   starterPrompts?: readonly string[];
   pendingAction?: {
@@ -140,6 +141,59 @@ type Message = {
 type MessageFeedback = 'up' | 'down';
 
 type ChatPresentationPlace = AtlasChatPresentation['places'][number];
+
+function currentLocationCommuteRole(text: string): 'home' | 'office' | 'school' | null {
+  const fromCurrent = /\bfrom (?:my place|where i am|my location)\b|从我的地方(?:出发)?|从我这(?:里|儿)?出发|从当前位置出发/i.test(text);
+  if (!fromCurrent) return null;
+  if (/\b(?:to|toward|going to) (?:my )?(?:office|company|work)\b|(?:去|到)(?:我的)?(?:公司|办公室|单位)/i.test(text)) return 'office';
+  if (/\b(?:to|back to|going home) (?:my )?home\b|回(?:我的)?家/i.test(text)) return 'home';
+  if (/\b(?:to|toward|going to) (?:my )?(?:school|campus|university)\b|(?:去|到)(?:我的)?(?:学校|校园|大学)/i.test(text)) return 'school';
+  return null;
+}
+
+function normalizeCommutePresentation(
+  presentation: AtlasChatPresentation | null | undefined,
+  pendingAction: Message['pendingAction'],
+  conversationText: string,
+  userLocation: [number, number] | null | undefined,
+): AtlasChatPresentation | null | undefined {
+  if (!presentation) return presentation;
+  const userTurns = conversationText.split('\n').filter(Boolean);
+  const currentTurnRole = currentLocationCommuteRole(userTurns.at(-1) ?? '');
+  const contextualRole = pendingAction?.kind === 'save_special_place'
+    ? currentLocationCommuteRole(userTurns.slice(-3).join('\n'))
+    : null;
+  const role = currentTurnRole
+    ?? (contextualRole === pendingAction?.special_role ? contextualRole : null);
+  if (!role) return presentation;
+  const actionPlace = pendingAction?.kind === 'save_special_place'
+    && pendingAction.special_role === role
+    ? pendingAction.places[0]
+    : null;
+  const existingDestination = presentation.commute_destination
+    ?? presentation.special_places?.find((place) => place.role === role);
+  const source = actionPlace ?? existingDestination;
+  if (!source) return presentation;
+  const destination = {
+    role,
+    name: source.name || role[0].toUpperCase() + role.slice(1),
+    latitude: source.latitude,
+    longitude: source.longitude,
+    full_address: source.full_address,
+  };
+  return {
+    ...presentation,
+    user_location: presentation.user_location ?? (userLocation ? {
+      longitude: userLocation[0],
+      latitude: userLocation[1],
+    } : undefined),
+    special_places: [
+      ...(presentation.special_places ?? []).filter((place) => place.role !== role),
+      destination,
+    ],
+    commute_destination: destination,
+  };
+}
 
 function limitChatPlacePhotoRequest<T>(work: () => Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -261,9 +315,26 @@ function parseStoredToolResults(value: unknown): Array<Record<string, unknown>> 
   }
 }
 
-function restorePresentationFromToolResults(value: unknown): AtlasChatPresentation | null {
+function restorePresentationFromToolResults(
+  value: unknown,
+  conversationText = '',
+  userLocation?: [number, number] | null,
+): AtlasChatPresentation | null {
   const toolResults = parseStoredToolResults(value);
+  let specialAction: Message['pendingAction'] = null;
 
+  for (const toolResult of toolResults) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const proposal = (result as Record<string, unknown>).proposal;
+    if (!proposal || typeof proposal !== 'object') continue;
+    const candidate = proposal as Message['pendingAction'];
+    if (candidate?.kind === 'save_special_place' && Array.isArray(candidate.places)) {
+      specialAction = candidate;
+    }
+  }
+
+  // New messages persist this final presentation after every tool has run.
   for (const toolResult of [...toolResults].reverse()) {
     const result = toolResult.result;
     if (!result || typeof result !== 'object') continue;
@@ -273,6 +344,61 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
       const candidate = presentation as AtlasChatPresentation;
       if (Array.isArray(candidate.places) && typeof candidate.kind === 'string') return candidate;
     }
+  }
+
+  // Older messages only persisted individual tool outputs. Prefer an actual
+  // search result over the save proposal, then merge its special destination.
+  for (const toolResult of [...toolResults].reverse()) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const data = result as Record<string, unknown>;
+    if (!Array.isArray(data.places)) continue;
+    let candidate: AtlasChatPresentation | null = null;
+    if (toolResult.name === 'find_verified_places') {
+      candidate = {
+        kind: 'nearby_map',
+        title: 'Live-verified nearby places',
+        user_location: userLocation ? { longitude: userLocation[0], latitude: userLocation[1] } : undefined,
+        places: data.places as AtlasChatPresentation['places'],
+        special_places: (data.special_places as AtlasChatPresentation['special_places']) ?? [],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+        commute_route: (data.commute_route as AtlasChatPresentation['commute_route']) ?? null,
+      };
+    } else if (toolResult.name === 'find_nearby_places') {
+      const query = typeof data.query === 'string' ? data.query : 'places';
+      candidate = {
+        kind: 'nearby_map',
+        title: `Nearby ${query}`,
+        user_location: userLocation ? { longitude: userLocation[0], latitude: userLocation[1] } : undefined,
+        places: data.places as AtlasChatPresentation['places'],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    } else if (toolResult.name === 'find_places_between_special_places') {
+      candidate = {
+        kind: 'places_map',
+        title: 'Places along your route',
+        user_location: userLocation ? { longitude: userLocation[0], latitude: userLocation[1] } : undefined,
+        places: data.places as AtlasChatPresentation['places'],
+        special_places: (data.special_places as AtlasChatPresentation['special_places']) ?? [],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    } else if (toolResult.name === 'extract_pasted_places') {
+      candidate = {
+        kind: 'places_map',
+        title: typeof data.title === 'string' ? data.title : 'Places from your text',
+        places: data.places as AtlasChatPresentation['places'],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    }
+    if (candidate) {
+      return normalizeCommutePresentation(candidate, specialAction, conversationText, userLocation) ?? null;
+    }
+  }
+
+  for (const toolResult of [...toolResults].reverse()) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const data = result as Record<string, unknown>;
     const proposal = data.proposal;
     if (proposal && typeof proposal === 'object') {
       const action = proposal as Record<string, unknown>;
@@ -286,31 +412,18 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
         };
       }
     }
-
-    if (!Array.isArray(data.places)) continue;
-    if (toolResult.name === 'find_nearby_places') {
-      const query = typeof data.query === 'string' ? data.query : 'places';
-      return {
-        kind: 'nearby_map',
-        title: `Nearby ${query}`,
-        places: data.places as AtlasChatPresentation['places'],
-        route: (data.route as AtlasChatPresentation['route']) ?? null,
-      };
-    }
-    if (toolResult.name === 'extract_pasted_places') {
-      return {
-        kind: 'places_map',
-        title: typeof data.title === 'string' ? data.title : 'Places from your text',
-        places: data.places as AtlasChatPresentation['places'],
-        route: (data.route as AtlasChatPresentation['route']) ?? null,
-      };
-    }
   }
 
   return null;
 }
 
-function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
+function ThinkingIndicator({
+  reducedMotion,
+  status,
+}: {
+  reducedMotion: boolean;
+  status?: string;
+}) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const breathingOpacity = useRef(new NativeAnimated.Value(1)).current;
 
@@ -334,7 +447,7 @@ function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
   return (
     <View style={styles.thinkingRow}>
       <NativeAnimated.Text style={[styles.assistantLabel, { opacity: breathingOpacity }]}>Atlas AI</NativeAnimated.Text>
-      <Text style={styles.thinkingText}>thinking {elapsedSeconds}s</Text>
+      <Text style={styles.thinkingText}>{status || 'Thinking'} {elapsedSeconds}s</Text>
     </View>
   );
 }
@@ -644,6 +757,7 @@ export default function AIChatBox({
           ? {
               ...message,
               streaming: false,
+              agentStatus: undefined,
               thoughtDurationSeconds: Math.max(
                 1,
                 Math.round((Date.now() - (message.thinkingStartedAt ?? Date.now())) / 1000),
@@ -663,7 +777,7 @@ export default function AIChatBox({
       message.id === messageId
         ? isThought
           ? { ...message, thoughtText: `${message.thoughtText ?? ''}${text}` }
-          : { ...message, text: `${message.text}${text}` }
+          : { ...message, text: `${message.text}${text}`, agentStatus: undefined }
         : message
     )));
   };
@@ -721,6 +835,16 @@ export default function AIChatBox({
     streamQueueRef.current.push(...Array.from(delta));
     streamedTextRef.current = true;
     startStreamQueue();
+  };
+
+  const updateAgentStatus = (messageId: string, label: string) => {
+    if (!label) return;
+    setMessages((current) => current.map((message) => (
+      message.id === messageId && message.streaming
+        ? { ...message, agentStatus: label }
+        : message
+    )));
+    scrollStreamingResponseIntoView(false);
   };
 
   const completeStreamAfterDisplay = () => {
@@ -832,7 +956,15 @@ export default function AIChatBox({
           )
           .map((message, index) => {
             const presentation = message.role === 'assistant'
-              ? restorePresentationFromToolResults(message.tool_results)
+              ? restorePresentationFromToolResults(
+                message.tool_results,
+                (detail.messages || [])
+                  .slice(0, index + 1)
+                  .filter((item) => item.role === 'user')
+                  .map((item) => item.content)
+                  .join('\n'),
+                userLocation,
+              )
               : null;
             const isImportWelcome = Boolean(
               presentation && parseStoredToolResults(message.tool_results)
@@ -961,6 +1093,7 @@ export default function AIChatBox({
         text: '',
         streaming: true,
         thinkingStartedAt: Date.now(),
+        agentStatus: 'Understanding your request',
       }];
     });
     setInputText('');
@@ -974,7 +1107,10 @@ export default function AIChatBox({
       const result = await chatWithAtlasStream(
         currentSessionId,
         message,
-        { onToken: enqueueStreamDelta },
+        {
+          onToken: enqueueStreamDelta,
+          onStatus: (label) => updateAgentStatus(assistantMessageId, label),
+        },
         activeConversationIdRef.current,
         userLocation,
         savedPlaces.flatMap((place) => place.special_role ? [{
@@ -987,9 +1123,15 @@ export default function AIChatBox({
         imageBase64,
         controller.signal,
       );
+      const normalizedPresentation = normalizeCommutePresentation(
+        result.presentation,
+        result.pending_action,
+        [...messages.filter((item) => item.role === 'user').map((item) => item.text), message].join('\n'),
+        userLocation,
+      );
       setMessages((current) => current.map((message) => (
         message.id === assistantMessageId
-          ? { ...message, presentation: result.presentation, pendingAction: result.pending_action }
+          ? { ...message, presentation: normalizedPresentation, pendingAction: result.pending_action }
           // The backend has one pending confirmation per chat. A revised Atlas
           // draft replaces the older proposal, so its old card must not remain
           // actionable and accidentally create the stale itinerary.
@@ -1561,7 +1703,9 @@ export default function AIChatBox({
             }}
           >
             <View style={styles.assistantMessageText}>
-              {item.streaming && !displayText && !thoughtText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
+              {item.streaming && !displayText && !thoughtText ? (
+                <ThinkingIndicator reducedMotion={reducedMotion} status={item.agentStatus} />
+              ) : null}
               {item.streaming && thoughtText && !displayText ? (
                 <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.streamingThoughtWrap}>
                   <StreamingThoughtText text={thoughtText} />

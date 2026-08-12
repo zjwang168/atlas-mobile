@@ -1,7 +1,6 @@
 import MapboxMap, { type MapMarker } from '@/features/map/MapboxMap';
 import type { AtlasChatPresentation } from '@/services/api/apiService';
 import { CheckIcon } from 'phosphor-react-native/src/icons/Check';
-import { ArrowSquareOutIcon } from 'phosphor-react-native/src/icons/ArrowSquareOut';
 import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
@@ -207,7 +206,6 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
               style={({ pressed }) => [styles.googleMapsAction, styles.googleMapsViewAction, pressed && styles.actionPressed]}
             >
               <Image source={GOOGLE_MAPS_ICON} style={styles.googleMapsIcon} />
-              <ArrowSquareOutIcon style={styles.googleMapsExternalIcon} size={10} color="#4B5563" weight="bold" />
             </Pressable>
             <Pressable
               accessibilityRole="link"
@@ -254,6 +252,5 @@ const styles = StyleSheet.create({
   googleMapsViewAction: { backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#DADCE0' },
   googleMapsNavigateAction: { backgroundColor: '#16A34A' },
   googleMapsIcon: { width: 27, height: 27, resizeMode: 'contain' },
-  googleMapsExternalIcon: { position: 'absolute', right: 3, top: 3, padding: 1, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.94)' },
   actionPressed: { transform: [{ scale: 0.95 }], opacity: 0.86 },
 });
