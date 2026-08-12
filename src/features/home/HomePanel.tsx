@@ -20,7 +20,6 @@ type HomePanelProps = {
   maxHeight?: number;
   onHeightChange?: (height: number) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
-  onManageSpecialPlace?: (role: NonNullable<PlaceDetail['specialRole']>) => void;
   onExitPlan?: () => void;
   isActive?: boolean;
 };
@@ -34,7 +33,6 @@ function HomePanel({
   maxHeight,
   onHeightChange,
   onDeleteInitiated,
-  onManageSpecialPlace,
   onExitPlan,
   isActive = true,
 }: HomePanelProps) {
@@ -86,7 +84,6 @@ function HomePanel({
                 avatarFallback={mockUser.avatarFallback}
                 onAvatarPress={() => setAccountOpen(true)}
                 onDeleteInitiated={onDeleteInitiated}
-                onManageSpecialPlace={onManageSpecialPlace}
               />
             </View>
           )}

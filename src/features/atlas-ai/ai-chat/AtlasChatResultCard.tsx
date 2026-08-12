@@ -63,6 +63,8 @@ function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?:
 export default function AtlasChatResultCard({ presentation, pendingAction, onConfirm, onCancel, onOpenMap }: Props) {
   const hasPendingAction = Boolean(pendingAction);
   const featuredPlace = presentation.places[0];
+  const specialPlaceName = pendingAction?.places[0]?.name?.trim();
+  const specialRole = pendingAction?.special_role;
   const hasSinglePlace = presentation.places.length === 1 && Boolean(featuredPlace);
   const placeSubtitle = featuredPlace
     ? [featuredPlace.category, featuredPlace.full_address || featuredPlace.description]
@@ -83,7 +85,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       id: `chat-special-${place.role}`,
       latitude: place.latitude,
       longitude: place.longitude,
-      title: place.role[0].toUpperCase() + place.role.slice(1),
+      title: place.name || place.role[0].toUpperCase() + place.role.slice(1),
       tone: commuteRoute ? 'atlas' as const : place.role,
     })),
     ...presentation.places.map((place, index) => ({
@@ -160,7 +162,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       </View>
       {hasPendingAction ? (
         <View style={styles.confirmRow}>
-          <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${pendingAction.special_role}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} this as your ${pendingAction.special_role}?` : 'Ready to add these places?'}</Text>
+          <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${specialRole}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} ${specialPlaceName || 'this location'} as your ${specialRole}?` : 'Ready to add these places?'}</Text>
           <View style={styles.actions}>
             <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={onCancel} style={styles.cancelButton}>
               <XIcon size={17} color="#52525B" weight="bold" />
@@ -174,7 +176,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       ) : null}
       {hasSinglePlace ? (
         <View style={styles.googleMapsRow}>
-          <Text style={styles.googleMapsPrompt}>Check it on Google Maps?</Text>
+          <Text style={styles.googleMapsPrompt}>Check {featuredPlace!.name} on Google Maps?</Text>
           <View style={styles.googleMapsActions}>
             <Pressable
               accessibilityRole="link"

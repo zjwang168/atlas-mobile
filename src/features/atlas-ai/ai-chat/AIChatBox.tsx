@@ -975,8 +975,10 @@ export default function AIChatBox({
       id: `chat-special-${place.role}`,
       latitude: place.latitude,
       longitude: place.longitude,
-      title: place.role[0].toUpperCase() + place.role.slice(1),
+      title: place.name || place.role[0].toUpperCase() + place.role.slice(1),
       description: place.full_address,
+      // The destination of a commute remains visually distinct from the
+      // purple recommendation and green origin, including before it is saved.
       tone: chatMapPresentation?.commute_route?.route ? 'atlas' as const : place.role,
       preserveToneOnSelect: true,
     })),
@@ -1200,6 +1202,8 @@ export default function AIChatBox({
     setChatMapSelectedId(null);
     setChatMapSelectedRoute(null);
     setChatMapOverviewRoute(presentation.commute_route?.route ?? presentation.route?.route ?? null);
+    // A commute map opens on the direct origin-to-destination route. Selecting
+    // a recommendation temporarily retains the established orange route.
     setChatMapOverviewRouteVisible(Boolean(presentation.commute_route?.route));
     setChatMapRouteLoading(false);
     setChatMapCameraKey(Date.now());

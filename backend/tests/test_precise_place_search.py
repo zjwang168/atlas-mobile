@@ -52,6 +52,23 @@ class PrecisePlaceSearchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(anchors)
 
+    def test_commute_from_my_place_to_school_uses_current_location(self):
+        session = conversation_manager.create_session("commute-anchor-school-test")
+        self.addCleanup(conversation_manager.delete_session, "commute-anchor-school-test")
+        session.user_location = (-122.3321, 47.6062)
+        session.special_places = [{
+            "role": "school", "name": "Stanford University", "longitude": -122.1697, "latitude": 37.4275,
+        }]
+
+        anchors = _commute_anchors_for_requirements(
+            session,
+            "从我的地方到学校，路上推荐一家墨西哥餐厅",
+        )
+
+        self.assertIsNotNone(anchors)
+        self.assertEqual(anchors[0]["role"], "current_location")
+        self.assertEqual(anchors[1]["role"], "school")
+
     async def test_verified_tool_reports_unverified_commute_without_saved_anchors(self):
         session = conversation_manager.create_session("precise-place-search-test")
         session.user_location = (-122.3321, 47.6062)
@@ -165,4 +182,33 @@ class PrecisePlaceSearchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["commute_route"], direct_route)
         self.assertEqual([anchor["role"] for anchor in result["special_places"]], ["office"])
+        self.assertEqual(state["presentation"]["commute_route"], direct_route)
+
+    async def test_new_school_confirmation_adds_direct_commute_route(self):
+        session = conversation_manager.create_session("new-school-commute-test")
+        self.addCleanup(conversation_manager.delete_session, "new-school-commute-test")
+        session.user_location = (-122.40, 37.78)
+        session.add_message("user", "From my place to school, recommend a Mexican restaurant on the way.")
+        state = {
+            "user_message": "Stanford University",
+            "presentation": {
+                "kind": "nearby_map", "title": "Mexican restaurant",
+                "user_location": {"longitude": -122.40, "latitude": 37.78},
+                "places": [{"name": "Flores San Mateo", "latitude": 37.56, "longitude": -122.32}],
+                "route": {"route": {"type": "Feature", "geometry": {"type": "LineString", "coordinates": []}}},
+            },
+        }
+        school = {
+            "name": "Stanford University", "latitude": 37.4275, "longitude": -122.1697,
+            "full_address": "Stanford, California", "category": "University",
+        }
+        tools = {tool.name: tool for tool in _agent_tools(session, state)}
+        direct_route = {"route": {"type": "Feature", "geometry": {"type": "LineString", "coordinates": []}}, "duration_minutes": 50}
+        with patch("backend.langgraph.chat_agent._road_route", new=AsyncMock(return_value=direct_route)):
+            state["resolved_special_places"] = {"school": school}
+            await tools["propose_special_place_change"].ainvoke({
+                "role": "school", "operation": "create", "place": school,
+            })
+
+        self.assertEqual(state["presentation"]["special_places"][0]["role"], "school")
         self.assertEqual(state["presentation"]["commute_route"], direct_route)

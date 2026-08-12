@@ -295,11 +295,14 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
             "longitude": -122.34, "full_address": "1 Old Street",
         }]
         model = _ToolModel([
-            tool_call("propose_special_place_change", {"role": "home", "operation": "update", "place": candidate}),
+            tool_call("resolve_special_place", {"query": "123 New Street", "role": "home"}, "call-1"),
+            tool_call("propose_special_place_change", {"role": "home", "operation": "update", "place": candidate}, "call-2"),
             AIMessage(content="I prepared the updated Home for your approval."),
         ])
         with (
             patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "new-home"}])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(return_value=[candidate])),
             patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
         ):
             result = await run_chat("tool-test-session", "I moved. My new home is 123 New Street.")
@@ -319,7 +322,8 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         }
         model = _ToolModel([
             tool_call("find_verified_places", {"requirements": "Find a highly rated vegetarian breakfast burrito"}, "call-1"),
-            tool_call("propose_special_place_change", {"role": "office", "operation": "create", "place": office}, "call-2"),
+            tool_call("resolve_special_place", {"query": "100 Office Way", "role": "office"}, "call-2"),
+            tool_call("propose_special_place_change", {"role": "office", "operation": "create", "place": office}, "call-3"),
             AIMessage(content="I found an option and prepared your Office for confirmation."),
         ])
         with (
@@ -329,6 +333,8 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
                 "rating": "4.8", "price": "", "menu_evidence": "Breakfast burrito.", "source_urls": ["https://example.com"],
             }])),
             patch("backend.langgraph.chat_agent._mapbox_resolve_researched_place", new=AsyncMock(return_value=restaurant)),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "office"}])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(return_value=[office])),
             patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
         ):
             result = await run_chat("tool-test-session", "My office is 100 Office Way. Find a highly rated vegetarian breakfast burrito.")
@@ -337,6 +343,82 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["pending_action"]["special_role"], "office")
         self.assertEqual(result["presentation"]["places"][0]["name"], "Breakfast Table")
         self.assertEqual(result["presentation"]["special_places"][0]["role"], "office")
+
+    async def test_special_place_neighborhood_never_saves_a_nearby_poi(self):
+        chinatown = {
+            "name": "Chinatown", "latitude": 37.7941, "longitude": -122.4078,
+            "full_address": "Chinatown, San Francisco, California, United States", "category": "Neighborhood",
+        }
+        nearby_hotel = {
+            "name": "The Ritz-Carlton, San Francisco", "latitude": 37.7916, "longitude": -122.4108,
+            "full_address": "600 Stockton St, San Francisco, California, near Chinatown", "category": "Hotel",
+        }
+        model = _ToolModel([
+            tool_call("resolve_special_place", {"query": "旧金山中国城", "role": "office"}, "call-1"),
+            tool_call("propose_special_place_change", {"role": "office", "operation": "create", "place": chinatown}, "call-2"),
+            AIMessage(content="I prepared your Office location for confirmation."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "hotel"}, {"external_id": "chinatown"}])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(side_effect=[[nearby_hotel], [chinatown]])),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "My office is in San Francisco Chinatown.")
+
+        proposed = result["pending_action"]["places"][0]
+        self.assertEqual(proposed["name"], "Chinatown")
+        self.assertEqual(proposed["latitude"], 37.7941)
+        self.assertNotEqual(proposed["name"], nearby_hotel["name"])
+
+    async def test_special_place_uses_geocoder_when_search_box_cannot_match(self):
+        geocoded = {
+            "latitude": 37.7941, "longitude": -122.4078,
+            "full_address": "Chinatown, San Francisco, California, United States",
+            "source": "nominatim",
+        }
+        expected = {
+            "name": "旧金山中国城", "latitude": 37.7941, "longitude": -122.4078,
+            "full_address": geocoded["full_address"], "category": "Address",
+        }
+        model = _ToolModel([
+            tool_call("resolve_special_place", {"query": "旧金山中国城", "role": "office"}, "call-1"),
+            tool_call("propose_special_place_change", {"role": "office", "operation": "create", "place": expected}, "call-2"),
+            AIMessage(content="I prepared your Office location for confirmation."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[])),
+            patch("backend.services.geocoder.geocode_address_first", new=AsyncMock(return_value=geocoded)),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "My office is in San Francisco Chinatown.")
+
+        proposed = result["pending_action"]["places"][0]
+        self.assertEqual(proposed["name"], "旧金山中国城")
+        self.assertEqual(proposed["full_address"], geocoded["full_address"])
+
+    async def test_special_place_confirmation_acknowledgement_keeps_existing_card(self):
+        action = {
+            "action_id": "office-action", "kind": "save_special_place", "title": "Save Office",
+            "special_role": "office", "operation": "create", "places": [{
+                "name": "Chinatown", "latitude": 37.7941, "longitude": -122.4078,
+                "full_address": "Chinatown, San Francisco",
+            }],
+        }
+        self.session.pending_chat_action = action
+        self.session.chat_presentation = {"kind": "places_map", "title": "Save Office", "places": action["places"]}
+        model = _ToolModel([AIMessage(content="This should not be invoked.")])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "好的")
+
+        self.assertEqual(result["pending_action"], action)
+        self.assertEqual(result["presentation"], self.session.chat_presentation)
+        self.assertIn("Save or Cancel", result["response"])
+        self.assertEqual(model.requests, [])
 
     async def test_between_special_places_search_has_both_anchor_pins(self):
         self.session.special_places = [

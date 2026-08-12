@@ -103,6 +103,24 @@ def _pending_atlas_context(session: Any) -> str:
     return "\n".join(lines)
 
 
+def _pending_special_place_context(session: Any) -> str:
+    action = getattr(session, "pending_chat_action", None)
+    if not isinstance(action, dict) or action.get("kind") not in {"save_special_place", "delete_special_place"}:
+        return "No Home, Office, or School confirmation is waiting."
+    role = str(action.get("special_role") or "place").title()
+    place = (action.get("places") or [{}])[0]
+    address = str(place.get("full_address") or "").strip()
+    return f"{role} confirmation is waiting for {address or place.get('name') or role}."
+
+
+def _is_special_place_confirmation_ack(message: str, action: Any) -> bool:
+    """Keep a pending special-place decision out of a new model turn."""
+    if not isinstance(action, dict) or action.get("kind") not in {"save_special_place", "delete_special_place"}:
+        return False
+    normalized = re.sub(r"[\s.!?，。！？]+", "", str(message or "").casefold())
+    return normalized in {"yes", "yeah", "yep", "ok", "okay", "sure", "好的", "好", "确认", "是"}
+
+
 def _special_places_context(session: Any) -> str:
     places = getattr(session, "special_places", []) or []
     valid = [place for place in places if isinstance(place, dict) and place.get("role") in {"home", "office", "school"}]
@@ -187,13 +205,17 @@ Tool rules:
   propose_special_place_change. This must produce the existing confirmation
   note with cancel and save controls, even when you also answer another
   request in the same turn. Do not ask whether to save it in plain text.
+- If a Home, Office, or School confirmation is already waiting, a message such
+  as "yes", "okay", or "好的" does not create a new location and does not
+  confirm it. Tell the user to use the visible Save or Cancel control, and do
+  not call resolve_special_place or propose_special_place_change again.
 - For a route recommendation phrased as "from my place" / "from where I am"
-  to Office/Company, treat the origin as the current device location. If Office
-  is missing, ask only for the Office/Company location. Do not also ask for
-  Home or a separate origin. Likewise, for a route recommendation "from my
-  place" back Home, ask only for Home when it is missing. In both cases, ask
-  only for the missing special place named as the destination; do not request
-  every special place before answering.
+  to Office/Company, School, or Home, treat the origin as the current device
+  location. If Office/Company is missing, ask only for the Office/Company location. Do not also ask for
+  Home or a separate origin. For a route recommendation "from my place" back
+  Home, ask only for Home when it is missing. If School is missing, ask only
+  for School. In all cases, ask only for the missing special place named as
+  the destination; do not request every special place before answering.
 - For a dining or activity request "between" two saved special places with no
   live constraint, call find_places_between_special_places. For rating, price,
   menu, dietary, availability, or commute constraints, call
@@ -217,7 +239,10 @@ Pending Atlas draft:
 {_pending_atlas_context(session)}
 
 Saved special places:
-{_special_places_context(session)}"""
+{_special_places_context(session)}
+
+Pending special-place confirmation:
+{_pending_special_place_context(session)}"""
 
 
 def _history_messages(session: Any) -> list[BaseMessage]:
@@ -457,6 +482,72 @@ def _dedupe_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[s
         if len(result) >= limit:
             break
     return result
+
+
+_SPECIAL_PLACE_AREA_TERMS = (
+    "chinatown", "neighborhood", "district", "downtown", "uptown", "midtown",
+    "old town", "city center", "中国城", "市中心", "城区", "街区",
+)
+
+
+def _special_place_query_variants(query: str) -> list[str]:
+    """Return a few literal query variants for Mapbox label matching.
+
+    This is deliberately a very small location-name alias table, not a model
+    translation step. It lets a Chinese user-provided neighborhood match the
+    English labels commonly returned by Mapbox without weakening matching for
+    unrelated POIs.
+    """
+    clean = " ".join(str(query or "").split()).strip()
+    if not clean:
+        return []
+    aliases = (
+        ("旧金山中国城", "San Francisco Chinatown"),
+        ("旧金山", "San Francisco"),
+        ("中国城", "Chinatown"),
+    )
+    translated = clean
+    for source, target in aliases:
+        translated = translated.replace(source, target)
+    return list(dict.fromkeys([clean, translated]))
+
+
+def _special_place_tokens(value: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", value.casefold())
+        if len(token) > 1
+    }
+
+
+def _is_special_place_area_query(query: str) -> bool:
+    text = query.casefold()
+    return any(term in text for term in _SPECIAL_PLACE_AREA_TERMS)
+
+
+def _special_place_match_score(query: str, values: list[str]) -> int:
+    """Score an exact user-place match without accepting nearby businesses."""
+    haystack = " ".join(str(value or "") for value in values).casefold()
+    best = 0
+    for variant in _special_place_query_variants(query):
+        normalized = " ".join(variant.casefold().split())
+        if normalized and normalized in haystack:
+            best = max(best, 10_000 + len(normalized))
+            continue
+        tokens = _special_place_tokens(variant)
+        if tokens and tokens.issubset(_special_place_tokens(haystack)):
+            best = max(best, len(tokens))
+    return best
+
+
+def _same_special_place(expected: dict[str, Any], proposed: dict[str, Any]) -> bool:
+    """Require a proposal to use the actual point produced by the resolver."""
+    try:
+        return (
+            abs(float(expected["latitude"]) - float(proposed["latitude"])) < 0.0002
+            and abs(float(expected["longitude"]) - float(proposed["longitude"])) < 0.0002
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _nearby_categories(categories: list[str] | None, query: str | None) -> list[str]:
@@ -728,15 +819,19 @@ def _commute_anchors_for_requirements(
         except (TypeError, ValueError):
             pass
 
-    from_my_place = bool(re.search(r"\bfrom (?:my place|where i am|my location)\b|从我的地方出发|从我这(?:里|儿)?出发|从当前位置出发", text))
+    from_my_place = bool(re.search(r"\bfrom (?:my place|where i am|my location)\b|从我的地方(?:出发)?|从我这(?:里|儿)?出发|从当前位置出发", text))
     to_office = bool(re.search(r"\b(?:to|toward|going to) (?:my )?(?:office|company|work)\b|(?:去|到)(?:我的)?(?:公司|办公室|单位)", text))
     to_home = bool(re.search(r"\b(?:to|back to|going home) (?:my )?home\b|回(?:我的)?家", text))
+    to_school = bool(re.search(r"\b(?:to|toward|going to) (?:my )?(?:school|campus|university)\b|(?:去|到)(?:我的)?(?:学校|校园|大学)", text))
     if from_my_place and current_place and to_office:
         office = roles.get("office")
         return (current_place, office) if office else None
     if from_my_place and current_place and to_home:
         home = roles.get("home")
         return (current_place, home) if home else None
+    if from_my_place and current_place and to_school:
+        school = roles.get("school")
+        return (current_place, school) if school else None
     return _commute_anchors(session)
 
 
@@ -796,7 +891,7 @@ async def _road_route(coordinates: list[tuple[float, float]], profile: str = "wa
 def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
     @tool
     async def resolve_special_place(query: str, role: str) -> dict[str, Any]:
-        """Resolve a user-supplied Home, Office, or School address into one map place. Never writes data."""
+        """Resolve a user-supplied Home, Office, or School to that exact map point. Never writes data."""
         clean_role = str(role).strip().lower()
         if clean_role not in {"home", "office", "school"}:
             return {"error": "role must be home, office, or school."}
@@ -806,15 +901,66 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         from backend.services import place_search_service
         token = str(uuid.uuid4())
         try:
-            suggestions = await place_search_service.suggest(clean_query, token, limit=1)
-            if not suggestions:
-                return {"error": "No matching place was found."}
-            places = _dedupe_places(await place_search_service.retrieve(suggestions[0]["external_id"], token), limit=1)
+            suggestions = await place_search_service.suggest(clean_query, token, limit=5)
+            retrieved = await asyncio.gather(*(
+                place_search_service.retrieve(item["external_id"], token)
+                for item in suggestions[:5]
+            ), return_exceptions=True)
         except Exception as error:
             return {"error": f"Could not resolve this place: {type(error).__name__}"}
-        if not places:
-            return {"error": "The matching place did not include a mappable coordinate."}
-        return {"role": clean_role, "place": places[0]}
+        matches: list[tuple[int, dict[str, Any]]] = []
+        for group in retrieved:
+            if not isinstance(group, list):
+                continue
+            for raw in group:
+                place = _normalize_place(raw)
+                if not place:
+                    continue
+                score = _special_place_match_score(clean_query, [
+                    place.get("name", ""), place.get("full_address", ""),
+                    str(raw.get("city") or ""), str(raw.get("region") or ""), str(raw.get("country") or ""),
+                ])
+                if score:
+                    matches.append((score, place))
+        if matches:
+            # Area names must resolve to the named area, not an arbitrary hotel,
+            # cafe, or other POI whose address only happens to be nearby.
+            if _is_special_place_area_query(clean_query):
+                matches = [item for item in matches if _is_special_place_area_query(str(item[1].get("name") or ""))]
+            if matches:
+                matches.sort(key=lambda item: item[0], reverse=True)
+                resolved = matches[0][1]
+                state.setdefault("resolved_special_places", {})[clean_role] = resolved
+                return {"role": clean_role, "place": resolved, "query": clean_query, "resolution": "mapbox"}
+
+        # Search Box has strong POI coverage but cannot resolve every address
+        # or neighborhood. Fall back to the app's address geocoder, which never
+        # returns fabricated coordinates. Its result retains the literal user
+        # query as the saveable name rather than substituting a nearby business.
+        try:
+            from backend.services.geocoder import geocode_address_first
+            geocoded = await geocode_address_first(clean_query)
+        except Exception as error:
+            return {"error": f"Could not geocode this place: {type(error).__name__}"}
+        if not geocoded:
+            return {"error": "No exact matching place was found. Please provide a street address or map pin."}
+        if not _special_place_match_score(clean_query, [str(geocoded.get("full_address") or "")]):
+            return {"error": "The geocoding result did not match the place you provided. Please provide a street address or map pin."}
+        fallback = _normalize_place({
+            "name": clean_query,
+            "latitude": geocoded.get("latitude"),
+            "longitude": geocoded.get("longitude"),
+            "full_address": geocoded.get("full_address") or clean_query,
+            "category": "Address",
+            "city": geocoded.get("city"),
+            "region": geocoded.get("region"),
+            "country": geocoded.get("country"),
+            "source": geocoded.get("source") or "geocoder",
+        })
+        if not fallback:
+            return {"error": "The geocoded location did not include a mappable coordinate."}
+        state.setdefault("resolved_special_places", {})[clean_role] = fallback
+        return {"role": clean_role, "place": fallback, "query": clean_query, "resolution": "geocoder"}
 
     @tool
     async def propose_special_place_change(
@@ -840,6 +986,9 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             normalized = _dedupe_places([place or []], limit=1)
             if not normalized:
                 return {"error": "A resolved, geocoded place is required."}
+            resolved = state.get("resolved_special_places", {}).get(clean_role)
+            if not resolved or not _same_special_place(resolved, normalized[0]):
+                return {"error": "The proposed place must be the exact point returned by resolve_special_place."}
             clean_operation = "update" if current else "create"
         role_title = clean_role.title()
         action = {
@@ -865,7 +1014,36 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
                 *[item for item in existing_presentation.get("special_places", []) if item.get("role") != clean_role],
                 *special_places,
             ]
-            state["presentation"] = {**existing_presentation, "special_places": merged_special_places}
+            commute_route = existing_presentation.get("commute_route")
+            recent_user_messages = [
+                str(item.get("content") or "")
+                for item in (getattr(session, "messages", []) or [])[-6:]
+                if isinstance(item, dict) and item.get("role") == "user"
+            ]
+            message = "\n".join([*recent_user_messages, str(state.get("user_message") or "")])
+            current = getattr(session, "user_location", None)
+            commute_destination = _commute_anchors_for_requirements(session, message)
+            is_new_destination = clean_operation != "delete" and (
+                commute_destination is None
+                and current
+                and len(current) == 2
+                and re.search(r"\bfrom (?:my place|where i am|my location)\b|从我的地方(?:出发)?|从我这(?:里|儿)?出发|从当前位置出发", message.casefold())
+                and (
+                    (clean_role == "office" and re.search(r"\b(?:to|toward|going to) (?:my )?(?:office|company|work)\b|(?:去|到)(?:我的)?(?:公司|办公室|单位)", message.casefold()))
+                    or (clean_role == "home" and re.search(r"\b(?:to|back to|going home) (?:my )?home\b|回(?:我的)?家", message.casefold()))
+                    or (clean_role == "school" and re.search(r"\b(?:to|toward|going to) (?:my )?(?:school|campus|university)\b|(?:去|到)(?:我的)?(?:学校|校园|大学)", message.casefold()))
+                )
+            )
+            if is_new_destination:
+                commute_route = await _road_route([
+                    (float(current[0]), float(current[1])),
+                    (float(normalized[0]["longitude"]), float(normalized[0]["latitude"])),
+                ], profile="driving")
+            state["presentation"] = {
+                **existing_presentation,
+                "special_places": merged_special_places,
+                "commute_route": commute_route,
+            }
         else:
             state["presentation"] = {
                 "kind": "places_map", "title": action["title"], "places": normalized,
@@ -1314,6 +1492,23 @@ async def _run_agent(session: Any, user_message: str, image_base64: str | None =
     message = (user_message or "").strip()
     if not message:
         raise ValueError("Message cannot be empty")
+    if _is_special_place_confirmation_ack(message, getattr(session, "pending_chat_action", None)):
+        action = session.pending_chat_action
+        role = str(action.get("special_role") or "place").title()
+        answer = f"Your {role} location is ready. Use the Save or Cancel control on the confirmation card to continue."
+        session.add_message("user", message)
+        session.add_message("assistant", answer)
+        try:
+            await conversation_manager.save_conversation(session.session_id)
+        except Exception as error:
+            print(f"[Chat] Failed to persist confirmation reminder: {error}")
+        return {
+            "session_id": session.session_id, "conversation_id": session.conversation_id, "response": answer,
+            "locations": session.locations, "route": session.route, "tool_calls_used": [], "tool_results": [],
+            "status": "success", "partial": False, "pending_action": action,
+            "presentation": session.chat_presentation, "place_cards": [],
+            "metrics": {"latency_ms": 0, "tool_call_count": 0},
+        }
     if not session.messages and session.title in ("", "Atlas AI chat"):
         session.title = message[:100]
     started_at = time.perf_counter()
@@ -1332,7 +1527,12 @@ async def _run_agent(session: Any, user_message: str, image_base64: str | None =
             {"type": "text", "text": message},
             {"type": "image_url", "image_url": {"url": image_url}},
         ]))
-    state: dict[str, Any] = {"presentation": None, "pending_action": None, "nearby_groups": {}}
+    state: dict[str, Any] = {
+        "presentation": None,
+        "pending_action": None,
+        "nearby_groups": {},
+        "user_message": message,
+    }
     tools = _agent_tools(session, state)
     tools_by_name = {item.name: item for item in tools}
     tool_calls_used: list[str] = []

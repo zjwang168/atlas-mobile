@@ -24,7 +24,6 @@ type MyPlacesProps = {
   /** Renders a condensed header only — used when the panel is in compact snap state */
   compact?: boolean;
   onDeleteInitiated?: (place: PlaceDetail) => void;
-  onManageSpecialPlace?: (role: NonNullable<PlaceDetail['specialRole']>) => void;
 };
 
 function MyPlaces({
@@ -37,7 +36,6 @@ function MyPlaces({
   onSharePress,
   compact = false,
   onDeleteInitiated,
-  onManageSpecialPlace,
 }: MyPlacesProps) {
   const [activeTab, setActiveTab] = useState<Tab>('allPlaces');
   const { refreshSavedPlaces } = useHome();
@@ -179,7 +177,6 @@ function MyPlaces({
           onPlacePress={onPlacePress}
           bottomInset={bottomInset}
           onDeleteInitiated={onDeleteInitiated}
-          onManageSpecialPlace={onManageSpecialPlace}
         />
       </View>
       <View style={{ flex: 1, display: activeTab === 'atlas' ? 'flex' : 'none' }}>

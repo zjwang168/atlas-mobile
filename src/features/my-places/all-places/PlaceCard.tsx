@@ -15,7 +15,6 @@ type PlaceCardProps = {
   onPress?: (place: PlaceDetail) => void;
   onDelete: (id: string) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
-  onManageSpecialPlace?: (role: NonNullable<PlaceDetail['specialRole']>) => void;
 };
 
 export const PLACE_CARD_ROW_HEIGHT = 140;
@@ -45,7 +44,7 @@ function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; o
 /** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
     frames) don't force every visible row to re-render — only rows whose
     own props actually changed do. */
-export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPress, onDelete, onDeleteInitiated, onManageSpecialPlace }: PlaceCardProps) {
+export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPress, onDelete, onDeleteInitiated }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
   const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const [locallySelected, setLocallySelected] = useState(false);
@@ -57,10 +56,6 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
     if (selectedPlaceId !== item.id) setLocallySelected(false);
   }, [item.id, selectedPlaceId]);
   const handleDelete = () => {
-    if (specialRole) {
-      onManageSpecialPlace?.(specialRole);
-      return;
-    }
     onDeleteInitiated?.(item);
     onDelete(item.id);
   };
@@ -123,7 +118,15 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
               </Text>
             </TouchableOpacity>
           </View>
-          {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
+          {specialRole ? (
+            <View style={styles.specialPlaceThumbnail}>
+              <Ionicons
+                name={specialRole === 'home' ? 'home' : specialRole === 'office' ? 'business' : 'school'}
+                size={30}
+                color="#FFFFFF"
+              />
+            </View>
+          ) : item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
             <View style={styles.detailImageButton}>
               <Image
                 source={{ uri: item.thumbnailUrl }}
@@ -246,6 +249,15 @@ const styles = StyleSheet.create({
   detailImage: {
     width: '100%',
     height: '100%',
+  },
+  specialPlaceThumbnail: {
+    width: 86,
+    height: 86,
+    borderRadius: 16,
+    backgroundColor: '#1F2937',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   cardShell: {
     position: 'relative',
