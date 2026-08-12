@@ -1,5 +1,5 @@
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
-import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
+import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
 import { transcribeAudio } from '@/services/api/apiService';
@@ -85,7 +85,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       }}
       style={[styles.button, recording && styles.recording, style]}
     >
-      {processing ? <ActivityIndicator size="small" color="#007AFF" /> : label ? <Text style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Tap to finish' : label}</Text> : <MicrophoneIcon size={22} weight="fill" color={recording ? '#FFFFFF' : '#202024'} />}
+      {processing ? <ActivityIndicator size="small" color="#007AFF" /> : label ? <Text style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Tap to finish' : label}</Text> : <WaveformIcon size={22} weight="bold" color={recording ? '#FFFFFF' : '#202024'} />}
     </Pressable>
   );
 }

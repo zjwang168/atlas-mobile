@@ -241,6 +241,10 @@ class ChatRequest(BaseModel):
     # The app supplies the foreground GPS coordinate as [longitude, latitude]
     # only for this request. It is never inferred by the model.
     user_location: Optional[tuple[float, float]] = None
+    special_places: list[dict] = []
+    # Request-scoped image attachment for visual place discovery. The payload is
+    # passed to the model for this turn only and is never stored in a session.
+    image_base64: Optional[str] = None
 
 
 class ChatActionConfirmationRequest(BaseModel):
@@ -808,6 +812,7 @@ async def chat(req: ChatRequest) -> dict:
             req_session_id = session.session_id
             if req.user_location:
                 session.user_location = req.user_location
+            session.special_places = req.special_places
         else:
             raise ValueError(f"Session {req.session_id} not found")
 
@@ -816,6 +821,7 @@ async def chat(req: ChatRequest) -> dict:
                 "task_type": "chat",
                 "session_id": req_session_id,
                 "text": req.message,
+                "image_base64": req.image_base64,
             },
             config={
                 "configurable": {"thread_id": req_session_id},
@@ -851,10 +857,11 @@ async def stream_chat(req: ChatRequest) -> StreamingResponse:
             raise ValueError(f"Session {req.session_id} not found")
         if req.user_location:
             session.user_location = req.user_location
+        session.special_places = req.special_places
 
         async def event_stream():
             try:
-                async for event in run_stream_chat(session.session_id, req.message):
+                async for event in run_stream_chat(session.session_id, req.message, req.image_base64):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except ValueError as error:
                 yield json.dumps({"type": "error", "message": str(error)}) + "\n"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import math
 import os
@@ -25,10 +26,20 @@ CHAT_PROVIDER = "openai_mango"
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 NEARBY_DEFAULT_RADIUS_KM = 25
 NEARBY_MAX_RADIUS_KM = 100
+CONSTRAINED_PLACE_MAX_CANDIDATES = 5
 ATLAS_TRANSPORT_MODES = {
     "walk", "bike", "drive", "taxi", "bus", "coach", "subway", "train", "ferry", "flight",
 }
 _ACTION_MARKER_RE = re.compile(r"\[\[(?:PLACE_ACTION_CARD|CONFIRM_ADD_PLACES):[\s\S]*?\]\]")
+_PRECISE_CONSTRAINT_RE = re.compile(
+    r"\b(?:rating|rated|review|reviews|price|cheap|expensive|menu|vegan|vegetarian|"
+    r"gluten[- ]free|breakfast|brunch|open now|takeaway|takeout|on my way|on the way|"
+    r"along (?:my |the )?route|commute)\b",
+    re.IGNORECASE,
+)
+_PRECISE_CONSTRAINT_CJK_TERMS = (
+    "评分", "评价", "价格", "菜单", "素食", "纯素", "早餐", "早午餐", "外带", "打包", "顺路", "通勤",
+)
 
 
 def _content_to_text(content: Any) -> str:
@@ -89,6 +100,19 @@ def _pending_atlas_context(session: Any) -> str:
     return "\n".join(lines)
 
 
+def _special_places_context(session: Any) -> str:
+    places = getattr(session, "special_places", []) or []
+    valid = [place for place in places if isinstance(place, dict) and place.get("role") in {"home", "office", "school"}]
+    if not valid:
+        return "No saved Home, Office, or School locations."
+    return "\n".join(
+        f"{str(place['role']).title()}: {place.get('name') or place.get('full_address') or 'Saved place'} "
+        f"({float(place['longitude']):.6f}, {float(place['latitude']):.6f})"
+        for place in valid
+        if place.get("longitude") is not None and place.get("latitude") is not None
+    ) or "No saved Home, Office, or School locations."
+
+
 def _system_prompt(session: Any) -> str:
     title = str(getattr(session, "title", "") or "").strip()
     title_line = f"Chat title: {title}\n" if title else ""
@@ -111,6 +135,11 @@ Tool rules:
   Use a concrete POI query, not a loose description: for example use "dog park"
   for a park where dogs can be walked. A POI match alone does not prove rules
   such as leash policy, opening hours, or whether dogs are currently allowed.
+- For a place request with rating, price, menu, dietary, availability, or
+  route/commute constraints, call find_verified_places instead. It uses live
+  web research to find named venues and Mapbox only to resolve those venues to
+  map points. Never pass the whole descriptive phrase to Mapbox or claim that
+  an unverified constraint is true.
 - For pasted notes or an itinerary that the user wants added, call
   extract_pasted_places, then propose_add_places. This is only a proposal.
 - For creating an Atlas, find or extract real places first, then call
@@ -128,6 +157,26 @@ Tool rules:
   schedule and state assumptions in the answer. Do not invent verified opening
   hours; label unverified durations as estimates.
 - Never claim that a proposal was saved or created until the client confirms it.
+- Home, Office, and School are sensitive system places. Treat their values in
+  the Saved special places section as trusted. For a request involving one of
+  those roles, use it directly when available. If it is missing, ask the user
+  for an address, place name, or map point; never guess it. When they provide
+  a candidate, call resolve_special_place, then propose_special_place_change.
+  That proposal is required for every create, replacement, and deletion. Never
+  persist, replace, or delete a special place directly.
+- For a dining or activity request "between" two saved special places with no
+  live constraint, call find_places_between_special_places. For rating, price,
+  menu, dietary, availability, or commute constraints, call
+  find_verified_places first. It must state that route fit remains unverified
+  until the origin and destination are explicitly supplied to the tool.
+- When the current user turn includes an image, inspect the visible scene and
+  text (including OCR clues). Convert those observations into a concrete POI
+  or venue query, then call find_nearby_places to produce the map result.
+  If the image names a venue or landmark, resolve it with a map search tool
+  before presenting it. The image may suggest a category or query, but never
+  proves unobservable facts such as ratings, opening hours, availability, or
+  an exact location. Never invent a venue, address, or coordinate; map cards
+  must come from a tool result.
 
 {title_line}{location_line}
 
@@ -135,7 +184,10 @@ Explicit places attached to this chat:
 {_location_context(session)}
 
 Pending Atlas draft:
-{_pending_atlas_context(session)}"""
+{_pending_atlas_context(session)}
+
+Saved special places:
+{_special_places_context(session)}"""
 
 
 def _history_messages(session: Any) -> list[BaseMessage]:
@@ -443,15 +495,172 @@ def _nearby_title(categories: list[str]) -> str:
     return f"Nearby {', '.join(categories[:-1])}, and {categories[-1]}"
 
 
-async def _road_route(coordinates: list[tuple[float, float]]) -> dict[str, Any] | None:
-    """Return a real walking route when Mapbox routing is configured."""
+def _parse_json_object(value: str) -> dict[str, Any]:
+    """Parse a model JSON object even when it wrapped the object in prose."""
+    text = (value or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            parsed = json.loads(text[start:end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+
+def _requires_live_verification(requirements: str) -> bool:
+    """Keep simple nearby POI requests on Mapbox; verify constrained ones live."""
+    text = requirements or ""
+    return bool(_PRECISE_CONSTRAINT_RE.search(text) or any(term in text for term in _PRECISE_CONSTRAINT_CJK_TERMS))
+
+
+async def _research_precise_places(
+    requirements: str,
+    area: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Use OpenAI web search to turn ambiguous constraints into named venues."""
+    model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+    model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.0)
+    area_line = f"Search area: {area}." if area else "Search area: use the user's stated area only; do not invent one."
+    prompt = f"""You are a local-place researcher. Use live web search before answering.
+
+Find real venues that satisfy the user's exact constraints. Do not rely on model memory.
+{area_line}
+User request: {requirements}
+
+Return ONLY JSON with this schema:
+{{"candidates":[{{"name":"venue name","address":"specific address or neighborhood","why":"short evidence-based reason","rating":"rating only if a source states it","price":"price only if a source states it","menu_evidence":"specific menu/item evidence if requested","source_urls":["https://..."]}}],"unverified_constraints":["constraint that could not be verified"]}}
+
+Rules:
+- Include at most {limit} candidates.
+- Never invent ratings, prices, menu items, hours, dietary suitability, or route detours.
+- A candidate without a specific venue name and at least one source URL must be omitted.
+- If the request says "on my route" but no origin and destination are supplied, list it in unverified_constraints.
+"""
+    response = await model.ainvoke([SystemMessage(content=prompt)])
+    payload = _parse_json_object(_content_to_text(getattr(response, "content", response)))
+    raw_candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    candidates: list[dict[str, Any]] = []
+    for raw in raw_candidates[:limit]:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        urls = [str(url).strip() for url in raw.get("source_urls") or [] if str(url).strip().startswith(("http://", "https://"))]
+        if not name or not urls:
+            continue
+        candidates.append({
+            "name": name[:200],
+            "address": str(raw.get("address") or "").strip()[:300],
+            "why": str(raw.get("why") or "").strip()[:500],
+            "rating": str(raw.get("rating") or "").strip()[:80],
+            "price": str(raw.get("price") or "").strip()[:80],
+            "menu_evidence": str(raw.get("menu_evidence") or "").strip()[:250],
+            "source_urls": urls[:3],
+        })
+    return candidates
+
+
+async def _mapbox_resolve_researched_place(
+    candidate: dict[str, Any],
+    origin: tuple[float, float] | None,
+) -> dict[str, Any] | None:
+    """Map a web-verified venue name to one concrete Mapbox POI."""
+    from backend.services import place_search_service
+
+    session_token = str(uuid.uuid4())
+    query = " ".join(part for part in [candidate.get("name"), candidate.get("address")] if part).strip()
+    try:
+        suggestions = await place_search_service.suggest(
+            query=query,
+            session_token=session_token,
+            proximity=f"{origin[0]},{origin[1]}" if origin else None,
+            limit=5,
+        )
+        retrieved = await asyncio.gather(*[
+            place_search_service.retrieve(item["external_id"], session_token)
+            for item in suggestions[:5]
+        ], return_exceptions=True)
+    except Exception:
+        return None
+
+    normalized_name = re.sub(r"[^a-z0-9]+", " ", str(candidate["name"]).casefold()).strip()
+    name_terms = set(normalized_name.split())
+    matches = [place for group in retrieved if isinstance(group, list) for place in group]
+    matches = [place for place in matches if _normalize_place(place)]
+    if not matches:
+        return None
+    matches.sort(key=lambda place: len(name_terms & set(re.sub(r"[^a-z0-9]+", " ", str(place.get("name") or "").casefold()).split())), reverse=True)
+    place = _normalize_place(matches[0])
+    if not place:
+        return None
+    evidence = "; ".join(part for part in [candidate.get("why"), candidate.get("rating"), candidate.get("price"), candidate.get("menu_evidence")] if part)
+    place["description"] = evidence[:700] or place.get("description")
+    place["verification_sources"] = candidate["source_urls"]
+    place["requested_category"] = "live-verified"
+    return place
+
+
+def _commute_anchors(session: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    roles = {
+        str(item.get("role") or "").lower(): item
+        for item in (getattr(session, "special_places", []) or [])
+        if isinstance(item, dict)
+    }
+    home, office = roles.get("home"), roles.get("office")
+    if not home or not office:
+        return None
+    try:
+        float(home["longitude"]), float(home["latitude"]), float(office["longitude"]), float(office["latitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return home, office
+
+
+async def _rank_by_commute_detour(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    places: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Rank researched venues by real driving detour between saved anchors."""
+    start = (float(origin["longitude"]), float(origin["latitude"]))
+    finish = (float(destination["longitude"]), float(destination["latitude"]))
+    direct = await _road_route([start, finish], profile="driving")
+    if not direct or direct.get("duration_minutes") is None:
+        return places, None
+
+    async def with_detour(place: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        route = await _road_route([start, (place["longitude"], place["latitude"]), finish], profile="driving")
+        if route and route.get("duration_minutes") is not None:
+            detour = max(0, int(round(route["duration_minutes"] - direct["duration_minutes"])))
+            place["travel_duration_minutes"] = detour
+            place["description"] = f"{place.get('description') or ''} Driving detour from Home to Office: about {detour} min.".strip()
+        return place, route
+
+    ranked = await asyncio.gather(*(with_detour(place) for place in places))
+    ranked_places = [place for place, _ in ranked]
+    ranked_places.sort(key=lambda place: place.get("travel_duration_minutes", 10**9))
+    best_route = next((route for _, route in ranked if route), None)
+    return ranked_places, best_route
+
+
+async def _road_route(coordinates: list[tuple[float, float]], profile: str = "walking") -> dict[str, Any] | None:
+    """Return a real Mapbox route for a supported travel profile."""
     if len(coordinates) < 2 or not os.getenv("MAPBOX_ACCESS_TOKEN", "").strip():
         return None
+    if profile not in {"walking", "driving", "cycling"}:
+        profile = "walking"
     coordinate_string = ";".join(f"{lng},{lat}" for lng, lat in coordinates[:25])
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             response = await client.get(
-                f"https://api.mapbox.com/directions/v5/mapbox/walking/{coordinate_string}",
+                f"https://api.mapbox.com/directions/v5/mapbox/{profile}/{coordinate_string}",
                 params={"access_token": os.environ["MAPBOX_ACCESS_TOKEN"], "geometries": "geojson", "overview": "full"},
             )
             response.raise_for_status()
@@ -468,6 +677,112 @@ async def _road_route(coordinates: list[tuple[float, float]]) -> dict[str, Any] 
 
 
 def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
+    @tool
+    async def resolve_special_place(query: str, role: str) -> dict[str, Any]:
+        """Resolve a user-supplied Home, Office, or School address into one map place. Never writes data."""
+        clean_role = str(role).strip().lower()
+        if clean_role not in {"home", "office", "school"}:
+            return {"error": "role must be home, office, or school."}
+        clean_query = " ".join(str(query).split())[:500]
+        if len(clean_query) < 3:
+            return {"error": "A more specific address or place name is needed."}
+        from backend.services import place_search_service
+        token = str(uuid.uuid4())
+        try:
+            suggestions = await place_search_service.suggest(clean_query, token, limit=1)
+            if not suggestions:
+                return {"error": "No matching place was found."}
+            places = _dedupe_places(await place_search_service.retrieve(suggestions[0]["external_id"], token), limit=1)
+        except Exception as error:
+            return {"error": f"Could not resolve this place: {type(error).__name__}"}
+        if not places:
+            return {"error": "The matching place did not include a mappable coordinate."}
+        return {"role": clean_role, "place": places[0]}
+
+    @tool
+    async def propose_special_place_change(
+        role: str,
+        operation: str,
+        place: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Prepare a confirmation-only create, update, or delete of Home, Office, or School."""
+        clean_role = str(role).strip().lower()
+        clean_operation = str(operation).strip().lower()
+        if clean_role not in {"home", "office", "school"} or clean_operation not in {"create", "update", "delete"}:
+            return {"error": "role must be home, office, or school and operation must be create, update, or delete."}
+        current = next((item for item in (getattr(session, "special_places", []) or []) if item.get("role") == clean_role), None)
+        if clean_operation == "delete":
+            if not current:
+                return {"error": f"No saved {clean_role} exists to delete."}
+            normalized = [{
+                "name": current.get("name") or clean_role.title(),
+                "latitude": current.get("latitude"), "longitude": current.get("longitude"),
+                "full_address": current.get("full_address") or "",
+            }]
+        else:
+            normalized = _dedupe_places([place or []], limit=1)
+            if not normalized:
+                return {"error": "A resolved, geocoded place is required."}
+            clean_operation = "update" if current else "create"
+        role_title = clean_role.title()
+        action = {
+            "action_id": str(uuid.uuid4()),
+            "kind": "delete_special_place" if clean_operation == "delete" else "save_special_place",
+            "title": f"{('Delete' if clean_operation == 'delete' else 'Save')} {role_title}",
+            "places": normalized,
+            "special_role": clean_role,
+            "operation": clean_operation,
+        }
+        session.pending_chat_action = action
+        state["pending_action"] = action
+        state["presentation"] = {
+            "kind": "places_map", "title": action["title"], "places": normalized,
+            "special_places": [item for item in [current] if item] if clean_operation == "delete" else [{
+                "role": clean_role, "name": normalized[0]["name"], "latitude": normalized[0]["latitude"],
+                "longitude": normalized[0]["longitude"], "full_address": normalized[0].get("full_address"),
+            }],
+            "route": None,
+        }
+        return {"proposal": action}
+
+    @tool
+    async def find_places_between_special_places(
+        origin_role: str,
+        destination_role: str,
+        category: str = "restaurant",
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Find mappable places near the midpoint between two saved special places, without writing data."""
+        roles = {str(item.get("role")).lower(): item for item in (getattr(session, "special_places", []) or []) if isinstance(item, dict)}
+        origin = roles.get(str(origin_role).lower())
+        destination = roles.get(str(destination_role).lower())
+        if not origin or not destination:
+            return {"error": "Both requested saved special places are required."}
+        try:
+            origin_lng, origin_lat = float(origin["longitude"]), float(origin["latitude"])
+            destination_lng, destination_lat = float(destination["longitude"]), float(destination["latitude"])
+        except (KeyError, TypeError, ValueError):
+            return {"error": "A saved special place is missing valid coordinates."}
+        midpoint_lng, midpoint_lat = (origin_lng + destination_lng) / 2, (origin_lat + destination_lat) / 2
+        from backend.services import place_search_service
+        token = str(uuid.uuid4())
+        try:
+            suggestions = await place_search_service.suggest(" ".join(category.split())[:120] or "restaurant", token, proximity=f"{midpoint_lng},{midpoint_lat}", limit=max(1, min(limit * 2, 10)))
+            retrieved = await asyncio.gather(*(place_search_service.retrieve(item["external_id"], token) for item in suggestions))
+        except Exception as error:
+            return {"error": f"Could not search between these places: {type(error).__name__}"}
+        places = _dedupe_places([place for result in retrieved for place in result], limit=max(1, min(limit, 8)))
+        route = await _road_route([(origin_lng, origin_lat), (midpoint_lng, midpoint_lat), (destination_lng, destination_lat)])
+        anchors = [
+            {"role": str(origin_role).lower(), "name": origin.get("name") or str(origin_role).title(), "latitude": origin_lat, "longitude": origin_lng, "full_address": origin.get("full_address")},
+            {"role": str(destination_role).lower(), "name": destination.get("name") or str(destination_role).title(), "latitude": destination_lat, "longitude": destination_lng, "full_address": destination.get("full_address")},
+        ]
+        state["presentation"] = {
+            "kind": "places_map", "title": f"{category.title()} between {str(origin_role).title()} and {str(destination_role).title()}",
+            "places": places, "special_places": anchors, "route": route,
+        }
+        return {"places": places, "special_places": anchors, "route": route}
+
     @tool
     async def find_nearby_places(
         categories: list[str] | None = None,
@@ -574,6 +889,67 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
 
     @tool
+    async def find_verified_places(
+        requirements: str,
+        area: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Research live ratings, prices, menus, dietary needs, or route constraints before mapping named venues."""
+        if not _requires_live_verification(requirements):
+            return {"error": "This request has no precise constraint requiring live verification."}
+        candidate_limit = max(1, min(int(limit or 3), CONSTRAINED_PLACE_MAX_CANDIDATES))
+        origin = getattr(session, "user_location", None)
+        origin_tuple = (float(origin[0]), float(origin[1])) if origin and len(origin) == 2 else None
+        researched = await _research_precise_places(requirements, area, candidate_limit)
+        resolved = await asyncio.gather(*[
+            _mapbox_resolve_researched_place(candidate, origin_tuple)
+            for candidate in researched
+        ])
+        places = [place for place in resolved if place]
+        if origin_tuple:
+            places.sort(key=lambda place: _nearby_distance_km(origin_tuple, place))
+        unverified: list[str] = []
+        commute_requested = bool(re.search(r"\b(?:on my way|on the way|along (?:my |the )?route|commute)\b|顺路|通勤", requirements, re.IGNORECASE))
+        commute_route = None
+        anchors: list[dict[str, Any]] = []
+        if commute_requested:
+            commute = _commute_anchors(session)
+            if not commute:
+                unverified.append("Route fit is not verified until Home and Office are saved or an origin and destination are provided.")
+            else:
+                home, office = commute
+                places, commute_route = await _rank_by_commute_detour(home, office, places)
+                anchors = [
+                    {"role": "home", "name": home.get("name") or "Home", "longitude": home["longitude"], "latitude": home["latitude"], "full_address": home.get("full_address")},
+                    {"role": "office", "name": office.get("name") or "Office", "longitude": office["longitude"], "latitude": office["latitude"], "full_address": office.get("full_address")},
+                ]
+        if not places:
+            return {
+                "places": [],
+                "researched_candidates": researched,
+                "unverified_constraints": unverified,
+                "error": "Live research found no venue that Mapbox could resolve to a reliable map point.",
+            }
+        route = commute_route or (await _road_route([(origin_tuple[0], origin_tuple[1]), (places[0]["longitude"], places[0]["latitude"])]) if origin_tuple else None)
+        session.locations = places
+        session.route = route
+        state["presentation"] = {
+            "kind": "nearby_map",
+            "title": "Live-verified nearby places",
+            "user_location": {"longitude": origin_tuple[0], "latitude": origin_tuple[1]} if origin_tuple else None,
+            "places": places,
+            "special_places": anchors,
+            "route": route,
+        }
+        return {
+            "places": places,
+            "researched_candidates": researched,
+            "route": route,
+            "special_places": anchors,
+            "unverified_constraints": unverified,
+        }
+
+    @tool
     async def extract_pasted_places(text: str) -> dict[str, Any]:
         """Extract and geocode real places from text pasted by the user."""
         from backend.services.smart_text_service import analyze_smart_text
@@ -636,10 +1012,39 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
         return {"proposal": action}
 
-    return [find_nearby_places, extract_pasted_places, propose_add_places, propose_create_atlas]
+    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, extract_pasted_places, propose_add_places, propose_create_atlas]
 
 
-async def _run_agent(session: Any, user_message: str) -> dict[str, Any]:
+def _image_data_url(image_base64: str | None) -> str | None:
+    """Normalize a mobile image payload for the OpenAI-compatible vision input."""
+    value = (image_base64 or "").strip()
+    if not value:
+        return None
+    if value.startswith("data:image/") and ";base64," in value:
+        return value
+    # Expo ImagePicker returns bare base64. Preserve common library image types
+    # rather than assuming every selected asset is JPEG.
+    header = value[:24]
+    media_type = "image/jpeg"
+    if header.startswith("iVBOR"):
+        media_type = "image/png"
+    elif header.startswith("R0lGOD"):
+        media_type = "image/gif"
+    elif header.startswith("UklGR"):
+        media_type = "image/webp"
+    elif not header.startswith("/9j/"):
+        # A data URL is still valid for less common picker output. Image vision
+        # will reject unsupported formats without exposing it to chat history.
+        try:
+            decoded = base64.b64decode(value[:128], validate=False)
+            if decoded.startswith(b"\x89PNG"):
+                media_type = "image/png"
+        except ValueError:
+            pass
+    return f"data:{media_type};base64,{value}"
+
+
+async def _run_agent(session: Any, user_message: str, image_base64: str | None = None) -> dict[str, Any]:
     message = (user_message or "").strip()
     if not message:
         raise ValueError("Message cannot be empty")
@@ -651,6 +1056,16 @@ async def _run_agent(session: Any, user_message: str) -> dict[str, Any]:
     model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session)), *_history_messages(session)]
+    image_url = _image_data_url(image_base64)
+    if image_url:
+        # The text-only copy above is deliberately kept in session history.
+        # Replace only this first-turn prompt message with its multimodal form.
+        if prompt and isinstance(prompt[-1], HumanMessage):
+            prompt.pop()
+        prompt.append(HumanMessage(content=[
+            {"type": "text", "text": message},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ]))
     state: dict[str, Any] = {"presentation": None, "pending_action": None, "nearby_groups": {}}
     tools = _agent_tools(session, state)
     tools_by_name = {item.name: item for item in tools}
@@ -715,14 +1130,14 @@ async def _run_agent(session: Any, user_message: str) -> dict[str, Any]:
     }
 
 
-async def run_chat(session_id: str, user_message: str) -> dict:
+async def run_chat(session_id: str, user_message: str, image_base64: str | None = None) -> dict:
     session = conversation_manager.get_session(session_id)
     if not session:
         raise ValueError(f"Session {session_id} not found")
-    return await _run_agent(session, user_message)
+    return await _run_agent(session, user_message, image_base64)
 
 
-async def stream_chat(session_id: str, user_message: str) -> AsyncIterator[dict]:
+async def stream_chat(session_id: str, user_message: str, image_base64: str | None = None) -> AsyncIterator[dict]:
     session = conversation_manager.get_session(session_id)
     if not session:
         raise ValueError(f"Session {session_id} not found")
@@ -731,6 +1146,8 @@ async def stream_chat(session_id: str, user_message: str) -> AsyncIterator[dict]
     # Keep the old streaming contract for lightweight test doubles and any
     # provider that only implements native text streaming.
     if not hasattr(model, "ainvoke"):
+        if _image_data_url(image_base64):
+            raise ValueError("This chat model does not support image attachments.")
         if not session.messages and session.title in ("", "Atlas AI chat"):
             session.title = user_message.strip()[:100]
         session.add_message("user", user_message)
@@ -754,7 +1171,7 @@ async def stream_chat(session_id: str, user_message: str) -> AsyncIterator[dict]
             "presentation": None, "place_cards": [], "metrics": {"latency_ms": 0, "tool_call_count": 0},
         }
         return
-    result = await _run_agent(session, user_message)
+    result = await _run_agent(session, user_message, image_base64)
     answer = result["response"]
     for index in range(0, len(answer), 36):
         yield {"type": "token", "delta": answer[index:index + 36]}

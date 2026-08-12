@@ -46,8 +46,9 @@ const toMapMarkersFromSaved = (places: SavedPlace[]): MapMarker[] =>
     id: p.id,
     latitude: p.latitude,
     longitude: p.longitude,
-    title: p.name,
+    title: p.special_role ? p.special_role[0].toUpperCase() + p.special_role.slice(1) : p.name,
     description: p.subtitle,
+    tone: p.special_role ?? 'saved',
   }));
 
 // ---- Root export — HomeProvider is now in App.tsx ----
@@ -102,6 +103,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
 
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
+  const [specialPlaceChatRole, setSpecialPlaceChatRole] = useState<'home' | 'office' | 'school' | null>(null);
   const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
   const [chatMapOpen, setChatMapOpen] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
@@ -313,6 +315,12 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
               snapGroup={HOME_PANEL_SNAP_GROUP}
               visible={panelVisible && homePanelVisible}
               onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
+              onManageSpecialPlace={(role) => {
+                setSpecialPlaceChatRole(role);
+                setStandaloneChatVisible(true);
+                setActiveHistoryItem(null);
+                setActiveSidekick('none');
+              }}
             />
           </View>
           <View style={{ width: pagerWidth, flex: 1, height: '100%' }}>
@@ -344,12 +352,14 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         }
         places={standaloneChatVisible ? [] : (activeHistoryItem?.places ?? parsedPlaces)}
         onClose={() => {
+          setSpecialPlaceChatRole(null);
           setChatMapOpen(false);
           setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
           setActiveSidekick('none');
           animateToTab(TAB_PLACES);
         }}
+        initialPrompt={specialPlaceChatRole ? `Delete my ${specialPlaceChatRole[0].toUpperCase() + specialPlaceChatRole.slice(1)}` : null}
         onOpenHistory={onOpenChatHistory}
         onNewChat={handleNewChat}
         showLanding={standaloneChatVisible}

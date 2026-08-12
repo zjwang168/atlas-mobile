@@ -33,8 +33,11 @@ export type SavedPlace = {
   country?: string | null;
   photo_url?: string | null;
   note?: string | null;
+  special_role?: 'home' | 'office' | 'school' | null;
   created_at: string;
 };
+
+export type SpecialPlaceRole = NonNullable<SavedPlace['special_role']>;
 
 type SavedPlacesListener = (places: SavedPlace[]) => void;
 
@@ -360,7 +363,7 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
     for (let offset = 0; ; offset += pageSize) {
       const { data, error } = await supabase
         .from('places')
-        .select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at')
+        .select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, special_role, created_at')
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
         .range(offset, offset + pageSize - 1);
@@ -407,7 +410,42 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     visitStrategy: '',
     note: undefined,
     savedAt: new Date(row.created_at).toLocaleDateString(),
+    specialRole: row.special_role ?? null,
   };
+}
+
+/** Save or replace one sensitive system place after an explicit chat confirmation. */
+export async function saveSpecialPlace(
+  role: SpecialPlaceRole,
+  place: Omit<SavedPlace, 'id' | 'created_at' | 'special_role' | 'stableKey'>,
+): Promise<SavedPlace> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot save special places before auth is ready');
+  const existing = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces) ?? [])
+    .find((item) => item.special_role === role);
+  const payload = {
+    name: place.name,
+    subtitle: place.subtitle || null,
+    category: place.category,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    region: place.region,
+    city: place.city,
+    country: place.country,
+    photo_url: place.photo_url,
+    special_role: role,
+  };
+  const query = existing && !existing.id.startsWith('local-')
+    ? supabase.from('places').update(payload).eq('id', existing.id)
+    : supabase.from('places').insert(payload);
+  const { data, error } = await withTimeout(
+    query.select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, special_role, created_at'),
+    'Saving special place timed out',
+  );
+  if (error || !data?.[0]) throw new Error(`Failed to save ${role}: ${error?.message ?? 'no row returned'}`);
+  const saved = withStableKey(data[0] as SavedPlace);
+  await updateSavedPlacesCache(userId, (current) => [saved, ...current.filter((item) => item.id !== saved.id && item.special_role !== role)]);
+  return saved;
 }
 
 /**

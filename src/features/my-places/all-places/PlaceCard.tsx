@@ -15,6 +15,7 @@ type PlaceCardProps = {
   onPress?: (place: PlaceDetail) => void;
   onDelete: (id: string) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
+  onManageSpecialPlace?: (role: NonNullable<PlaceDetail['specialRole']>) => void;
 };
 
 export const PLACE_CARD_ROW_HEIGHT = 140;
@@ -44,16 +45,22 @@ function DeleteAction({ progress, onDelete }: { progress: SharedValue<number>; o
 /** Memoized so unrelated re-renders of AllPlaces (e.g. ContentPanel drag
     frames) don't force every visible row to re-render — only rows whose
     own props actually changed do. */
-export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPress, onDelete, onDeleteInitiated }: PlaceCardProps) {
+export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPress, onDelete, onDeleteInitiated, onManageSpecialPlace }: PlaceCardProps) {
   const swipeableRef = useRef<SwipeableMethods>(null);
   const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const [locallySelected, setLocallySelected] = useState(false);
   const { overlay, setOverlay, selectedPlaceId } = useHome();
+  const specialRole = item.specialRole;
+  const displayName = specialRole ? specialRole[0].toUpperCase() + specialRole.slice(1) : item.name;
 
   useEffect(() => {
     if (selectedPlaceId !== item.id) setLocallySelected(false);
   }, [item.id, selectedPlaceId]);
   const handleDelete = () => {
+    if (specialRole) {
+      onManageSpecialPlace?.(specialRole);
+      return;
+    }
     onDeleteInitiated?.(item);
     onDelete(item.id);
   };
@@ -93,7 +100,7 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
           <View style={styles.cardTextAction}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Open details for ${item.name}`}
+              accessibilityLabel={`Open details for ${displayName}`}
               hitSlop={6}
               onPress={handleOpenDetail}
               style={({ pressed }) => [styles.titleAction, pressed && styles.titleActionPressed]}
@@ -102,7 +109,7 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
                 style={[typography.h3, styles.titleLink]}
                 numberOfLines={1}
               >
-                {item.name}
+                {displayName}
               </Text>
               <Ionicons name="chevron-forward" size={15} color="#5F6368" />
             </Pressable>
@@ -139,14 +146,14 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
         <Text style={styles.googleMapsText}>Maps</Text>
         <Ionicons name="open-outline" size={12} color="#34383A" />
       </TouchableOpacity>
-      {item.tags?.length ? (
+      {item.tags?.length || specialRole ? (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.tagsRow}
           contentContainerStyle={styles.tagsRowContent}
         >
-          {item.tags.map((tag) => (
+          {[...(specialRole ? [{ id: specialRole, label: 'Managed in Atlas AI' }] : []), ...(item.tags ?? [])].map((tag) => (
             <Badge
               key={tag.id}
               variant="outline"

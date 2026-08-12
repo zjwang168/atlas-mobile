@@ -125,7 +125,7 @@ function PlaceHeader({
     <View className="flex-row items-center px-4 pb-2 pt-1">
       {/* Center: place name title */}
       <Text className="flex-1 h2 text-foreground" numberOfLines={1}>
-        {place.name}
+        {place.specialRole ? place.specialRole[0].toUpperCase() + place.specialRole.slice(1) : place.name}
       </Text>
 
       {/* Right: close button */}

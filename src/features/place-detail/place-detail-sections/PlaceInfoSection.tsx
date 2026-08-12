@@ -109,7 +109,7 @@ function NoteSection({ place }: { place: PlaceDetail }) {
     <View className="pt-2">
       <View className="flex-row items-center justify-between">
         <Text className="text-lg font-semibold text-foreground">Note</Text>
-        {isEditing ? (
+        {place.specialRole ? null : isEditing ? (
           <View className="flex-row items-center gap-1">
             <Button accessibilityLabel="Cancel note edit" onPress={handleCancel} size="icon" variant="ghost" disabled={saving}>
               <Ionicons name="close" size={20} color={foreground} />
@@ -124,7 +124,9 @@ function NoteSection({ place }: { place: PlaceDetail }) {
           </Button>
         )}
       </View>
-      {isEditing ? (
+      {place.specialRole ? (
+        <Text className="mt-2 text-sm leading-relax text-text-secondary">Manage this location in Atlas AI.</Text>
+      ) : isEditing ? (
         <Input
           className="mt-2 h-auto min-h-24 items-start py-2"
           multiline
@@ -157,7 +159,7 @@ export default function PlaceInfoSection({ place }: PlaceInfoSectionProps) {
       {/* Tags and Note always render their section, regardless of content —
           every other section below is hidden entirely when it has nothing to show. */}
       <View className="pt-2">
-        <SectionHeader label="Tags" action={{ icon: 'add', iconSize: 20 }} />
+        <SectionHeader label="Tags" action={place.specialRole ? undefined : { icon: 'add', iconSize: 20 }} />
         {place.tags.length > 0 && (
           <View className="mt-2">
             <TagList tags={place.tags} />
@@ -176,7 +178,7 @@ export default function PlaceInfoSection({ place }: PlaceInfoSectionProps) {
 
       {hasCollections && (
         <View className="pt-2">
-          <SectionHeader label="Collection" action={{ icon: 'add', iconSize: 20 }} />
+          <SectionHeader label="Collection" action={place.specialRole ? undefined : { icon: 'add', iconSize: 20 }} />
           <View className="mt-2">
             <TagList tags={place.collections!} />
           </View>
@@ -194,7 +196,7 @@ export default function PlaceInfoSection({ place }: PlaceInfoSectionProps) {
 
       {hasLinks && (
         <View className="pt-2">
-          <SectionHeader label="Links" action={{ icon: 'add', iconSize: 20 }} />
+          <SectionHeader label="Links" action={place.specialRole ? undefined : { icon: 'add', iconSize: 20 }} />
           <View className="mt-2 gap-1">
             {place.links!.map((link) => (
               <LinkRow key={`${link.label}-${link.url}`} link={link} />

@@ -37,6 +37,7 @@ CREATE TABLE places (
     recommended BOOLEAN,
     photo_url TEXT,
     note TEXT,
+    special_role VARCHAR(16) CHECK (special_role IN ('home', 'office', 'school')),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

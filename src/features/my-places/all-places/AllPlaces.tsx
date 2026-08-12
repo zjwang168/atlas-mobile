@@ -19,6 +19,7 @@ type AllPlacesProps = {
   /** Reports vertical scroll offset so the panel can gate its drag gesture. */
   onScroll?: (y: number) => void;
   onDeleteInitiated?: (place: PlaceDetail) => void;
+  onManageSpecialPlace?: (role: NonNullable<PlaceDetail['specialRole']>) => void;
 };
 
 function ItemSeparator() {
@@ -92,7 +93,7 @@ function contextForPlace(place: SavedPlace | undefined, sortMode: SortMode): str
   return sortMode === 'recent' ? formatAddedDate(place.created_at) : placeLocationLabel(place);
 }
 
-function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated }: AllPlacesProps) {
+function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated, onManageSpecialPlace }: AllPlacesProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -156,10 +157,11 @@ function AllPlaces({ onPlacePress, bottomInset = 0, onScroll, onDeleteInitiated 
           onPress={onPlacePress}
           onDelete={handleDelete}
           onDeleteInitiated={onDeleteInitiated}
+          onManageSpecialPlace={onManageSpecialPlace}
         />
       );
     },
-    [placesById, onPlacePress, handleDelete, selectedPlaceId, onDeleteInitiated],
+    [placesById, onPlacePress, handleDelete, selectedPlaceId, onDeleteInitiated, onManageSpecialPlace],
   );
 
   const keyExtractor = useCallback((item: SavedPlace) => item.id, []);

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from backend.langgraph.chat_agent import run_chat
 from backend.services.conversation_manager import conversation_manager
@@ -65,6 +65,30 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["presentation"]["kind"], "nearby_map")
         self.assertEqual(len(result["locations"]), 2)
         self.assertIsNone(result["pending_action"])
+
+    async def test_image_turn_reaches_model_once_and_maps_tool_results(self):
+        model = _ToolModel([
+            tool_call("find_nearby_places", {"query": "coffee shop", "limit": 1}),
+            AIMessage(content="I found a coffee shop matching the scene."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "cafe"}])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(return_value=[{
+                "name": "Scene Coffee", "latitude": 47.61, "longitude": -122.33,
+                "full_address": "1 Pine St", "category": "Cafe",
+            }])),
+            patch("backend.langgraph.chat_agent._road_route", new=AsyncMock(return_value=None)),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "Find a place like this.", "aGVsbG8=")
+
+        first_prompt = model.requests[0]
+        image_message = next(message for message in first_prompt if isinstance(message, HumanMessage) and isinstance(message.content, list))
+        self.assertEqual(image_message.content[0]["text"], "Find a place like this.")
+        self.assertEqual(image_message.content[1]["image_url"]["url"], "data:image/jpeg;base64,aGVsbG8=")
+        self.assertEqual(result["presentation"]["kind"], "nearby_map")
+        self.assertEqual(self.session.messages[-2]["content"], "Find a place like this.")
 
     async def test_nearby_search_merges_multiple_categories_into_one_map(self):
         model = _ToolModel([
@@ -234,6 +258,69 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         system_prompt = str(second_model.requests[0][0].content)
         self.assertIn("Current Atlas draft: Buffalo day", system_prompt)
         self.assertIn("(42.937, -78.877)", system_prompt)
+
+    async def test_special_place_update_is_only_a_confirmation_proposal(self):
+        candidate = {
+            "name": "New Home", "latitude": 47.62, "longitude": -122.31,
+            "full_address": "123 New Street", "category": "Address",
+        }
+        self.session.special_places = [{
+            "role": "home", "name": "Old Home", "latitude": 47.60,
+            "longitude": -122.34, "full_address": "1 Old Street",
+        }]
+        model = _ToolModel([
+            tool_call("propose_special_place_change", {"role": "home", "operation": "update", "place": candidate}),
+            AIMessage(content="I prepared the updated Home for your approval."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "I moved. My new home is 123 New Street.")
+        self.assertEqual(result["pending_action"]["kind"], "save_special_place")
+        self.assertEqual(result["pending_action"]["operation"], "update")
+        self.assertEqual(result["pending_action"]["special_role"], "home")
+        self.assertEqual(result["presentation"]["special_places"][0]["role"], "home")
+
+    async def test_between_special_places_search_has_both_anchor_pins(self):
+        self.session.special_places = [
+            {"role": "home", "name": "Home", "latitude": 47.60, "longitude": -122.34, "full_address": "Home address"},
+            {"role": "office", "name": "Office", "latitude": 47.64, "longitude": -122.30, "full_address": "Office address"},
+        ]
+        restaurant = {"name": "Middle Table", "latitude": 47.62, "longitude": -122.32, "full_address": "50 Center Ave", "category": "Restaurant"}
+        model = _ToolModel([
+            tool_call("find_places_between_special_places", {"origin_role": "home", "destination_role": "office", "category": "restaurant", "limit": 1}),
+            AIMessage(content="I found a date-night option between Home and Office."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "middle"}])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(return_value=[restaurant])),
+            patch("backend.langgraph.chat_agent._road_route", new=AsyncMock(return_value=None)),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "Suggest a restaurant between my home and office.")
+        self.assertEqual(result["tool_calls_used"], ["find_places_between_special_places"])
+        self.assertEqual([item["role"] for item in result["presentation"]["special_places"]], ["home", "office"])
+        self.assertEqual(result["presentation"]["places"][0]["name"], "Middle Table")
+
+    async def test_special_place_delete_is_only_a_confirmation_proposal(self):
+        self.session.special_places = [{
+            "role": "school", "name": "School", "latitude": 47.61,
+            "longitude": -122.32, "full_address": "100 Campus Way",
+        }]
+        model = _ToolModel([
+            tool_call("propose_special_place_change", {"role": "school", "operation": "delete"}),
+            AIMessage(content="Please confirm before I delete School."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "Delete my school.")
+        self.assertEqual(result["pending_action"]["kind"], "delete_special_place")
+        self.assertEqual(result["pending_action"]["operation"], "delete")
+        self.assertEqual(self.session.special_places[0]["role"], "school")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import {
 } from 'expo-glass-effect';
 import { BlurView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Icon } from 'phosphor-react-native';
 import { ArrowUpIcon } from 'phosphor-react-native/src/icons/ArrowUp';
@@ -12,12 +13,14 @@ import { ClockIcon } from 'phosphor-react-native/src/icons/Clock';
 import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
 import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
-import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
+import { KeyboardIcon } from 'phosphor-react-native/src/icons/Keyboard';
 import { PencilSimpleLineIcon } from 'phosphor-react-native/src/icons/PencilSimpleLine';
 import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
 import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
 import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
+import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated as NativeAnimated,
@@ -63,7 +66,7 @@ import {
 import { addAtlasOwnedPlaces, queueAtlasPlacePhotoBackfill } from '@/services/atlas/atlasPlacesService';
 import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas } from '@/services/atlas/atlasService';
-import { isSamePlace, queueSavedPlacePhotoBackfill, savePlaces } from '@/services/place/placeService';
+import { deletePlace, isSamePlace, queueSavedPlacePhotoBackfill, savePlaces, saveSpecialPlace } from '@/services/place/placeService';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
 
@@ -105,17 +108,21 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  imageUri?: string | null;
   streaming?: boolean;
   thinkingStartedAt?: number;
   thoughtDurationSeconds?: number;
+  thoughtText?: string;
   presentation?: AtlasChatPresentation | null;
   starterPrompts?: readonly string[];
   pendingAction?: {
     action_id: string;
-    kind: 'save_places' | 'create_atlas';
+    kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
     title: string;
     places: AtlasChatPresentation['places'];
     planning_note?: string | null;
+    special_role?: 'home' | 'office' | 'school' | null;
+    operation?: 'create' | 'update' | 'delete' | null;
   } | null;
 };
 
@@ -126,6 +133,29 @@ function stripActionMarkers(text: string): string {
     .replace(/\[\[PLACE_ACTION_CARD:[\s\S]*?\]\]/g, '')
     .replace(/\[\[CONFIRM_ADD_PLACES:[\s\S]*?\]\]/g, '')
     .trim();
+}
+
+function splitThoughtMarkup(text: string): { response: string; thoughts: string } {
+  let response = '';
+  let thoughts = '';
+  let remaining = text;
+  while (remaining) {
+    const start = remaining.indexOf('<think>');
+    if (start < 0) {
+      response += remaining;
+      break;
+    }
+    response += remaining.slice(0, start);
+    const afterStart = remaining.slice(start + '<think>'.length);
+    const end = afterStart.indexOf('</think>');
+    if (end < 0) {
+      thoughts += afterStart;
+      break;
+    }
+    thoughts += afterStart.slice(0, end);
+    remaining = afterStart.slice(end + '</think>'.length);
+  }
+  return { response: response.trim(), thoughts: thoughts.trim() };
 }
 
 function normalizeAssistantText(text: string): string {
@@ -251,6 +281,10 @@ function StreamingAssistantText({ text }: { text: string }) {
   );
 }
 
+function StreamingThoughtText({ text }: { text: string }) {
+  return <Text style={styles.streamingThoughtText}>{text}</Text>;
+}
+
 
 type AIChatBoxProps = {
   places: ParsedPlace[];
@@ -270,6 +304,7 @@ type AIChatBoxProps = {
   onPresentationMapOpen?: () => void;
   onPresentationMapReturn?: () => void;
   onPresentationMapClose?: () => void;
+  initialPrompt?: string | null;
 };
 
 type ChatMapPlace = AtlasChatPresentation['places'][number] & { markerId: string };
@@ -359,6 +394,7 @@ export default function AIChatBox({
   onPresentationMapOpen,
   onPresentationMapReturn,
   onPresentationMapClose,
+  initialPrompt = null,
 }: AIChatBoxProps) {
   const { show: showDialog } = useAppDialog();
   const {
@@ -381,10 +417,17 @@ export default function AIChatBox({
   const [inputContentHeight, setInputContentHeight] = useState(21);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
+  const [attachedImageUri, setAttachedImageUri] = useState<string | null>(null);
+  const [attachedImageBase64, setAttachedImageBase64] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialPrompt && !inputText && !messages.length) setInputText(initialPrompt);
+  }, [initialPrompt, inputText, messages.length]);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
   >({});
+  const [expandedThoughtIds, setExpandedThoughtIds] = useState<Record<string, boolean>>({});
   const [chatMapPresentation, setChatMapPresentation] = useState<AtlasChatPresentation | null>(null);
   const [chatMapSelectedId, setChatMapSelectedId] = useState<string | null>(null);
   const [chatMapSelectedRoute, setChatMapSelectedRoute] = useState<RouteFeature | null>(null);
@@ -401,6 +444,8 @@ export default function AIChatBox({
   const activeConversationIdRef = useRef<string | null>(null);
   const lastWelcomeKeyRef = useRef<string>('');
   const streamQueueRef = useRef<string[]>([]);
+  const streamMarkupBufferRef = useRef('');
+  const streamInsideThinkRef = useRef(false);
   const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamCompletionRef = useRef<(() => void) | null>(null);
@@ -493,13 +538,47 @@ export default function AIChatBox({
     setPending(false);
   };
 
+  const appendParsedStreamText = (messageId: string, text: string, isThought: boolean) => {
+    if (!text) return;
+    setMessages((current) => current.map((message) => (
+      message.id === messageId
+        ? isThought
+          ? { ...message, thoughtText: `${message.thoughtText ?? ''}${text}` }
+          : { ...message, text: `${message.text}${text}` }
+        : message
+    )));
+  };
+
+  const parseStreamMarkup = (messageId: string, value: string, final = false) => {
+    let source = `${streamMarkupBufferRef.current}${value}`;
+    streamMarkupBufferRef.current = '';
+    while (source) {
+      const marker = streamInsideThinkRef.current ? '</think>' : '<think>';
+      const markerIndex = source.indexOf(marker);
+      if (markerIndex >= 0) {
+        appendParsedStreamText(messageId, source.slice(0, markerIndex), streamInsideThinkRef.current);
+        streamInsideThinkRef.current = !streamInsideThinkRef.current;
+        source = source.slice(markerIndex + marker.length);
+        continue;
+      }
+      if (final) {
+        appendParsedStreamText(messageId, source, streamInsideThinkRef.current);
+        break;
+      }
+      // Keep a possible partial tag until the next streamed delta arrives.
+      const holdLength = marker.length - 1;
+      const flushLength = Math.max(0, source.length - holdLength);
+      appendParsedStreamText(messageId, source.slice(0, flushLength), streamInsideThinkRef.current);
+      streamMarkupBufferRef.current = source.slice(flushLength);
+      break;
+    }
+  };
+
   const flushStreamQueue = () => {
     const messageId = streamingMessageIdRef.current;
     const nextTokens = streamQueueRef.current.splice(0, reducedMotion ? streamQueueRef.current.length : 8).join('');
     if (messageId && nextTokens) {
-      setMessages((current) => current.map((message) => (
-        message.id === messageId ? { ...message, text: `${message.text}${nextTokens}` } : message
-      )));
+      parseStreamMarkup(messageId, nextTokens);
       scrollStreamingResponseIntoView(false);
       return;
     }
@@ -508,6 +587,7 @@ export default function AIChatBox({
       clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
     }
+    if (messageId) parseStreamMarkup(messageId, '', true);
     const complete = streamCompletionRef.current;
     if (complete) complete();
   };
@@ -642,10 +722,14 @@ export default function AIChatBox({
               presentation && parseStoredToolResults(message.tool_results)
                 .some((result) => result.name === 'atlas_welcome'),
             );
+            const content = message.role === 'assistant'
+              ? splitThoughtMarkup(message.content)
+              : { response: message.content, thoughts: '' };
             return {
               id: `${message.role}_${index}_${Date.now()}`,
               role: message.role === 'user' ? 'user' : 'assistant',
-              text: message.content,
+              text: content.response,
+              thoughtText: content.thoughts || undefined,
               presentation,
               starterPrompts: isImportWelcome ? IMPORT_STARTER_PROMPTS : isAtlasWelcome ? ATLAS_STARTER_PROMPTS : undefined,
             };
@@ -728,10 +812,15 @@ export default function AIChatBox({
 
   const handleSend = async (submittedText = inputText.trim(), editingId?: string) => {
     const text = submittedText.trim();
-    if (!text || pending || sessionInitializing) return;
+    const imageUri = editingId ? null : attachedImageUri;
+    const imageBase64 = editingId ? null : attachedImageBase64;
+    const message = text || (imageBase64 ? 'Find relevant places based on this image.' : '');
+    if (!message || pending || sessionInitializing) return;
 
     const assistantMessageId = `ai_${Date.now()}`;
     streamQueueRef.current = [];
+    streamMarkupBufferRef.current = '';
+    streamInsideThinkRef.current = false;
     streamedTextRef.current = false;
     streamCancelledRef.current = false;
     streamingMessageIdRef.current = assistantMessageId;
@@ -743,9 +832,9 @@ export default function AIChatBox({
     setMessages((prev) => {
       const base = editingId
         ? prev.slice(0, prev.findIndex((item) => item.id === editingId) + 1).map((item) => (
-            item.id === editingId ? { ...item, text } : item
+            item.id === editingId ? { ...item, text: message } : item
           ))
-        : [...prev, { id: `user_${Date.now()}`, role: 'user' as const, text }];
+        : [...prev, { id: `user_${Date.now()}`, role: 'user' as const, text: message, imageUri }];
       return [...base, {
         id: assistantMessageId,
         role: 'assistant',
@@ -755,6 +844,8 @@ export default function AIChatBox({
       }];
     });
     setInputText('');
+    setAttachedImageUri(null);
+    setAttachedImageBase64(null);
     setEditingMessageId(null);
     setPending(true);
 
@@ -762,10 +853,18 @@ export default function AIChatBox({
       const currentSessionId = await ensureSession();
       const result = await chatWithAtlasStream(
         currentSessionId,
-        text,
+        message,
         { onToken: enqueueStreamDelta },
         activeConversationIdRef.current,
         userLocation,
+        savedPlaces.flatMap((place) => place.special_role ? [{
+          role: place.special_role,
+          name: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          full_address: place.subtitle,
+        }] : []),
+        imageBase64,
         controller.signal,
       );
       setMessages((current) => current.map((message) => (
@@ -833,6 +932,23 @@ export default function AIChatBox({
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  const pickChatImage = async () => {
+    if (pending || sessionInitializing || attachedImageUri) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: false,
+      selectionLimit: 1,
+      quality: 0.65,
+      base64: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (asset?.uri && asset.base64) {
+      setAttachedImageUri(asset.uri);
+      setAttachedImageBase64(asset.base64);
+    }
+  };
+
   const chatMapOrigin = useMemo<[number, number] | null>(() => {
     if (chatMapPresentation?.user_location) {
       return [chatMapPresentation.user_location.longitude, chatMapPresentation.user_location.latitude];
@@ -853,6 +969,15 @@ export default function AIChatBox({
       title: 'You',
       tone: 'focused' as const,
     }] : []),
+    ...(chatMapPresentation?.special_places ?? []).map((place) => ({
+      id: `chat-special-${place.role}`,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      title: place.role[0].toUpperCase() + place.role.slice(1),
+      description: place.full_address,
+      tone: place.role,
+      preserveToneOnSelect: true,
+    })),
     ...chatMapPlaces.map((place, index) => ({
       id: place.markerId,
       latitude: place.latitude,
@@ -863,7 +988,7 @@ export default function AIChatBox({
       preserveToneOnSelect: chatMapPresentation?.kind !== 'atlas_draft',
       order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
     })),
-  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind]);
+  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind, chatMapPresentation?.special_places]);
 
   const selectedChatMapPlace = useMemo(
     () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
@@ -1120,6 +1245,26 @@ export default function AIChatBox({
     }
     try {
       let createdAtlasId: string | null = null;
+      if (accepted && action.kind === 'save_special_place') {
+        const place = action.places[0];
+        if (!place || !action.special_role) throw new Error('Special-place proposal is incomplete');
+        await saveSpecialPlace(action.special_role, {
+          name: place.name,
+          subtitle: place.full_address || place.description || '',
+          category: place.category || null,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          region: place.region || null,
+          city: place.city || null,
+          country: place.country || null,
+          photo_url: place.photo_url || null,
+        });
+      }
+      if (accepted && action.kind === 'delete_special_place') {
+        const target = savedPlaces.find((place) => place.special_role === action.special_role);
+        if (!target) throw new Error('This special place is no longer saved');
+        await deletePlace(target.id);
+      }
       if (accepted && action.kind === 'create_atlas') {
         const atlas = await createAtlas(action.title);
         const atlasRows = await addAtlasOwnedPlaces(atlas.id, action.places.map((place, index) => ({
@@ -1165,6 +1310,8 @@ export default function AIChatBox({
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     const displayText = normalizeAssistantText(stripActionMarkers(item.text));
+    const thoughtText = item.thoughtText?.trim() ?? '';
+    const isThoughtExpanded = Boolean(expandedThoughtIds[item.id]);
     const feedbackText = displayText.trim() || item.text.trim();
     const selectedFeedback = messageFeedback[item.id];
     const toggleFeedback = (feedback: MessageFeedback) => {
@@ -1206,6 +1353,7 @@ export default function AIChatBox({
             <Text style={[styles.messageText, styles.userText]}>
               {item.text}
             </Text>
+            {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.messageAttachmentImage} /> : null}
           </Pressable>
         ) : (
           <Animated.View
@@ -1222,14 +1370,45 @@ export default function AIChatBox({
             }}
           >
             <View style={styles.assistantMessageText}>
-              {item.streaming && !displayText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
+              {item.streaming && !displayText && !thoughtText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
+              {item.streaming && thoughtText && !displayText ? (
+                <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.streamingThoughtWrap}>
+                  <StreamingThoughtText text={thoughtText} />
+                </Animated.View>
+              ) : null}
               {!item.streaming || displayText ? (
                 <View style={styles.thinkingRow}>
                   <Text style={styles.assistantLabel}>Atlas AI</Text>
                   {item.thoughtDurationSeconds ? (
                     <Text style={styles.thinkingText}>thought {item.thoughtDurationSeconds}s</Text>
                   ) : null}
+                  {thoughtText ? (
+                    <Animated.View entering={FadeIn.duration(150)} exiting={FadeOut.duration(120)}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={isThoughtExpanded ? 'Hide thoughts' : 'Show thoughts'}
+                        onPress={() => setExpandedThoughtIds((current) => ({
+                          ...current,
+                          [item.id]: !current[item.id],
+                        }))}
+                        style={({ pressed }) => [styles.thoughtToggle, pressed && styles.thoughtTogglePressed]}
+                      >
+                        <Animated.View
+                          key={isThoughtExpanded ? 'hide' : 'show'}
+                          entering={FadeIn.duration(120)}
+                          exiting={FadeOut.duration(100)}
+                        >
+                          <Text style={styles.thinkingText}>{isThoughtExpanded ? 'hide thoughts' : 'thoughts'}</Text>
+                        </Animated.View>
+                      </Pressable>
+                    </Animated.View>
+                  ) : null}
                 </View>
+              ) : null}
+              {thoughtText && isThoughtExpanded ? (
+                <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.expandedThoughtWrap}>
+                  <Text style={styles.expandedThoughtText}>{thoughtText}</Text>
+                </Animated.View>
               ) : null}
               {item.streaming && displayText ? (
                 <StreamingAssistantText text={displayText} />
@@ -1341,12 +1520,15 @@ export default function AIChatBox({
   if (!visible) return null;
 
   const hasComposerText = inputText.length > 0;
+  const canSendMessage = Boolean(inputText.trim() || attachedImageBase64);
   const landingVisible =
     showLanding && !messages.some((message) => message.role === 'user');
   const hasStartedChat = messages.some((message) => message.role === 'user');
   const headerTop = Math.max(insets.top, 56);
   const headerOverlayHeight = headerTop + 68;
-  const composerHeight = hasComposerText
+  const composerHeight = attachedImageUri
+    ? Math.min(244, Math.max(152, inputContentHeight + 112))
+    : hasComposerText
     ? Math.min(196, Math.max(120, inputContentHeight + 72))
     : 56;
   const composerEdgeGap = keyboardVisible ? 12 : 28;
@@ -1364,10 +1546,10 @@ export default function AIChatBox({
       accessibilityRole="button"
       accessibilityLabel={pending ? 'Stop generating' : editingMessageId ? 'Confirm edit' : 'Send message'}
       onPress={pending ? cancelStream : () => { void handleSend(inputText, editingMessageId ?? undefined); }}
-      disabled={sessionInitializing || (!pending && !inputText.trim())}
+      disabled={sessionInitializing || (!pending && !canSendMessage)}
       style={({ pressed }) => [
         styles.sendButton,
-        pressed && (inputText.trim() || pending) && styles.sendButtonPressed,
+        pressed && (canSendMessage || pending) && styles.sendButtonPressed,
       ]}
     >
       <Animated.View key={pending ? 'stop' : 'send'} entering={FadeIn.duration(140)} exiting={FadeOut.duration(100)}>
@@ -1614,25 +1796,40 @@ export default function AIChatBox({
                   placeholderTextColor="#B0B0B0"
                   style={[
                     styles.composerInput,
-                    hasComposerText ? styles.composerInputExpanded : styles.composerInputCompact,
+                    (hasComposerText || attachedImageUri) ? styles.composerInputExpanded : styles.composerInputCompact,
+                    attachedImageUri && styles.composerInputWithAttachment,
                   ]}
                   multiline
                   textAlignVertical="top"
                   scrollEnabled={composerHeight >= 196}
                   editable={!pending && !sessionInitializing}
                 />
+                {attachedImageUri ? (
+                  <View style={styles.composerAttachment}>
+                    <Image source={{ uri: attachedImageUri }} style={styles.composerAttachmentImage} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="Remove attached image" onPress={() => {
+                      setAttachedImageUri(null);
+                      setAttachedImageBase64(null);
+                    }} style={styles.composerAttachmentRemove}>
+                      <XIcon size={12} weight="bold" color="#FFFFFF" />
+                    </Pressable>
+                  </View>
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Start voice input"
+                  accessibilityLabel="Add image"
                   disabled={pending || sessionInitializing}
-                  onPress={() => setVoiceMode(true)}
+                  onPress={() => { void pickChatImage(); }}
                   style={({ pressed }) => [styles.composerLeadingAction, pressed && styles.utilityButtonPressed]}
                 >
-                  <MicrophoneIcon size={22} weight="fill" color={COLOR.foreground} />
+                  <PlusIcon size={22} weight="regular" color={COLOR.foreground} />
                 </Pressable>
               </Animated.View>
             ) : (
               <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={styles.voiceModeWrap}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Return to keyboard input" onPress={() => setVoiceMode(false)} style={styles.voiceModeKeyboard}>
+                  <KeyboardIcon size={20} weight="regular" color="#202024" />
+                </Pressable>
                 <VoiceInputButton
                   label="Tap to speak"
                   tapToToggle
@@ -1644,15 +1841,21 @@ export default function AIChatBox({
                   }}
                   style={styles.voiceModeButton}
                 />
-                {!voiceRecording ? (
-                  <Pressable accessibilityRole="button" accessibilityLabel="Cancel voice input" onPress={() => setVoiceMode(false)} style={styles.voiceModeCancel}>
-                    <XIcon size={18} weight="bold" color="#717171" />
-                  </Pressable>
-                ) : null}
               </Animated.View>
             )}
 
             <View style={styles.composerTrailingActions}>
+              {!voiceMode ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Start voice input"
+                  disabled={pending || sessionInitializing}
+                  onPress={() => setVoiceMode(true)}
+                  style={({ pressed }) => [styles.utilityButton, pressed && styles.utilityButtonPressed]}
+                >
+                  <WaveformIcon size={21} weight="bold" color={COLOR.foreground} />
+                </Pressable>
+              ) : null}
               {sendButton}
             </View>
           </Animated.View>
@@ -1867,6 +2070,34 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     letterSpacing: 0,
   },
+  streamingThoughtWrap: {
+    opacity: 0.76,
+  },
+  streamingThoughtText: {
+    color: '#8E8E93',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    letterSpacing: 0,
+  },
+  thoughtToggle: {
+    paddingVertical: 2,
+  },
+  thoughtTogglePressed: {
+    opacity: 0.48,
+  },
+  expandedThoughtWrap: {
+    paddingLeft: 10,
+    borderLeftWidth: 2,
+    borderLeftColor: '#E4E4E7',
+  },
+  expandedThoughtText: {
+    color: '#71717A',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    letterSpacing: 0,
+  },
   streamingToken: {
     color: '#000000',
     fontSize: 16,
@@ -1901,6 +2132,13 @@ const styles = StyleSheet.create({
   },
   userText: {
     color: '#000000',
+  },
+  messageAttachmentImage: {
+    width: 220,
+    height: 160,
+    maxWidth: '100%',
+    marginTop: 8,
+    borderRadius: 8,
   },
   composerWrap: {
     position: 'absolute',
@@ -1951,6 +2189,11 @@ const styles = StyleSheet.create({
     bottom: 56,
     left: 16,
   },
+  composerInputWithAttachment: {
+    // Start beside the preview, not beneath it: placing the input below the
+    // attachment leaves only a few pixels above the persistent bottom actions.
+    left: 92,
+  },
   composerLeadingAction: {
     position: 'absolute',
     bottom: 12,
@@ -1978,16 +2221,17 @@ const styles = StyleSheet.create({
   },
   voiceModeButton: {
     flex: 1,
-    height: 40,
-    borderRadius: 20,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#E9FBF1',
   },
-  voiceModeCancel: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+  voiceModeKeyboard: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.72)',
   },
   composerTrailingActions: {
     position: 'absolute',
@@ -2020,6 +2264,33 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 2,
     backgroundColor: '#FFFFFF',
+  },
+  composerAttachment: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    width: 68,
+    height: 68,
+    borderRadius: 8,
+    overflow: 'visible',
+  },
+  composerAttachmentImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  composerAttachmentRemove: {
+    position: 'absolute',
+    top: -7,
+    right: -7,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#343434',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   confirmBar: {
     marginHorizontal: 16,

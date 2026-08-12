@@ -13,9 +13,11 @@ type Props = {
   presentation: AtlasChatPresentation;
   pendingAction?: {
     action_id: string;
-    kind: 'save_places' | 'create_atlas';
+    kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
     title: string;
     places: AtlasChatPresentation['places'];
+    special_role?: 'home' | 'office' | 'school' | null;
+    operation?: 'create' | 'update' | 'delete' | null;
   } | null;
   onConfirm?: () => void;
   onCancel?: () => void;
@@ -67,6 +69,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       .filter(Boolean)
       .join(' · ')
     : '';
+  const mapPlaces = [...(presentation.special_places ?? []), ...presentation.places];
   const markers: MapMarker[] = [
     ...(presentation.user_location ? [{
       id: 'chat-user-location',
@@ -75,6 +78,13 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       tone: 'location' as const,
       pulsing: true,
     }] : []),
+    ...(presentation.special_places ?? []).map((place) => ({
+      id: `chat-special-${place.role}`,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      title: place.role[0].toUpperCase() + place.role.slice(1),
+      tone: place.role,
+    })),
     ...presentation.places.map((place, index) => ({
       id: place.external_id || 'chat-place-' + index,
       latitude: place.latitude,
@@ -104,7 +114,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
         <View pointerEvents="none" style={styles.mapPreviewContent}>
           <MapboxMap
             markers={markers}
-            bounds={boundsForPlaces(presentation.places, presentation.user_location)}
+            bounds={boundsForPlaces(mapPlaces, presentation.user_location)}
             padding={{
               paddingTop: 56,
               paddingRight: 24,
@@ -148,14 +158,14 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       </View>
       {hasPendingAction ? (
         <View style={styles.confirmRow}>
-          <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : 'Ready to add these places?'}</Text>
+          <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${pendingAction.special_role}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} this as your ${pendingAction.special_role}?` : 'Ready to add these places?'}</Text>
           <View style={styles.actions}>
             <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={onCancel} style={styles.cancelButton}>
               <XIcon size={17} color="#52525B" weight="bold" />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={onConfirm} style={styles.confirmButton}>
               <CheckIcon size={17} color="#FFFFFF" weight="bold" />
-              <Text style={styles.confirmButtonText}>{pendingAction?.kind === 'create_atlas' ? 'Create' : 'Add'}</Text>
+              <Text style={styles.confirmButtonText}>{pendingAction?.kind === 'create_atlas' ? 'Create' : pendingAction?.kind === 'delete_special_place' ? 'Delete' : pendingAction?.kind === 'save_special_place' ? 'Save' : 'Add'}</Text>
             </Pressable>
           </View>
         </View>

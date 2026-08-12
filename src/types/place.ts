@@ -61,6 +61,8 @@ export type PlaceDetail = Place & {
   externalSource?: string;
   createdBy?: string;
   updatedAt?: string;
+  /** Home, Office, and School are system places managed through Atlas AI. */
+  specialRole?: 'home' | 'office' | 'school' | null;
 };
 
 /** Row shape of the Supabase `atlas_places` join table (renamed from `collection_places`). */

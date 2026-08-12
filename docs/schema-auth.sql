@@ -8,6 +8,9 @@
 -- are stamped automatically; backend acts as user via JWT pass-through)
 ALTER TABLE places            ADD COLUMN user_id UUID REFERENCES auth.users(id) DEFAULT auth.uid();
 ALTER TABLE atlas             ADD COLUMN user_id UUID REFERENCES auth.users(id) DEFAULT auth.uid();
+
+CREATE UNIQUE INDEX places_one_special_role_per_user
+  ON places (user_id, special_role) WHERE special_role IS NOT NULL;
 ALTER TABLE conversations     ALTER COLUMN user_id SET DEFAULT auth.uid();
 ALTER TABLE long_term_memory  ALTER COLUMN user_id SET DEFAULT auth.uid();
 -- (legacy rows backfilled to the project owner's uid)

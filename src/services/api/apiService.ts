@@ -113,7 +113,7 @@ export type AtlasChatResponse = {
   }>;
   pending_action?: {
     action_id: string;
-    kind: 'save_places' | 'create_atlas';
+    kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
     title: string;
     places: Array<{
       name: string;
@@ -134,6 +134,8 @@ export type AtlasChatResponse = {
       travel_duration_minutes?: number | null;
     }>;
     planning_note?: string | null;
+    special_role?: 'home' | 'office' | 'school' | null;
+    operation?: 'create' | 'update' | 'delete' | null;
   } | null;
   presentation?: AtlasChatPresentation | null;
   locations: Array<{
@@ -164,6 +166,14 @@ export type AtlasChatResponse = {
   };
 };
 
+export type AtlasSpecialPlace = {
+  role: 'home' | 'office' | 'school';
+  name: string;
+  latitude: number;
+  longitude: number;
+  full_address?: string;
+};
+
 export type AtlasChatPresentation = {
   kind: 'nearby_map' | 'places_map' | 'atlas_draft';
   title: string;
@@ -187,6 +197,13 @@ export type AtlasChatPresentation = {
     travel_duration_minutes?: number | null;
   }>;
   planning_note?: string | null;
+  special_places?: Array<{
+    role: 'home' | 'office' | 'school';
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+  }>;
   route?: {
     route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
     distance_km?: number;
@@ -501,12 +518,16 @@ export async function chatWithAtlas(
   message: string,
   conversationId?: string | null,
   userLocation?: [number, number],
+  specialPlaces?: AtlasSpecialPlace[],
+  imageBase64?: string | null,
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>('/chat', {
     session_id: sessionId,
     message,
     conversation_id: conversationId ?? undefined,
     user_location: userLocation,
+    special_places: specialPlaces,
+    image_base64: imageBase64 ?? undefined,
   });
 }
 
@@ -520,6 +541,8 @@ export async function chatWithAtlasStream(
   handlers: AtlasChatStreamHandlers,
   conversationId?: string | null,
   userLocation?: [number, number],
+  specialPlaces?: AtlasSpecialPlace[],
+  imageBase64?: string | null,
   signal?: AbortSignal,
 ): Promise<AtlasChatResponse> {
   const controller = new AbortController();
@@ -540,6 +563,8 @@ export async function chatWithAtlasStream(
         message,
         conversation_id: conversationId ?? undefined,
         user_location: userLocation,
+        special_places: specialPlaces,
+        image_base64: imageBase64 ?? undefined,
       }),
       signal: controller.signal,
     });
