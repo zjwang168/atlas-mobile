@@ -774,12 +774,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
             style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
-            // Keep the dot out of Mapbox's native view-collision cycle. That
-            // cycle considers the animated label part of this MarkerView, so
-            // tiny idle layout corrections can alternate an ordinary saved
-            // pin between hidden and visible. Labels are already collision-
-            // resolved deterministically by visibleLabelIds above.
-            allowOverlap
+            // Let Mapbox suppress overlapping native marker views while we
+            // evaluate its collision behavior for dense map areas.
+            allowOverlap={false}
           >
             <View
               style={styles.markerContainer}
