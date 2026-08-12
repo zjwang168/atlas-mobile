@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import math
 import os
@@ -1650,45 +1649,128 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
     return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, find_similar_places, extract_pasted_places, research_screen_locations, propose_add_places, propose_create_atlas]
 
 
-def _image_data_url(image_base64: str | None) -> str | None:
-    """Normalize a mobile image payload for the OpenAI-compatible vision input."""
+def _image_bytes(image_base64: str) -> bytes:
+    """Decode the Expo image payload used by the existing Add Place OCR tool."""
+    import base64
+
     value = (image_base64 or "").strip()
-    if not value:
-        return None
-    if value.startswith("data:image/") and ";base64," in value:
-        return value
-    # Expo ImagePicker returns bare base64. Preserve common library image types
-    # rather than assuming every selected asset is JPEG.
-    header = value[:24]
-    media_type = "image/jpeg"
-    if header.startswith("iVBOR"):
-        media_type = "image/png"
-    elif header.startswith("R0lGOD"):
-        media_type = "image/gif"
-    elif header.startswith("UklGR"):
-        media_type = "image/webp"
-    elif not header.startswith("/9j/"):
-        # A data URL is still valid for less common picker output. Image vision
-        # will reject unsupported formats without exposing it to chat history.
-        try:
-            decoded = base64.b64decode(value[:128], validate=False)
-            if decoded.startswith(b"\x89PNG"):
-                media_type = "image/png"
-        except ValueError:
-            pass
-    return f"data:{media_type};base64,{value}"
+    if ";base64," in value:
+        value = value.split(";base64,", 1)[1]
+    try:
+        return base64.b64decode(value, validate=False)
+    except (ValueError, TypeError) as error:
+        raise ValueError("The attached image could not be read.") from error
+
+
+async def _run_image_recognition_chat(
+    session: Any,
+    message: str,
+    image_base64: str,
+    image_mode: str | None,
+    on_status: Callable[[str], Awaitable[None]] | None,
+) -> dict[str, Any]:
+    """Use the Add Place image tools, never the chat model, for attachments."""
+    started_at = time.perf_counter()
+    mode = "read_text" if image_mode == "read_text" else "identify_location"
+    if not session.messages and session.title in ("", "Atlas AI chat"):
+        session.title = message[:100]
+    session.chat_presentation = None
+    session.add_message("user", message)
+
+    try:
+        if mode == "read_text":
+            await _emit_agent_status(on_status, "Reading text in your image")
+            from backend.services.image_scanner import scan_images
+
+            result = await scan_images([_image_bytes(image_base64)])
+            tool_name = "read_image_text"
+            title = str(result.get("title") or "Places read from image")
+        else:
+            await _emit_agent_status(on_status, "Identifying the location in your image")
+            from backend.services.find_image_places_service import find_image_place
+
+            result = await find_image_place(image_base64)
+            tool_name = "identify_image_location"
+            title = str(result.get("title") or "Location identified from image")
+
+        places = _dedupe_places(result.get("locations") or [])
+        # The Identify Location tool represents an unsuccessful recognition as
+        # a zero-coordinate "Unknown Location" placeholder. Do not map it.
+        places = [place for place in places if place["name"].casefold() != "unknown location"]
+        session.locations = places
+        session.route = result.get("route")
+        presentation = {
+            "kind": "places_map",
+            "title": title[:100],
+            "places": places,
+            "route": session.route,
+        } if places else None
+        if places:
+            answer = (
+                f"I found {len(places)} place{'s' if len(places) != 1 else ''} "
+                f"with the Add Place {'Read text' if mode == 'read_text' else 'Identify location'} tool."
+            )
+        elif mode == "read_text":
+            answer = "I couldn't find a mappable place in the text from this image."
+        else:
+            answer = "I couldn't confidently identify a mappable location in this image."
+        status, partial = "success", False
+    except Exception as error:
+        places, presentation = [], None
+        result = {"error": type(error).__name__}
+        tool_name = "read_image_text" if mode == "read_text" else "identify_image_location"
+        answer = "I couldn't read that image right now. Please try another image."
+        status, partial = "error", True
+
+    await _emit_agent_status(on_status, "Preparing map results")
+    tool_results = [{"name": tool_name, "result": {"places": places, "source": "add_place"}}]
+    if presentation:
+        tool_results.append({"name": "chat_presentation", "result": {"presentation": presentation}})
+    session.chat_presentation = presentation
+    session.add_message("assistant", answer, tool_calls=[tool_name], tool_results=tool_results)
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception as error:
+        print(f"[Chat] Failed to persist image recognition: {error}")
+    return {
+        "session_id": session.session_id,
+        "conversation_id": session.conversation_id,
+        "response": answer,
+        "locations": places,
+        "route": session.route,
+        "tool_calls_used": [tool_name],
+        "tool_results": tool_results,
+        "status": status,
+        "partial": partial,
+        "pending_action": None,
+        "presentation": presentation,
+        "place_cards": [],
+        "metrics": {
+            "latency_ms": round((time.perf_counter() - started_at) * 1000),
+            "tool_call_count": 1,
+        },
+    }
 
 
 async def _run_agent(
     session: Any,
     user_message: str,
     image_base64: str | None = None,
+    image_mode: str | None = None,
     on_status: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     message = (user_message or "").strip()
     if not message:
         raise ValueError("Message cannot be empty")
     await _emit_agent_status(on_status, "Understanding your request")
+    if image_base64:
+        return await _run_image_recognition_chat(
+            session,
+            message,
+            image_base64,
+            image_mode,
+            on_status,
+        )
     if _is_special_place_confirmation_ack(message, getattr(session, "pending_chat_action", None)):
         action = session.pending_chat_action
         role = str(action.get("special_role") or "place").title()
@@ -1714,16 +1796,6 @@ async def _run_agent(
     model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session)), *_history_messages(session)]
-    image_url = _image_data_url(image_base64)
-    if image_url:
-        # The text-only copy above is deliberately kept in session history.
-        # Replace only this first-turn prompt message with its multimodal form.
-        if prompt and isinstance(prompt[-1], HumanMessage):
-            prompt.pop()
-        prompt.append(HumanMessage(content=[
-            {"type": "text", "text": message},
-            {"type": "image_url", "image_url": {"url": image_url}},
-        ]))
     state: dict[str, Any] = {
         "presentation": None,
         "pending_action": None,
@@ -1807,24 +1879,61 @@ async def _run_agent(
     }
 
 
-async def run_chat(session_id: str, user_message: str, image_base64: str | None = None) -> dict:
+async def run_chat(
+    session_id: str,
+    user_message: str,
+    image_base64: str | None = None,
+    image_mode: str | None = None,
+) -> dict:
     session = conversation_manager.get_session(session_id)
     if not session:
         raise ValueError(f"Session {session_id} not found")
-    return await _run_agent(session, user_message, image_base64)
+    return await _run_agent(session, user_message, image_base64, image_mode)
 
 
-async def stream_chat(session_id: str, user_message: str, image_base64: str | None = None) -> AsyncIterator[dict]:
+async def stream_chat(
+    session_id: str,
+    user_message: str,
+    image_base64: str | None = None,
+    image_mode: str | None = None,
+) -> AsyncIterator[dict]:
     session = conversation_manager.get_session(session_id)
     if not session:
         raise ValueError(f"Session {session_id} not found")
+    if image_base64:
+        status_events: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        async def publish_image_status(label: str) -> None:
+            await status_events.put({"type": "status", "label": label})
+
+        image_task = asyncio.create_task(
+            _run_agent(session, user_message, image_base64, image_mode, publish_image_status),
+        )
+        try:
+            while not image_task.done():
+                try:
+                    yield await asyncio.wait_for(status_events.get(), timeout=0.2)
+                except TimeoutError:
+                    continue
+            result = await image_task
+            while not status_events.empty():
+                yield status_events.get_nowait()
+            for index in range(0, len(result["response"]), 36):
+                yield {"type": "token", "delta": result["response"][index:index + 36]}
+            yield {"type": "complete", **result}
+        finally:
+            if not image_task.done():
+                image_task.cancel()
+                try:
+                    await image_task
+                except asyncio.CancelledError:
+                    pass
+        return
     model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     # Keep the old streaming contract for lightweight test doubles and any
     # provider that only implements native text streaming.
     if not hasattr(model, "ainvoke"):
-        if _image_data_url(image_base64):
-            raise ValueError("This chat model does not support image attachments.")
         if not session.messages and session.title in ("", "Atlas AI chat"):
             session.title = user_message.strip()[:100]
         session.add_message("user", user_message)
@@ -1853,7 +1962,9 @@ async def stream_chat(session_id: str, user_message: str, image_base64: str | No
     async def publish_status(label: str) -> None:
         await status_events.put({"type": "status", "label": label})
 
-    agent_task = asyncio.create_task(_run_agent(session, user_message, image_base64, publish_status))
+    agent_task = asyncio.create_task(
+        _run_agent(session, user_message, image_base64, image_mode, publish_status),
+    )
     try:
         while not agent_task.done():
             try:

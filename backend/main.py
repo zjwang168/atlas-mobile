@@ -242,9 +242,10 @@ class ChatRequest(BaseModel):
     # only for this request. It is never inferred by the model.
     user_location: Optional[tuple[float, float]] = None
     special_places: list[dict] = []
-    # Request-scoped image attachment for visual place discovery. The payload is
-    # passed to the model for this turn only and is never stored in a session.
+    # Request-scoped image attachment. Chat routes it through the same Add
+    # Place image tools; it is never included in the chat model prompt.
     image_base64: Optional[str] = None
+    image_mode: Optional[str] = None
 
 
 class ChatActionConfirmationRequest(BaseModel):
@@ -822,6 +823,7 @@ async def chat(req: ChatRequest) -> dict:
                 "session_id": req_session_id,
                 "text": req.message,
                 "image_base64": req.image_base64,
+                "image_mode": req.image_mode,
             },
             config={
                 "configurable": {"thread_id": req_session_id},
@@ -861,7 +863,12 @@ async def stream_chat(req: ChatRequest) -> StreamingResponse:
 
         async def event_stream():
             try:
-                async for event in run_stream_chat(session.session_id, req.message, req.image_base64):
+                async for event in run_stream_chat(
+                    session.session_id,
+                    req.message,
+                    req.image_base64,
+                    req.image_mode,
+                ):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except ValueError as error:
                 yield json.dumps({"type": "error", "message": str(error)}) + "\n"

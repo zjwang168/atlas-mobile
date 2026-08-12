@@ -108,6 +108,7 @@ const CHAT_PLACE_PHOTO_REQUESTS = new Map<string, Promise<string | null>>();
 const CHAT_PLACE_PHOTO_CONCURRENCY = 2;
 let activeChatPlacePhotoRequests = 0;
 const queuedChatPlacePhotoRequests: Array<() => void> = [];
+const IMAGE_TEXT_REQUEST_RE = /\b(?:read|extract|recognize|recognise|scan|ocr) (?:the )?(?:text|words|writing)|(?:图片|图像|照片).{0,8}(?:文字|读字|识别文字)|(?:识别|读取).{0,8}(?:图片|图像|照片).{0,8}(?:文字|文本)/i;
 
 type Message = {
   id: string;
@@ -1063,6 +1064,9 @@ export default function AIChatBox({
     const text = submittedText.trim();
     const imageUri = editingId ? null : attachedImageUri;
     const imageBase64 = editingId ? null : attachedImageBase64;
+    const imageMode = imageBase64
+      ? (IMAGE_TEXT_REQUEST_RE.test(text) ? 'read_text' : 'identify_location')
+      : null;
     const message = text || (imageBase64 ? 'Find relevant places based on this image.' : '');
     if (!message || pending || sessionInitializing) return;
 
@@ -1118,6 +1122,7 @@ export default function AIChatBox({
           full_address: place.subtitle,
         }] : []),
         imageBase64,
+        imageMode,
         controller.signal,
       );
       const normalizedPresentation = normalizeCommutePresentation(

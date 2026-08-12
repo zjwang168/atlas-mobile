@@ -66,29 +66,47 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["locations"]), 2)
         self.assertIsNone(result["pending_action"])
 
-    async def test_image_turn_reaches_model_once_and_maps_tool_results(self):
-        model = _ToolModel([
-            tool_call("find_nearby_places", {"query": "coffee shop", "limit": 1}),
-            AIMessage(content="I found a coffee shop matching the scene."),
-        ])
+    async def test_image_location_uses_add_place_tool_without_calling_chat_model(self):
+        identified = {
+            "title": "Space Needle",
+            "locations": [{
+                "name": "Space Needle", "latitude": 47.6205, "longitude": -122.3493,
+                "full_address": "400 Broad St, Seattle, WA", "category": "landmark",
+            }],
+            "route": None,
+        }
         with (
-            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
-            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "cafe"}])),
-            patch("backend.services.place_search_service.retrieve", new=AsyncMock(return_value=[{
-                "name": "Scene Coffee", "latitude": 47.61, "longitude": -122.33,
-                "full_address": "1 Pine St", "category": "Cafe",
-            }])),
-            patch("backend.langgraph.chat_agent._road_route", new=AsyncMock(return_value=None)),
+            patch("backend.langgraph.chat_agent.get_chat_model", side_effect=AssertionError("chat model must not receive image attachments")),
+            patch("backend.services.find_image_places_service.find_image_place", new=AsyncMock(return_value=identified)) as identify,
             patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
         ):
-            result = await run_chat("tool-test-session", "Find a place like this.", "aGVsbG8=")
+            result = await run_chat("tool-test-session", "Where is this?", "aGVsbG8=", "identify_location")
 
-        first_prompt = model.requests[0]
-        image_message = next(message for message in first_prompt if isinstance(message, HumanMessage) and isinstance(message.content, list))
-        self.assertEqual(image_message.content[0]["text"], "Find a place like this.")
-        self.assertEqual(image_message.content[1]["image_url"]["url"], "data:image/jpeg;base64,aGVsbG8=")
-        self.assertEqual(result["presentation"]["kind"], "nearby_map")
-        self.assertEqual(self.session.messages[-2]["content"], "Find a place like this.")
+        identify.assert_awaited_once_with("aGVsbG8=")
+        self.assertEqual(result["tool_calls_used"], ["identify_image_location"])
+        self.assertEqual(result["presentation"]["kind"], "places_map")
+        self.assertEqual(result["presentation"]["places"][0]["name"], "Space Needle")
+
+    async def test_image_text_uses_add_place_read_text_pipeline_without_chat_model(self):
+        read_text = {
+            "title": "Places from screenshot",
+            "locations": [{
+                "name": "Pike Place Market", "latitude": 47.6097, "longitude": -122.3425,
+                "full_address": "85 Pike St, Seattle, WA", "category": "Market",
+            }],
+            "route": None,
+        }
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", side_effect=AssertionError("chat model must not receive image attachments")),
+            patch("backend.services.image_scanner.scan_images", new=AsyncMock(return_value=read_text)) as scan,
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "Read the text in this image.", "aGVsbG8=", "read_text")
+
+        scan.assert_awaited_once_with([b"hello"])
+        self.assertEqual(result["tool_calls_used"], ["read_image_text"])
+        self.assertEqual(result["presentation"]["kind"], "places_map")
+        self.assertEqual(result["presentation"]["places"][0]["name"], "Pike Place Market")
 
     async def test_nearby_search_merges_multiple_categories_into_one_map(self):
         model = _ToolModel([

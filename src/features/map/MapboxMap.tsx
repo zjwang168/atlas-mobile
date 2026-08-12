@@ -467,7 +467,12 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const [mapLoaded, setMapLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewport>({ center: cameraCenterCoordinate, zoom: zoomLevel });
+  // Keep the native MarkerView set stable while the user pans. MarkerView
+  // mounts/unmounts are visibly expensive on iOS, especially at viewport
+  // edges, so culling updates only after Mapbox reports an idle camera.
+  const [markerViewport, setMarkerViewport] = useState<MapViewport>({ center: cameraCenterCoordinate, zoom: zoomLevel });
   const pendingViewportRef = useRef<MapViewport | null>(null);
+  const pendingMarkerViewportRef = useRef(false);
   const cameraFrameRef = useRef<number | null>(null);
   const lastCameraStateKeyRef = useRef<string | null>(null);
   const markerPressTimestampRef = useRef(0);
@@ -484,22 +489,26 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     () => screenMarkers(renderedMarkers, viewport, width, height),
     [height, renderedMarkers, viewport, width],
   );
+  const markerScreenPoints = useMemo(
+    () => screenMarkers(renderedMarkers, markerViewport, width, height),
+    [height, markerViewport, renderedMarkers, width],
+  );
   const nativeMarkers = useMemo(() => {
     // MarkerView is a React/native view for every point. Keep the active Atlas
     // pins and selected point, but cull distant saved/recommended views to the
     // current viewport and cap the remainder. This avoids reconciling an
     // entire country's saved places while a local Atlas sheet opens.
-    const visibleIds = new Set(screenMarkerPoints.map((point) => point.marker.id));
+    const visibleIds = new Set(markerScreenPoints.map((point) => point.marker.id));
     const atlas = renderedMarkers.filter((marker) => marker.tone === 'atlas');
     const selected = renderedMarkers.filter((marker) => marker.id === selectedMarkerId && marker.tone !== 'atlas');
-    const nearby = screenMarkerPoints
+    const nearby = markerScreenPoints
       .filter((point) => point.marker.tone !== 'atlas' && point.marker.id !== selectedMarkerId)
       .sort((a, b) => Math.hypot(a.x - width / 2, a.y - height / 2) - Math.hypot(b.x - width / 2, b.y - height / 2))
       .slice(0, 96)
       .map((point) => point.marker)
       .filter((marker) => visibleIds.has(marker.id));
     return [...new Map([...atlas, ...selected, ...nearby].map((marker) => [marker.id, marker])).values()];
-  }, [height, renderedMarkers, screenMarkerPoints, selectedMarkerId, width]);
+  }, [height, markerScreenPoints, renderedMarkers, selectedMarkerId, width]);
   const labelOwnerMarkerPoints = useMemo(
     () => labelOwnerPoints(screenMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
     [deletingMarkerId, height, markerPopup?.markerId, screenMarkerPoints, selectedMarkerId, width],
@@ -526,7 +535,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     onMapPress?.();
   };
 
-  const queueViewportUpdate = (state: CameraState) => {
+  const queueViewportUpdate = (state: CameraState, settled = false) => {
     const nextViewport = viewportFromCamera(state);
     // Mapbox can send duplicate camera events after an idle render. Ignore
     // them so the exact-coordinate cache cannot oscillate with its fallback.
@@ -538,6 +547,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     if (nextCameraStateKey === lastCameraStateKeyRef.current) return;
     lastCameraStateKeyRef.current = nextCameraStateKey;
     pendingViewportRef.current = nextViewport;
+    pendingMarkerViewportRef.current ||= settled;
     if (cameraFrameRef.current !== null) return;
     cameraFrameRef.current = requestAnimationFrame(() => {
       cameraFrameRef.current = null;
@@ -545,7 +555,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       if (!next) return;
       pendingViewportRef.current = null;
       setViewport(next);
-      onViewportChanged?.(next.center, next.zoom);
+      if (pendingMarkerViewportRef.current) {
+        pendingMarkerViewportRef.current = false;
+        setMarkerViewport(next);
+        onViewportChanged?.(next.center, next.zoom);
+      }
     });
   };
 
@@ -682,8 +696,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         attributionEnabled={false}
         scaleBarEnabled={false}
         onPress={handleMapPress}
-        onCameraChanged={queueViewportUpdate}
-        onMapIdle={queueViewportUpdate}
+        onCameraChanged={(state) => queueViewportUpdate(state)}
+        onMapIdle={(state) => queueViewportUpdate(state, true)}
         onDidFinishLoadingMap={() => setMapLoaded(true)}
       >
         <MapboxGL.Camera
@@ -738,13 +752,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
             style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
-            // A focused point is an explicit user choice. Let its annotation
-            // render above nearby markers so its mandatory label cannot be
-            // discarded by native collision handling.
-            // AI recommendations must remain discoverable even when they sit
-            // near a saved point; native MarkerView collision would otherwise
-            // hide the purple pin before the user can select it.
-            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'focused' || marker.tone === 'recommended' || marker.tone === 'atlas' || marker.tone === 'location' || marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school'}
+            // Pin visibility is independent from label collision. Let every
+            // point stay rendered during a pan; MarkerLabel handles the
+            // readable-name collision policy in React.
+            allowOverlap
           >
             <View
               style={styles.markerContainer}

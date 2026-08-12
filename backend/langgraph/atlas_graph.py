@@ -32,6 +32,7 @@ class AtlasState(TypedDict, total=False):
     text: str | None
     image: str | None
     image_base64: str | None
+    image_mode: str | None
     title: str | None
     web_search: bool
     query: str | None
@@ -187,6 +188,7 @@ async def _chat(state: AtlasState) -> AtlasState:
         state.get("session_id", "") or "",
         state.get("text", "") or "",
         state.get("image_base64"),
+        state.get("image_mode"),
     )
     state["result"] = result
     return state

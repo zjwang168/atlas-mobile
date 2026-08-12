@@ -539,6 +539,7 @@ export async function chatWithAtlas(
   userLocation?: [number, number],
   specialPlaces?: AtlasSpecialPlace[],
   imageBase64?: string | null,
+  imageMode?: 'identify_location' | 'read_text' | null,
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>('/chat', {
     session_id: sessionId,
@@ -547,6 +548,7 @@ export async function chatWithAtlas(
     user_location: userLocation,
     special_places: specialPlaces,
     image_base64: imageBase64 ?? undefined,
+    image_mode: imageMode ?? undefined,
   });
 }
 
@@ -562,6 +564,7 @@ export async function chatWithAtlasStream(
   userLocation?: [number, number],
   specialPlaces?: AtlasSpecialPlace[],
   imageBase64?: string | null,
+  imageMode?: 'identify_location' | 'read_text' | null,
   signal?: AbortSignal,
 ): Promise<AtlasChatResponse> {
   const controller = new AbortController();
@@ -584,6 +587,7 @@ export async function chatWithAtlasStream(
         user_location: userLocation,
         special_places: specialPlaces,
         image_base64: imageBase64 ?? undefined,
+        image_mode: imageMode ?? undefined,
       }),
       signal: controller.signal,
     });

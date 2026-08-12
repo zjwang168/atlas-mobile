@@ -5,12 +5,13 @@ import { useEffect, useState } from 'react';
 import {
   Pressable,
   ScrollView,
+  TextInput,
   useColorScheme,
   View,
 } from 'react-native';
 
 import { useHome } from '../home/HomeContext';
-import { toPlaceDetail } from '../../services/place/placeService';
+import { toPlaceDetail, updatePlaceName } from '../../services/place/placeService';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
 import PlaceInfoSection from './place-detail-sections/PlaceInfoSection';
@@ -120,13 +121,66 @@ function PlaceHeader({
 }) {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(place.name);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setDraftName(place.name);
+  }, [editing, place.name]);
+
+  const saveName = async () => {
+    const nextName = draftName.trim();
+    if (!nextName || saving || nextName === place.name) {
+      if (nextName === place.name) setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await updatePlaceName(place.id, nextName);
+      setEditing(false);
+    } catch (error) {
+      console.warn('[PlaceDetail] could not rename place:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <View className="flex-row items-center px-4 pb-2 pt-1">
       {/* Center: place name title */}
-      <Text className="flex-1 h2 text-foreground" numberOfLines={1}>
-        {place.specialRole ? place.specialRole[0].toUpperCase() + place.specialRole.slice(1) : place.name}
-      </Text>
+      {editing ? (
+        <TextInput
+          accessibilityLabel="Edit place name"
+          autoFocus
+          value={draftName}
+          onChangeText={setDraftName}
+          onSubmitEditing={() => { void saveName(); }}
+          returnKeyType="done"
+          editable={!saving}
+          selectTextOnFocus
+          style={{ flex: 1, height: 44, color: foreground, fontSize: 24, fontWeight: '700', paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#A1A1AA' }}
+        />
+      ) : (
+        <Text className="flex-1 h2 text-foreground" numberOfLines={1}>
+          {place.specialRole ? place.specialRole[0].toUpperCase() + place.specialRole.slice(1) : place.name}
+        </Text>
+      )}
+
+      {editing ? (
+        <View className="flex-row items-center">
+          <Pressable accessibilityRole="button" accessibilityLabel="Cancel editing place name" onPress={() => { setDraftName(place.name); setEditing(false); }} disabled={saving} style={{ width: 42, height: 44, alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons name="close" size={22} color="#71717A" />
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Save place name" onPress={() => { void saveName(); }} disabled={saving || !draftName.trim()} style={{ width: 42, height: 44, alignItems: 'center', justifyContent: 'center', opacity: saving || !draftName.trim() ? 0.45 : 1 }}>
+            <Ionicons name="checkmark" size={24} color="#12C170" />
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable accessibilityRole="button" accessibilityLabel="Edit place name" onPress={() => setEditing(true)} style={{ width: 42, height: 44, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="pencil-outline" size={20} color={foreground} />
+        </Pressable>
+      )}
 
       {/* Right: close button */}
       <Button

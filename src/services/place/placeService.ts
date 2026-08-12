@@ -545,3 +545,36 @@ export async function updatePlaceNote(id: string, note: string): Promise<void> {
 
   // No-op on the server until the DB schema grows a note column.
 }
+
+/** Rename a saved place locally and persist the name when the row is remote. */
+export async function updatePlaceName(id: string, name: string): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot update place name before auth is ready');
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Place name cannot be empty');
+
+  const current = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces) ?? [])
+    .find((place) => place.id === id);
+  if (!current) throw new Error('Place not found');
+  await updateSavedPlacesCache(userId, (places) => places.map((place) => (
+    place.id === id ? { ...place, name: trimmed } : place
+  )));
+
+  if (id.startsWith('local-')) {
+    return;
+  }
+  try {
+    const { error } = await withTimeout(
+      supabase.from('places').update({ name: trimmed }).eq('id', id),
+      'Updating place name timed out',
+    );
+    if (error) throw new Error(`Failed to update place name: ${error.message}`);
+  } catch (error) {
+    if (!isRetryableError(error)) throw error;
+    await enqueueWrite(userId, {
+      kind: 'updatePlaceName',
+      placeId: id,
+      name: trimmed,
+    });
+  }
+}

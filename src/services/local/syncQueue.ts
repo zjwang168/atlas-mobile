@@ -50,6 +50,15 @@ type UpdateNoteWrite = {
   note: string;
 };
 
+type UpdatePlaceNameWrite = {
+  kind: 'updatePlaceName';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  placeId: string;
+  name: string;
+};
+
 type CreateAtlasWrite = {
   kind: 'createAtlas';
   id: string;
@@ -85,11 +94,12 @@ type DeleteAtlasWrite = {
   atlasId: string;
 };
 
-export type QueuedWrite = SavePlacesWrite | SaveSpecialPlaceWrite | DeletePlaceWrite | UpdateNoteWrite | CreateAtlasWrite | AddAtlasPlacesWrite | RemoveAtlasPlaceWrite | DeleteAtlasWrite;
+export type QueuedWrite = SavePlacesWrite | SaveSpecialPlaceWrite | DeletePlaceWrite | UpdateNoteWrite | UpdatePlaceNameWrite | CreateAtlasWrite | AddAtlasPlacesWrite | RemoveAtlasPlaceWrite | DeleteAtlasWrite;
 type NewQueuedWrite = Omit<SavePlacesWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<SaveSpecialPlaceWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<DeletePlaceWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<UpdatePlaceNameWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<CreateAtlasWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<AddAtlasPlacesWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<RemoveAtlasPlaceWrite, 'id' | 'attempts' | 'createdAt'>
@@ -307,6 +317,11 @@ async function updateNoteOnline(placeId: string, note: string): Promise<void> {
   // Keep note edits local until the backend schema grows one.
 }
 
+async function updatePlaceNameOnline(placeId: string, name: string): Promise<void> {
+  const { error } = await withTimeout(supabase.from('places').update({ name }).eq('id', placeId));
+  if (error) throw new Error(`Failed to update queued place name: ${error.message}`);
+}
+
 async function reconcileSavedPlaces(userId: string, localRows: SavedPlace[], remoteRows: SavedPlace[]): Promise<void> {
   const localByIndex = new Map(localRows.map((row, index) => [index, row.id]));
   const now = new Date().toISOString();
@@ -419,6 +434,10 @@ async function replayWrite(userId: string, write: QueuedWrite): Promise<void> {
   }
   if (write.kind === 'updateNote') {
     await updateNoteOnline(write.placeId, write.note);
+    return;
+  }
+  if (write.kind === 'updatePlaceName') {
+    await updatePlaceNameOnline(write.placeId, write.name);
     return;
   }
   if (write.kind === 'createAtlas') {
