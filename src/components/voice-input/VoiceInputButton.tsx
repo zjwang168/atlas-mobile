@@ -1,14 +1,14 @@
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
 import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
+import { ActivityIndicator, Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { transcribeAudio } from '@/services/api/apiService';
 
 type VoiceInputButtonProps = {
   onTranscript: (text: string) => void;
   onRecordingChange?: (recording: boolean) => void;
   disabled?: boolean;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   label?: string;
   onShortPress?: () => void;
   onError?: (message: string) => void;
@@ -75,7 +75,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       accessibilityState={{ disabled: Boolean(disabled || processing), selected: recording }}
       disabled={disabled || processing}
       onPressIn={() => {
-        if (label && onShortPress) {
+        if (onShortPress) {
           holdTimer.current = setTimeout(() => { holdTimer.current = null; start(); }, 360);
         } else start();
       }}
@@ -91,12 +91,12 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       {processing ? (
         <View style={styles.statusRow}>
           <ActivityIndicator size="small" color="#0C8149" />
-          {label ? <Text style={styles.label}>Transcribing</Text> : null}
+          {label ? <Text numberOfLines={1} style={styles.label}>Transcribing</Text> : null}
         </View>
       ) : label ? (
         <View style={styles.labelRow}>
           <WaveformIcon size={18} weight="bold" color={recording ? '#FFFFFF' : '#0C8149'} />
-          <Text style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Release to send' : label}</Text>
+          <Text numberOfLines={1} style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Release to send' : label}</Text>
         </View>
       ) : <WaveformIcon size={22} weight="bold" color={recording ? '#FFFFFF' : '#202024'} />}
     </Pressable>
@@ -106,8 +106,8 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
 const styles = StyleSheet.create({
   button: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   recording: { backgroundColor: '#0C8149', borderColor: '#0C8149' },
-  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  label: { color: '#0C8149', fontSize: 13, fontWeight: '700', letterSpacing: 0 },
+  labelRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  statusRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  label: { flexShrink: 1, color: '#0C8149', fontSize: 13, fontWeight: '700', letterSpacing: 0 },
   labelRecording: { color: '#FFFFFF' },
 });

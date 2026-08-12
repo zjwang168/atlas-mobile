@@ -1,6 +1,7 @@
 import { GeocodedLocation, ParseResult, PlaceSuggestion } from '@/types/route';
 import { supabase } from '../supabase/supabaseClient';
 import Constants from 'expo-constants';
+import { File } from 'expo-file-system';
 import type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
 export type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
 
@@ -299,7 +300,10 @@ export async function requestMapboxOptimization(coordinates: Array<[number, numb
 
 export async function transcribeAudio(uri: string): Promise<{ text: string }> {
   const form = new FormData();
-  form.append('file', { uri, name: 'atlas-note.m4a', type: 'audio/m4a' } as unknown as Blob);
+  // Expo File is a native Blob backed by the recorder's file URI. This avoids
+  // the legacy URI-object FormData path rejected by the current fetch bridge.
+  const audioFile = new File(uri);
+  form.append('file', audioFile, 'atlas-note.m4a');
   const response = await fetch(`${API_BASE_URL}/speech/transcribe`, {
     method: 'POST',
     headers: await authHeaders(),

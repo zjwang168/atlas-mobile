@@ -114,6 +114,9 @@ export default function Atlas() {
         cameraKey: `atlas-bookmark-${atlasId}-${Date.now()}`,
         cameraVerticalOffset: 28,
         cameraAnimationDurationMs: 0,
+        selectedMarkerId: null,
+        markerPopup: null,
+        overlay: null,
       });
     }
     setOverlay({ kind: 'atlasDetail', atlasId });

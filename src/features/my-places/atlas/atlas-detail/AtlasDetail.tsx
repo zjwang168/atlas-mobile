@@ -177,7 +177,14 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
   const { show: showDialog } = useAppDialog();
   const { atlases, savedPlaces, atlasPlaces, atlasMapState, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setActiveSidekick, userLocation } = useHome();
   const [editing, setEditing] = useState(false);
-  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
+  // AtlasDetail stays mounted while the active Atlas changes. Pair the
+  // selection with its owner so a pin selected in one Atlas can never appear
+  // selected after another Atlas opens.
+  const [selectedPlace, setSelectedPlace] = useState<{ atlasId: string; placeId: string } | null>(null);
+  const selectedPlaceId = selectedPlace?.atlasId === atlasId ? selectedPlace.placeId : null;
+  const setSelectedPlaceId = useCallback((placeId: string | null) => {
+    setSelectedPlace(placeId && atlasId ? { atlasId, placeId } : null);
+  }, [atlasId]);
   const [routeFeature, setRouteFeature] = useState<RouteFeature | null>(null);
   const [displayedRoute, setDisplayedRoute] = useState<RouteFeature | null>(null);
   const [routeCamera, setRouteCamera] = useState<RouteCamera | null>(null);
@@ -444,6 +451,9 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
         cameraKey: `atlas-save-${atlas?.id ?? atlasId}-${Date.now()}`,
         cameraAnimationDurationMs: 0,
         routeGeoJSON: mapView.routeGeoJSON,
+        selectedMarkerId: null,
+        markerPopup: null,
+        overlay: null,
       };
       latestAtlasMapStateRef.current = nextState;
       setAtlasMapState(nextState);
@@ -466,6 +476,9 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
       cameraKey: `atlas-cancel-${atlas?.id ?? atlasId}-${Date.now()}`,
       cameraAnimationDurationMs: 0,
       routeGeoJSON: displayedRoute ?? undefined,
+      selectedMarkerId: null,
+      markerPopup: null,
+      overlay: null,
     };
     latestAtlasMapStateRef.current = nextState;
     setAtlasMapState(nextState);

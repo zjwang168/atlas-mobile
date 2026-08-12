@@ -155,6 +155,9 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
           cameraKey: `atlas-save-${atlasId}-${Date.now()}`,
           cameraVerticalOffset: 28,
           cameraAnimationDurationMs: 0,
+          selectedMarkerId: null,
+          markerPopup: null,
+          overlay: null,
         });
       }
       setBuilderVisible(false);

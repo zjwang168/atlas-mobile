@@ -286,7 +286,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         cameraScreenOffsetY={atlasMapState?.cameraScreenOffsetY}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
         routeDistanceLabels={atlasMapState?.routeDistanceLabels}
-        selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}
+        // An Atlas owns the map selection while it is active. In particular,
+        // `null` is meaningful here: it prevents a previously selected Saved
+        // Place from being carried into an Atlas as a seemingly random pin.
+        selectedMarkerId={atlasMapState ? atlasMapState.selectedMarkerId ?? null : selectedPlaceId}
         deletingMarkerId={atlasMapState?.deletingMarkerId}
         onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
         onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
