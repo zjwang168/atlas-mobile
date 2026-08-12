@@ -285,6 +285,7 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         padding={mapPadding}
         cameraScreenOffsetY={atlasMapState?.cameraScreenOffsetY}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
+        routeVariant={atlasMapState?.routeVariant}
         routeDistanceLabels={atlasMapState?.routeDistanceLabels}
         // An Atlas owns the map selection while it is active. In particular,
         // `null` is meaningful here: it prevents a previously selected Saved

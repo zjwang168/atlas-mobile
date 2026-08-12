@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.langgraph.chat_agent import generate_atlas_welcome, generate_import_welcome, run_chat, stream_chat
+from backend.langgraph.chat_agent import _system_prompt, generate_atlas_welcome, generate_import_welcome, run_chat, stream_chat
 from backend.langchain.runtime import _base_url_for_provider
 from backend.langchain.runtime import get_chat_model
 from backend.services.conversation_manager import conversation_manager
@@ -81,6 +81,13 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         kwargs = chat_openai.call_args.kwargs
         self.assertTrue(kwargs["use_responses_api"])
         self.assertEqual(kwargs["model_kwargs"], {"tools": [{"type": "web_search"}]})
+
+    async def test_commute_prompt_only_requests_the_missing_destination_anchor(self):
+        prompt = _system_prompt(self.session)
+
+        self.assertIn("ask only for the Office/Company location", prompt)
+        self.assertIn("Do not also ask for\n  Home or a separate origin", prompt)
+        self.assertIn("ask only for Home when it is missing", prompt)
 
     async def test_chat_does_not_run_memory_maintenance(self):
         model = _FakeChatModel()

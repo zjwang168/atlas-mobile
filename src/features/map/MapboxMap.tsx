@@ -47,6 +47,7 @@ interface MapboxMapProps {
   style?: ViewStyle;
   onMarkerPress?: (marker: MapMarker) => void;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeVariant?: 'commute';
   /** Static-size labels projected onto the current map viewport. */
   routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   routeMarkers?: MapMarker[];
@@ -417,6 +418,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   style,
   onMarkerPress,
   routeGeoJSON,
+  routeVariant,
   routeDistanceLabels,
   routeMarkers,
   padding,
@@ -694,23 +696,25 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             <MapboxGL.LineLayer
               id="routeCasing"
               style={{
-                lineColor: '#C9693C',
-                lineWidth: 13,
-                lineOpacity: 0.12,
+                lineColor: routeVariant === 'commute' ? '#167D78' : '#C9693C',
+                lineWidth: routeVariant === 'commute' ? 9 : 13,
+                lineOpacity: routeVariant === 'commute' ? 0.16 : 0.12,
                 lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
+                ...(routeVariant === 'commute' ? { lineDasharray: [1.4, 1.2] } : {}),
               }}
             />
             <MapboxGL.LineLayer
               id="routeLine"
               style={{
-                lineColor: '#F29A69',
-                lineWidth: 8,
+                lineColor: routeVariant === 'commute' ? '#167D78' : '#F29A69',
+                lineWidth: routeVariant === 'commute' ? 5 : 8,
                 lineOpacity: 0.9,
                 lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
+                ...(routeVariant === 'commute' ? { lineDasharray: [1.4, 1.2] } : {}),
               }}
             />
           </MapboxGL.ShapeSource>

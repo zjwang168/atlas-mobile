@@ -3,7 +3,7 @@ import type { AtlasPlace } from '@/types/place';
 import { ATLAS_PLACES_SELECT_COLUMNS, ATLAS_SELECT_COLUMNS } from '../atlas/atlasShared';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
-import type { SavedPlace } from '../place/placeService';
+import type { SavedPlace, SpecialPlaceRole } from '../place/placeService';
 import { supabase } from '../supabase/supabaseClient';
 import { createLocalId, isLocalId, LOCAL_CACHE_KEYS } from './cacheKeys';
 import { getCached, setCached, updateCached } from './localStore';
@@ -21,6 +21,16 @@ type SavePlacesWrite = {
   places: ParsedPlace[];
   localRows: SavedPlace[];
   source?: { url?: string; region?: string };
+};
+
+type SaveSpecialPlaceWrite = {
+  kind: 'saveSpecialPlace';
+  id: string;
+  attempts: number;
+  createdAt: string;
+  role: SpecialPlaceRole;
+  localRow: SavedPlace;
+  replacingPlaceId?: string;
 };
 
 type DeletePlaceWrite = {
@@ -75,8 +85,9 @@ type DeleteAtlasWrite = {
   atlasId: string;
 };
 
-export type QueuedWrite = SavePlacesWrite | DeletePlaceWrite | UpdateNoteWrite | CreateAtlasWrite | AddAtlasPlacesWrite | RemoveAtlasPlaceWrite | DeleteAtlasWrite;
+export type QueuedWrite = SavePlacesWrite | SaveSpecialPlaceWrite | DeletePlaceWrite | UpdateNoteWrite | CreateAtlasWrite | AddAtlasPlacesWrite | RemoveAtlasPlaceWrite | DeleteAtlasWrite;
 type NewQueuedWrite = Omit<SavePlacesWrite, 'id' | 'attempts' | 'createdAt'>
+  | Omit<SaveSpecialPlaceWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<DeletePlaceWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<UpdateNoteWrite, 'id' | 'attempts' | 'createdAt'>
   | Omit<CreateAtlasWrite, 'id' | 'attempts' | 'createdAt'>
@@ -214,6 +225,30 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   return saved;
 }
 
+async function saveSpecialPlaceOnline(write: SaveSpecialPlaceWrite): Promise<SavedPlace> {
+  const place = write.localRow;
+  const payload = {
+    name: place.name,
+    subtitle: truncate(place.subtitle, 255),
+    category: truncate(place.category, 100),
+    latitude: place.latitude,
+    longitude: place.longitude,
+    region: truncate(place.region, 100),
+    city: truncate(place.city, 100),
+    country: truncate(place.country, 100),
+    photo_url: truncate(place.photo_url, 1000),
+    special_role: write.role,
+  };
+  const query = write.replacingPlaceId
+    ? supabase.from('places').update(payload).eq('id', write.replacingPlaceId)
+    : supabase.from('places').insert(payload);
+  const { data, error } = await withTimeout(
+    query.select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, special_role, created_at'),
+  );
+  if (error || !data?.[0]) throw new Error(`Failed to save queued ${write.role}: ${error?.message ?? 'no row returned'}`);
+  return { ...(data[0] as SavedPlace), stableKey: makeStableKey(data[0] as SavedPlace) };
+}
+
 async function insertAtlasOnline(write: CreateAtlasWrite): Promise<Atlas> {
   const { data, error } = await withTimeout(
     supabase
@@ -305,6 +340,12 @@ async function reconcileSavedPlaces(userId: string, localRows: SavedPlace[], rem
   }));
 }
 
+async function reconcileSpecialPlace(userId: string, localRow: SavedPlace, remoteRow: SavedPlace): Promise<void> {
+  await updateCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces, (current) => (
+    (current ?? []).map((row) => (row.id === localRow.id ? remoteRow : row))
+  ));
+}
+
 async function removeCancelledLocalSave(userId: string, deleteWrite: DeletePlaceWrite, queue: QueuedWrite[]): Promise<QueuedWrite[] | null> {
   if (!isLocalId(deleteWrite.placeId)) return null;
   const saveWrite = queue.find(
@@ -369,6 +410,11 @@ async function replayWrite(userId: string, write: QueuedWrite): Promise<void> {
   if (write.kind === 'savePlaces') {
     const remoteRows = await insertPlacesOnline(write);
     await reconcileSavedPlaces(userId, write.localRows, remoteRows);
+    return;
+  }
+  if (write.kind === 'saveSpecialPlace') {
+    const remoteRow = await saveSpecialPlaceOnline(write);
+    await reconcileSpecialPlace(userId, write.localRow, remoteRow);
     return;
   }
   if (write.kind === 'updateNote') {

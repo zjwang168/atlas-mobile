@@ -70,6 +70,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       .join(' · ')
     : '';
   const mapPlaces = [...(presentation.special_places ?? []), ...presentation.places];
+  const commuteRoute = presentation.commute_route?.route;
   const markers: MapMarker[] = [
     ...(presentation.user_location ? [{
       id: 'chat-user-location',
@@ -83,7 +84,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
       latitude: place.latitude,
       longitude: place.longitude,
       title: place.role[0].toUpperCase() + place.role.slice(1),
-      tone: place.role,
+      tone: commuteRoute ? 'atlas' as const : place.role,
     })),
     ...presentation.places.map((place, index) => ({
       id: place.external_id || 'chat-place-' + index,
@@ -122,7 +123,8 @@ export default function AtlasChatResultCard({ presentation, pendingAction, onCon
               paddingLeft: 24,
             }}
             cameraKey={presentation.kind + ':' + presentation.title + ':' + presentation.places.map((place) => place.name).join('|')}
-            routeGeoJSON={presentation.route?.route}
+            routeGeoJSON={commuteRoute ?? presentation.route?.route}
+            routeVariant={commuteRoute ? 'commute' : undefined}
             style={styles.map}
             compassEnabled={false}
           />

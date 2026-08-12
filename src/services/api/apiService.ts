@@ -210,6 +210,11 @@ export type AtlasChatPresentation = {
     distance_km?: number;
     duration_minutes?: number;
   } | null;
+  commute_route?: {
+    route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+    distance_km?: number;
+    duration_minutes?: number;
+  } | null;
 };
 
 type AtlasChatStreamEvent =

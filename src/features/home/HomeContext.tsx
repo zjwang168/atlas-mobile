@@ -137,6 +137,7 @@ export type AtlasMapState = {
   selectedMarkerId?: string | null;
   deletingMarkerId?: string | null;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeVariant?: 'commute';
   routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   onMarkerPress?: (marker: MapMarker) => void;
   onMapPress?: () => void;

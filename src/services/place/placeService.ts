@@ -423,8 +423,16 @@ export async function saveSpecialPlace(
   if (!userId) throw new Error('Cannot save special places before auth is ready');
   const existing = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces) ?? [])
     .find((item) => item.special_role === role);
+  const roleName: Record<SpecialPlaceRole, string> = {
+    home: 'Home',
+    office: 'Office',
+    school: 'School',
+  };
   const payload = {
-    name: place.name,
+    // A special place is identified by its role in every My Places surface.
+    // Keep that label stable while its subtitle retains the prompt-resolved
+    // address the user explicitly confirmed.
+    name: roleName[role],
     subtitle: place.subtitle || null,
     category: place.category,
     latitude: place.latitude,
@@ -435,17 +443,57 @@ export async function saveSpecialPlace(
     photo_url: place.photo_url,
     special_role: role,
   };
-  const query = existing && !existing.id.startsWith('local-')
-    ? supabase.from('places').update(payload).eq('id', existing.id)
-    : supabase.from('places').insert(payload);
-  const { data, error } = await withTimeout(
-    query.select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, special_role, created_at'),
-    'Saving special place timed out',
-  );
-  if (error || !data?.[0]) throw new Error(`Failed to save ${role}: ${error?.message ?? 'no row returned'}`);
-  const saved = withStableKey(data[0] as SavedPlace);
-  await updateSavedPlacesCache(userId, (current) => [saved, ...current.filter((item) => item.id !== saved.id && item.special_role !== role)]);
-  return saved;
+  const localRow = withStableKey({
+    ...payload,
+    id: createLocalId(),
+    subtitle: payload.subtitle ?? '',
+    category: payload.category ?? null,
+    region: payload.region ?? null,
+    city: payload.city ?? null,
+    country: payload.country ?? null,
+    photo_url: payload.photo_url ?? null,
+    created_at: new Date().toISOString(),
+  });
+
+  // Confirmation means the place belongs to the user immediately. Network
+  // persistence is reconciled below and must never make that confirmation
+  // appear to fail in the chat UI.
+  await updateSavedPlacesCache(userId, (current) => [
+    localRow,
+    ...current.filter((item) => item.special_role !== role),
+  ]);
+
+  const replacingPlaceId = existing && !existing.id.startsWith('local-') ? existing.id : undefined;
+  void (async () => {
+    const query = replacingPlaceId
+      ? supabase.from('places').update(payload).eq('id', replacingPlaceId)
+      : supabase.from('places').insert(payload);
+    try {
+      const { data, error } = await withTimeout(
+        query.select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, special_role, created_at'),
+        'Saving special place timed out',
+      );
+      if (error || !data?.[0]) throw new Error(`Failed to save ${role}: ${error?.message ?? 'no row returned'}`);
+      const saved = withStableKey({ ...(data[0] as SavedPlace), name: roleName[role], special_role: role });
+      await updateSavedPlacesCache(userId, (current) => [
+        saved,
+        ...current.filter((item) => item.id !== localRow.id && item.special_role !== role),
+      ]);
+      recordPinHistory('saved', [saved]).catch((error) => console.warn('[placeService] special-place pin history insert failed:', error));
+    } catch (error) {
+      // Queue every failure. A server-side validation problem is still not a
+      // reason to remove an explicitly confirmed local Office/Home/School.
+      console.warn(`[placeService] ${role} saved locally; remote sync deferred:`, error);
+      await enqueueWrite(userId, {
+        kind: 'saveSpecialPlace',
+        role,
+        localRow,
+        replacingPlaceId,
+      });
+      void flushQueue(userId).catch((flushError) => console.warn('[placeService] special-place queue flush failed:', flushError));
+    }
+  })();
+  return localRow;
 }
 
 /**

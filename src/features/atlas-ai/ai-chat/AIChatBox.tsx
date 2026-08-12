@@ -968,7 +968,8 @@ export default function AIChatBox({
       latitude: chatMapOrigin[1],
       longitude: chatMapOrigin[0],
       title: 'You',
-      tone: 'focused' as const,
+      tone: 'location' as const,
+      pulsing: true,
     }] : []),
     ...(chatMapPresentation?.special_places ?? []).map((place) => ({
       id: `chat-special-${place.role}`,
@@ -976,7 +977,7 @@ export default function AIChatBox({
       longitude: place.longitude,
       title: place.role[0].toUpperCase() + place.role.slice(1),
       description: place.full_address,
-      tone: place.role,
+      tone: chatMapPresentation?.commute_route?.route ? 'atlas' as const : place.role,
       preserveToneOnSelect: true,
     })),
     ...chatMapPlaces.map((place, index) => ({
@@ -989,7 +990,7 @@ export default function AIChatBox({
       preserveToneOnSelect: chatMapPresentation?.kind !== 'atlas_draft',
       order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
     })),
-  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind, chatMapPresentation?.special_places]);
+  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.commute_route?.route, chatMapPresentation?.kind, chatMapPresentation?.special_places]);
 
   const selectedChatMapPlace = useMemo(
     () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
@@ -1066,6 +1067,7 @@ export default function AIChatBox({
     chatMapRouteRequestRef.current = requestId;
     setChatMapSelectedId(place.markerId);
     setChatMapSelectedRoute(null);
+    setChatMapOverviewRouteVisible(false);
     if (!chatMapOrigin) return;
     try {
       const result = await requestAtlasRoute([
@@ -1084,6 +1086,7 @@ export default function AIChatBox({
       return;
     }
     if (chatMapOverviewRoute) {
+      clearChatMapSelection();
       setChatMapOverviewRouteVisible(true);
       return;
     }
@@ -1107,7 +1110,7 @@ export default function AIChatBox({
     } finally {
       setChatMapRouteLoading(false);
     }
-  }, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, showDialog]);
+  }, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, clearChatMapSelection, showDialog]);
 
   const returnFromPresentationMap = useCallback(() => {
     clearChatMapSelection();
@@ -1126,6 +1129,7 @@ export default function AIChatBox({
 
   const chatMapRoute = chatMapSelectedRoute
     ?? (chatMapOverviewRouteVisible ? chatMapOverviewRoute : null);
+  const chatMapRouteVariant = chatMapSelectedRoute ? undefined : chatMapPresentation?.commute_route?.route && chatMapOverviewRouteVisible ? 'commute' as const : undefined;
   const chatMapRouteKey = useMemo(
     () => chatMapRoute ? JSON.stringify(chatMapRoute.geometry.coordinates) : 'none',
     [chatMapRoute],
@@ -1149,13 +1153,15 @@ export default function AIChatBox({
     placePopup={chatMapPopup}
     atlasItinerary={chatMapPresentation?.kind === 'atlas_draft' ? <AtlasChatMapItinerary presentation={chatMapPresentation} /> : null}
     notice={chatMapNotice}
-  />, [chatMapNotice, chatMapPopup, chatMapPresentation, closePresentationMap, insets.top, returnFromPresentationMap]);
+    routeToggle={chatMapPresentation?.commute_route?.route ? { visible: chatMapOverviewRouteVisible, loading: chatMapRouteLoading, onPress: () => { void toggleChatMapOverviewRoute(); } } : null}
+  />, [chatMapNotice, chatMapOverviewRouteVisible, chatMapPopup, chatMapPresentation, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
   const chatMapStateKey = [
     chatMapCameraKey,
     chatMapPresentation?.kind ?? 'none',
     chatMapMarkers.map((marker) => `${marker.id}:${marker.longitude.toFixed(6)}:${marker.latitude.toFixed(6)}:${marker.tone ?? 'saved'}`).join('|'),
     chatMapSelectedId ?? 'none',
     chatMapRouteKey,
+    chatMapRouteVariant ?? 'standard',
     chatMapOverviewRouteVisible ? 'overview' : 'route-hidden',
     chatMapRouteLoading ? 'route-loading' : 'route-idle',
     chatMapSaveBusy ? 'save-loading' : 'save-idle',
@@ -1178,6 +1184,7 @@ export default function AIChatBox({
       cameraKey: `chat-map-${chatMapCameraKey}`,
       cameraAnimationDurationMs: 420,
       routeGeoJSON: chatMapRoute ?? undefined,
+      routeVariant: chatMapRouteVariant,
       selectedMarkerId: chatMapSelectedId,
       onMarkerPress: (marker) => { void selectChatMapPlace(marker); },
       onMapPress: clearChatMapSelection,
@@ -1185,15 +1192,15 @@ export default function AIChatBox({
       overlay: chatMapOverlay,
       hideChrome: true,
     });
-  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
     chatMapRouteRequestRef.current += 1;
     setChatMapPresentation(presentation);
     setChatMapSelectedId(null);
     setChatMapSelectedRoute(null);
-    setChatMapOverviewRoute(presentation.route?.route ?? null);
-    setChatMapOverviewRouteVisible(false);
+    setChatMapOverviewRoute(presentation.commute_route?.route ?? presentation.route?.route ?? null);
+    setChatMapOverviewRouteVisible(Boolean(presentation.commute_route?.route));
     setChatMapRouteLoading(false);
     setChatMapCameraKey(Date.now());
     onPresentationMapOpen?.();
@@ -1260,6 +1267,16 @@ export default function AIChatBox({
           country: place.country || null,
           photo_url: place.photo_url || null,
         });
+        // Chat action confirmation is audit bookkeeping only. The local place
+        // cache has already been updated, so an unavailable audit endpoint
+        // must not turn a saved Office/Home/School into a visible failure.
+        void confirmAtlasChatAction(sessionId, action.action_id, true, {
+          saved_place_count: 1,
+        }).catch((error) => console.warn('[AIChatBox] special-place action audit failed:', error));
+        setMessages((current) => current.map((item) => (
+          item.id === messageId ? { ...item, pendingAction: null } : item
+        )));
+        return;
       }
       if (accepted && action.kind === 'delete_special_place') {
         const target = savedPlaces.find((place) => place.special_role === action.special_role);

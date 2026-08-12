@@ -308,6 +308,36 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["pending_action"]["special_role"], "home")
         self.assertEqual(result["presentation"]["special_places"][0]["role"], "home")
 
+    async def test_special_place_confirmation_keeps_the_same_turn_map_result(self):
+        restaurant = {
+            "name": "Breakfast Table", "latitude": 47.61, "longitude": -122.33,
+            "full_address": "1 Pine St", "category": "Restaurant",
+        }
+        office = {
+            "name": "Atlas Office", "latitude": 47.64, "longitude": -122.30,
+            "full_address": "100 Office Way", "category": "Address",
+        }
+        model = _ToolModel([
+            tool_call("find_verified_places", {"requirements": "Find a highly rated vegetarian breakfast burrito"}, "call-1"),
+            tool_call("propose_special_place_change", {"role": "office", "operation": "create", "place": office}, "call-2"),
+            AIMessage(content="I found an option and prepared your Office for confirmation."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.langgraph.chat_agent._research_precise_places", new=AsyncMock(return_value=[{
+                "name": "Breakfast Table", "address": "1 Pine St", "why": "Vegetarian breakfast.",
+                "rating": "4.8", "price": "", "menu_evidence": "Breakfast burrito.", "source_urls": ["https://example.com"],
+            }])),
+            patch("backend.langgraph.chat_agent._mapbox_resolve_researched_place", new=AsyncMock(return_value=restaurant)),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "My office is 100 Office Way. Find a highly rated vegetarian breakfast burrito.")
+
+        self.assertEqual(result["pending_action"]["kind"], "save_special_place")
+        self.assertEqual(result["pending_action"]["special_role"], "office")
+        self.assertEqual(result["presentation"]["places"][0]["name"], "Breakfast Table")
+        self.assertEqual(result["presentation"]["special_places"][0]["role"], "office")
+
     async def test_between_special_places_search_has_both_anchor_pins(self):
         self.session.special_places = [
             {"role": "home", "name": "Home", "latitude": 47.60, "longitude": -122.34, "full_address": "Home address"},

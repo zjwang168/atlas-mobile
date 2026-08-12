@@ -27,6 +27,9 @@ DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 NEARBY_DEFAULT_RADIUS_KM = 25
 NEARBY_MAX_RADIUS_KM = 100
 CONSTRAINED_PLACE_MAX_CANDIDATES = 5
+CONSTRAINED_PLACE_MAX_RESOLUTION_DISTANCE_KM = 50
+SIMILAR_LOCAL_RADIUS_KM = 50
+SIMILAR_PLACE_MAX_CANDIDATES = 5
 ATLAS_TRANSPORT_MODES = {
     "walk", "bike", "drive", "taxi", "bus", "coach", "subway", "train", "ferry", "flight",
 }
@@ -38,7 +41,7 @@ _PRECISE_CONSTRAINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRECISE_CONSTRAINT_CJK_TERMS = (
-    "评分", "评价", "价格", "菜单", "素食", "纯素", "早餐", "早午餐", "外带", "打包", "顺路", "通勤",
+    "评分", "评价", "价格", "菜单", "素食", "纯素", "早餐", "早午餐", "外带", "打包", "顺路", "通勤", "路上",
 )
 
 
@@ -140,6 +143,15 @@ Tool rules:
   web research to find named venues and Mapbox only to resolve those venues to
   map points. Never pass the whole descriptive phrase to Mapbox or claim that
   an unverified constraint is true.
+- For "places similar to X" requests, call find_similar_places. Do not use
+  saved places to identify X. First classify X: restaurants, cafes, bars,
+  shops, and other local venues use reference_kind="local_venue" and default
+  to 50 km from the current device location. Museums,
+  landmarks, architecture, natural attractions, and other destination places
+  use reference_kind="destination" and default to global results. When the
+  user explicitly gives a city/region, pass it as area. When they explicitly
+  ask for worldwide results, pass scope="global". If X is ambiguous, ask a
+  concise clarification instead of guessing its category or scope.
 - For pasted notes or an itinerary that the user wants added, call
   extract_pasted_places, then propose_add_places. This is only a proposal.
 - For requests for film, television, or music-video filming locations, sets,
@@ -169,6 +181,19 @@ Tool rules:
   a candidate, call resolve_special_place, then propose_special_place_change.
   That proposal is required for every create, replacement, and deletion. Never
   persist, replace, or delete a special place directly.
+- When the current user turn explicitly gives an address, place name, or map
+  point for their Home, Office/Company, or School and that role is not in
+  Saved special places, always call resolve_special_place followed by
+  propose_special_place_change. This must produce the existing confirmation
+  note with cancel and save controls, even when you also answer another
+  request in the same turn. Do not ask whether to save it in plain text.
+- For a route recommendation phrased as "from my place" / "from where I am"
+  to Office/Company, treat the origin as the current device location. If Office
+  is missing, ask only for the Office/Company location. Do not also ask for
+  Home or a separate origin. Likewise, for a route recommendation "from my
+  place" back Home, ask only for Home when it is missing. In both cases, ask
+  only for the missing special place named as the destination; do not request
+  every special place before answering.
 - For a dining or activity request "between" two saved special places with no
   live constraint, call find_places_between_special_places. For rating, price,
   menu, dietary, availability, or commute constraints, call
@@ -612,6 +637,59 @@ async def _mapbox_resolve_researched_place(
     return place
 
 
+async def _research_similar_places(
+    reference_place: str,
+    reference_kind: str,
+    area: str | None,
+    scope: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Research named analogues before resolving them to map points."""
+    model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
+    model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.0)
+    area_line = f"Limit candidates to {area}." if area else "Do not infer a city or region."
+    scope_line = (
+        "Search worldwide."
+        if scope == "global"
+        else f"Search only in {area}." if scope == "area" and area
+        else f"Search locally around the user's current location; {area_line}"
+    )
+    prompt = f"""You are a place researcher. Use live web search before answering.
+
+Find real places comparable to the reference place, based on their type,
+experience, cultural role, or cuisine. Do not use a user's saved places.
+Reference place: {reference_place}
+Reference type: {reference_kind}
+{scope_line}
+
+Return ONLY JSON with this schema:
+{{"candidates":[{{"name":"venue name","address":"specific address or city","why":"short comparison","source_urls":["https://..."]}}]}}
+
+Rules:
+- Return at most {limit} candidates.
+- Every candidate needs a specific name and at least one source URL.
+- Do not invent venues, locations, or source URLs.
+"""
+    response = await model.ainvoke([SystemMessage(content=prompt)])
+    payload = _parse_json_object(_content_to_text(getattr(response, "content", response)))
+    raw_candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    candidates: list[dict[str, Any]] = []
+    for raw in raw_candidates[:limit]:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        urls = [str(url).strip() for url in raw.get("source_urls") or [] if str(url).strip().startswith(("http://", "https://"))]
+        if not name or not urls:
+            continue
+        candidates.append({
+            "name": name[:200],
+            "address": str(raw.get("address") or "").strip()[:300],
+            "why": str(raw.get("why") or "").strip()[:500],
+            "source_urls": urls[:3],
+        })
+    return candidates
+
+
 def _commute_anchors(session: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
     roles = {
         str(item.get("role") or "").lower(): item
@@ -626,6 +704,40 @@ def _commute_anchors(session: Any) -> tuple[dict[str, Any], dict[str, Any]] | No
     except (KeyError, TypeError, ValueError):
         return None
     return home, office
+
+
+def _commute_anchors_for_requirements(
+    session: Any,
+    requirements: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Resolve a commute's two anchors without turning "my place" into Home."""
+    text = requirements.casefold()
+    roles = {
+        str(item.get("role") or "").lower(): item
+        for item in (getattr(session, "special_places", []) or [])
+        if isinstance(item, dict)
+    }
+    current = getattr(session, "user_location", None)
+    current_place = None
+    if current and len(current) == 2:
+        try:
+            current_place = {
+                "role": "current_location", "name": "Current location",
+                "longitude": float(current[0]), "latitude": float(current[1]),
+            }
+        except (TypeError, ValueError):
+            pass
+
+    from_my_place = bool(re.search(r"\bfrom (?:my place|where i am|my location)\b|从我的地方出发|从我这(?:里|儿)?出发|从当前位置出发", text))
+    to_office = bool(re.search(r"\b(?:to|toward|going to) (?:my )?(?:office|company|work)\b|(?:去|到)(?:我的)?(?:公司|办公室|单位)", text))
+    to_home = bool(re.search(r"\b(?:to|back to|going home) (?:my )?home\b|回(?:我的)?家", text))
+    if from_my_place and current_place and to_office:
+        office = roles.get("office")
+        return (current_place, office) if office else None
+    if from_my_place and current_place and to_home:
+        home = roles.get("home")
+        return (current_place, home) if home else None
+    return _commute_anchors(session)
 
 
 async def _rank_by_commute_detour(
@@ -740,14 +852,25 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
         session.pending_chat_action = action
         state["pending_action"] = action
-        state["presentation"] = {
-            "kind": "places_map", "title": action["title"], "places": normalized,
-            "special_places": [item for item in [current] if item] if clean_operation == "delete" else [{
-                "role": clean_role, "name": normalized[0]["name"], "latitude": normalized[0]["latitude"],
-                "longitude": normalized[0]["longitude"], "full_address": normalized[0].get("full_address"),
-            }],
-            "route": None,
-        }
+        special_places = [item for item in [current] if item] if clean_operation == "delete" else [{
+            "role": clean_role, "name": normalized[0]["name"], "latitude": normalized[0]["latitude"],
+            "longitude": normalized[0]["longitude"], "full_address": normalized[0].get("full_address"),
+        }]
+        # A special-place save may be proposed alongside a restaurant/map
+        # response. Keep that response visible and attach this action's pin
+        # instead of replacing the map with a single-address preview.
+        existing_presentation = state.get("presentation")
+        if isinstance(existing_presentation, dict) and isinstance(existing_presentation.get("places"), list):
+            merged_special_places = [
+                *[item for item in existing_presentation.get("special_places", []) if item.get("role") != clean_role],
+                *special_places,
+            ]
+            state["presentation"] = {**existing_presentation, "special_places": merged_special_places}
+        else:
+            state["presentation"] = {
+                "kind": "places_map", "title": action["title"], "places": normalized,
+                "special_places": special_places, "route": None,
+            }
         return {"proposal": action}
 
     @tool
@@ -912,30 +1035,41 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         ])
         places = [place for place in resolved if place]
         if origin_tuple:
+            places = [
+                place for place in places
+                if _nearby_distance_km(origin_tuple, place) <= CONSTRAINED_PLACE_MAX_RESOLUTION_DISTANCE_KM
+            ]
             places.sort(key=lambda place: _nearby_distance_km(origin_tuple, place))
         unverified: list[str] = []
-        commute_requested = bool(re.search(r"\b(?:on my way|on the way|along (?:my |the )?route|commute)\b|顺路|通勤", requirements, re.IGNORECASE))
+        commute_requested = bool(re.search(r"\b(?:on my way|on the way|along (?:my |the )?route|commute)\b|顺路|通勤|路上", requirements, re.IGNORECASE))
         commute_route = None
         anchors: list[dict[str, Any]] = []
         if commute_requested:
-            commute = _commute_anchors(session)
+            commute = _commute_anchors_for_requirements(session, requirements)
             if not commute:
-                unverified.append("Route fit is not verified until Home and Office are saved or an origin and destination are provided.")
+                unverified.append("Route fit is not verified until the destination special place is saved or a destination is provided.")
             else:
-                home, office = commute
-                places, commute_route = await _rank_by_commute_detour(home, office, places)
-                anchors = [
-                    {"role": "home", "name": home.get("name") or "Home", "longitude": home["longitude"], "latitude": home["latitude"], "full_address": home.get("full_address")},
-                    {"role": "office", "name": office.get("name") or "Office", "longitude": office["longitude"], "latitude": office["latitude"], "full_address": office.get("full_address")},
-                ]
+                origin_anchor, destination_anchor = commute
+                places, _ = await _rank_by_commute_detour(origin_anchor, destination_anchor, places)
+                anchors = [{
+                    "role": destination_anchor.get("role") or "destination",
+                    "name": destination_anchor.get("name") or "Destination",
+                    "longitude": destination_anchor["longitude"],
+                    "latitude": destination_anchor["latitude"],
+                    "full_address": destination_anchor.get("full_address"),
+                }]
+                commute_route = await _road_route([
+                    (float(origin_anchor["longitude"]), float(origin_anchor["latitude"])),
+                    (float(destination_anchor["longitude"]), float(destination_anchor["latitude"])),
+                ], profile="driving")
         if not places:
             return {
                 "places": [],
                 "researched_candidates": researched,
                 "unverified_constraints": unverified,
-                "error": "Live research found no venue that Mapbox could resolve to a reliable map point.",
+                "error": f"Live research found no venue that Mapbox could resolve within {CONSTRAINED_PLACE_MAX_RESOLUTION_DISTANCE_KM} km of the current location.",
             }
-        route = commute_route or (await _road_route([(origin_tuple[0], origin_tuple[1]), (places[0]["longitude"], places[0]["latitude"])]) if origin_tuple else None)
+        route = await _road_route([(origin_tuple[0], origin_tuple[1]), (places[0]["longitude"], places[0]["latitude"])]) if origin_tuple else None
         session.locations = places
         session.route = route
         state["presentation"] = {
@@ -945,13 +1079,101 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             "places": places,
             "special_places": anchors,
             "route": route,
+            "commute_route": commute_route,
         }
         return {
             "places": places,
             "researched_candidates": researched,
             "route": route,
+            "commute_route": commute_route,
             "special_places": anchors,
             "unverified_constraints": unverified,
+        }
+
+    @tool
+    async def find_similar_places(
+        reference_place: str,
+        reference_kind: str,
+        area: str | None = None,
+        scope: str = "auto",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Find real places similar to a named reference, enforcing local or global scope."""
+        clean_reference = " ".join(str(reference_place or "").split())[:200]
+        kind = str(reference_kind or "").strip().lower()
+        requested_scope = str(scope or "auto").strip().lower()
+        clean_area = " ".join(str(area or "").split())[:200] or None
+        if not clean_reference:
+            return {"error": "A named reference place is required."}
+        if kind not in {"local_venue", "destination"}:
+            return {"error": "reference_kind must be local_venue or destination."}
+        if requested_scope not in {"auto", "local", "area", "global"}:
+            return {"error": "scope must be auto, local, area, or global."}
+        if requested_scope == "area" and not clean_area:
+            return {"error": "An area is required when scope is area."}
+
+        resolved_scope = (
+            "area" if requested_scope == "auto" and clean_area
+            else "local" if kind == "local_venue" and requested_scope == "auto"
+            else "global" if requested_scope == "auto"
+            else requested_scope
+        )
+        current = getattr(session, "user_location", None)
+        origin = None
+        if current and len(current) == 2:
+            origin = (float(current[0]), float(current[1]))
+        if resolved_scope == "local" and not origin:
+            return {"error": "Current device location is required for similar local venues."}
+
+        candidate_limit = max(1, min(int(limit or 3), SIMILAR_PLACE_MAX_CANDIDATES))
+        researched = await _research_similar_places(
+            clean_reference,
+            kind,
+            clean_area,
+            resolved_scope,
+            candidate_limit,
+        )
+        resolved_pairs = await asyncio.gather(*[
+            _mapbox_resolve_researched_place(candidate, origin if resolved_scope == "local" else None)
+            for candidate in researched
+        ])
+        pairs = [
+            (place, candidate)
+            for candidate, place in zip(researched, resolved_pairs)
+            if place
+        ]
+        if resolved_scope == "local" and origin:
+            pairs = [
+                (place, candidate) for place, candidate in pairs
+                if _nearby_distance_km(origin, place) <= SIMILAR_LOCAL_RADIUS_KM
+            ]
+            pairs.sort(key=lambda pair: _nearby_distance_km(origin, pair[0]))
+        places = [place for place, _ in pairs]
+        for place, candidate in pairs:
+            place["description"] = str(candidate.get("why") or place.get("description") or "")[:700]
+            place["verification_sources"] = candidate.get("source_urls") or []
+            place["requested_category"] = f"similar to {clean_reference}"
+
+        if not places:
+            scope_description = f"within {SIMILAR_LOCAL_RADIUS_KM} km" if resolved_scope == "local" else (f"in {clean_area}" if clean_area else "worldwide")
+            return {
+                "places": [], "reference_place": clean_reference, "reference_kind": kind,
+                "scope": resolved_scope, "researched_candidates": researched,
+                "error": f"No mappable places similar to {clean_reference} were found {scope_description}.",
+            }
+        session.locations = places
+        route = await _road_route([(origin[0], origin[1]), (places[0]["longitude"], places[0]["latitude"])]) if origin and resolved_scope == "local" else None
+        session.route = route
+        state["presentation"] = {
+            "kind": "nearby_map" if resolved_scope == "local" else "places_map",
+            "title": f"Places similar to {clean_reference}",
+            "user_location": {"longitude": origin[0], "latitude": origin[1]} if origin and resolved_scope == "local" else None,
+            "places": places, "route": route,
+        }
+        return {
+            "places": places, "reference_place": clean_reference, "reference_kind": kind,
+            "scope": resolved_scope, "area": clean_area, "route": route,
+            "researched_candidates": researched,
         }
 
     @tool
@@ -1056,7 +1278,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
         return {"proposal": action}
 
-    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, extract_pasted_places, research_screen_locations, propose_add_places, propose_create_atlas]
+    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, find_similar_places, extract_pasted_places, research_screen_locations, propose_add_places, propose_create_atlas]
 
 
 def _image_data_url(image_base64: str | None) -> str | None:
