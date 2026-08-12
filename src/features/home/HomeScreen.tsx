@@ -25,6 +25,7 @@ import HomeTabBar, {
 } from './HomeTabBar';
 import SearchPanel from '../search/SearchPanel';
 import AccountModal from '../auth/AccountModal';
+import ProfileSettings from '../profile/ProfileSettings';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
@@ -141,6 +142,7 @@ function HomeScreenContent({
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
   const [topMode, setTopMode] = useState<TopMode>('saved');
   const [accountOpen, setAccountOpen] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
   const [chatPresented, setChatPresented] = useState(false);
@@ -199,6 +201,7 @@ function HomeScreenContent({
     !externalOverlayVisible &&
     !chatVisible &&
     !accountOpen &&
+    !authOpen &&
     !mainSheetPaused &&
     (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
 
@@ -207,11 +210,12 @@ function HomeScreenContent({
       !externalOverlayVisible &&
       !chatVisible &&
       !accountOpen &&
+      !authOpen &&
       overlay.kind === 'none'
     ) {
       setMainSheetPaused(false);
     }
-  }, [accountOpen, chatVisible, externalOverlayVisible, overlay.kind]);
+  }, [accountOpen, authOpen, chatVisible, externalOverlayVisible, overlay.kind]);
 
   const presentAboveMainSheet = useCallback((action: () => void) => {
     if (Platform.OS !== 'ios' || !mainSheetVisible) {
@@ -536,7 +540,14 @@ function HomeScreenContent({
         />
       </Animated.View>
 
-      <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
+      <ProfileSettings
+        visible={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        onRequestSignIn={() => {
+          setAuthOpen(true);
+        }}
+      />
+      <AccountModal visible={authOpen} onClose={() => setAuthOpen(false)} />
 
       {/* Full-screen overlays — driven by HomeContext, above everything */}
 

@@ -7,6 +7,7 @@ import {
 import {
   ignoreSafeArea,
   interactiveDismissDisabled,
+  onGeometryChange,
   presentationBackground,
   presentationBackgroundInteraction,
   presentationDetents,
@@ -41,7 +42,7 @@ const DETENTS: PresentationDetent[] = [SHORT_DETENT, DEFAULT_DETENT, TALL_DETENT
 // 0 = fully transparent, 1 = solid white.
 const SHEET_BACKGROUND_OPACITY = 0.6;
 const BOTTOM_BAR_CLEARANCE = 84;
-const TAB_BAR_BOTTOM_OFFSET = 16;
+const TAB_BAR_BOTTOM_OFFSET = 24;
 
 type PlacesBottomSheetProps = {
   visible: boolean;
@@ -90,6 +91,7 @@ function PlacesBottomSheet({
   const { width, height } = useWindowDimensions();
   const [isPresented, setIsPresented] = useState(visible);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [sheetContentBottom, setSheetContentBottom] = useState(height);
 
   useEffect(() => {
     const showSub = Keyboard.addListener('keyboardWillShow', (e) => {
@@ -122,6 +124,23 @@ function PlacesBottomSheet({
     setGroupSnapState(state);
   }, [setGroupSnapState]);
 
+  const geometryModifiers = useMemo(() => [
+    onGeometryChange((frame) => {
+      const nextBottom = Math.round(frame.y + frame.height);
+      setSheetContentBottom((current) =>
+        current === nextBottom ? current : nextBottom,
+      );
+    }),
+  ], []);
+
+  const tabBarBottomOffset = Math.max(
+    -24,
+    Math.min(
+      TAB_BAR_BOTTOM_OFFSET,
+      TAB_BAR_BOTTOM_OFFSET - (height - sheetContentBottom),
+    ),
+  );
+
   const modifiers = useMemo(() => [
     ignoreSafeArea({ regions: 'container', edges: 'bottom' }),
     presentationDetents(DETENTS, {
@@ -145,8 +164,9 @@ function PlacesBottomSheet({
         onDismiss={onDismissed}
       >
         <Group modifiers={modifiers}>
-          <RNHostView>
-            <View style={styles.content}>
+          <Group modifiers={geometryModifiers}>
+            <RNHostView>
+              <View style={styles.content}>
               {activeTab === TAB_PLAN ? (
                 <MyPlan
                   bottomInset={BOTTOM_BAR_CLEARANCE}
@@ -205,19 +225,21 @@ function PlacesBottomSheet({
                 tint="systemUltraThinMaterialLight"
                 scrim={0}
               /> */}
-              {bottomBar ? (
-                <View
-                  style={[
-                    styles.bottomBarOverlay,
-                    keyboardHeight > 0 && { transform: [{ translateY: keyboardHeight }] },
-                  ]}
-                  pointerEvents="box-none"
-                >
-                  {bottomBar}
-                </View>
-              ) : null}
-            </View>
-          </RNHostView>
+                {bottomBar ? (
+                  <View
+                    style={[
+                      styles.bottomBarOverlay,
+                      { bottom: tabBarBottomOffset },
+                      keyboardHeight > 0 && { transform: [{ translateY: keyboardHeight }] },
+                    ]}
+                    pointerEvents="box-none"
+                  >
+                    {bottomBar}
+                  </View>
+                ) : null}
+              </View>
+            </RNHostView>
+          </Group>
         </Group>
       </BottomSheet>
     </Host>
@@ -250,7 +272,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: TAB_BAR_BOTTOM_OFFSET,
     height: 52,
     zIndex: 30,
   },

@@ -9,6 +9,8 @@ const MAPBOX_ACCESS_TOKEN: string =
   (process.env.MAPBOX_ACCESS_TOKEN as string) ||
   '';
 
+const MAPBOX_STYLE_URL = 'mapbox://styles/jaybdeng/cmspncq9r002d01sn0lnh26i8';
+
 export interface MapMarker {
   id: string;
   latitude: number;
@@ -173,7 +175,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     <View style={[styles.container, style]}>
       <MapboxGL.MapView
         style={{ width, height }}
-        styleURL={MapboxGL.StyleURL.Street}
+        styleURL={MAPBOX_STYLE_URL}
         compassEnabled={false}
         compassPosition={{ top: compassTop, right: 16 }}
         logoEnabled={false}
