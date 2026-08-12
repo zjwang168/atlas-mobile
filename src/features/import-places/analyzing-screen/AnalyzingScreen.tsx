@@ -35,6 +35,7 @@ type AnalyzingMode =
 type AnalyzingScreenProps = {
   url: string;
   mode?: AnalyzingMode;
+  sourceImageUri?: string;
   progressEvents?: ParseProgressEvent[];
   onDismiss: () => void;
   onCancel: () => void;
@@ -413,6 +414,7 @@ function PlaceTitle({
 export default function AnalyzingScreen({
   url,
   mode,
+  sourceImageUri,
   progressEvents = [],
   onDismiss,
   onCancel,
@@ -431,6 +433,8 @@ export default function AnalyzingScreen({
   const heroTaglineReveal = useRef(new Animated.Value(0)).current;
   const placeholderPulse = useRef(new Animated.Value(0)).current;
   const placeholderScan = useRef(new Animated.Value(0)).current;
+  const imageCaptionPulse = useRef(new Animated.Value(0)).current;
+  const imageCaptionScan = useRef(new Animated.Value(0)).current;
   const photoTransitionActive = useRef(false);
   const regionPhotoIndexRef = useRef(0);
   const frontPhotoLayerRef = useRef<0 | 1>(0);
@@ -578,6 +582,30 @@ export default function AnalyzingScreen({
     };
   }, [placeholderPulse, placeholderScan]);
 
+  useEffect(() => {
+    if (!sourceImageUri || (mode !== 'image_scan' && mode !== 'find_image_places')) return;
+    const breathing = Animated.loop(
+      Animated.sequence([
+        Animated.timing(imageCaptionPulse, { toValue: 1, duration: 1500, useNativeDriver: true }),
+        Animated.timing(imageCaptionPulse, { toValue: 0, duration: 1500, useNativeDriver: true }),
+      ]),
+    );
+    const scan = Animated.loop(
+      Animated.sequence([
+        Animated.timing(imageCaptionScan, { toValue: 1, duration: 2400, useNativeDriver: true }),
+        Animated.delay(700),
+      ]),
+    );
+    breathing.start();
+    scan.start();
+    return () => {
+      breathing.stop();
+      scan.stop();
+      imageCaptionPulse.setValue(0);
+      imageCaptionScan.setValue(0);
+    };
+  }, [imageCaptionPulse, imageCaptionScan, mode, sourceImageUri]);
+
   const entries = useMemo(() => {
     const mapped = progressEvents
       .map((event, index) => {
@@ -640,7 +668,17 @@ export default function AnalyzingScreen({
         </View>
 
         <View style={styles.hero}>
-          {regionPhotos.length ? (
+          {sourceImageUri && (mode === 'image_scan' || mode === 'find_image_places') ? (
+            <>
+              <Image source={{ uri: sourceImageUri }} style={styles.heroImage} resizeMode="cover" />
+              <View pointerEvents="none" style={styles.sourceImageScrim} />
+              <Animated.View pointerEvents="none" style={[styles.sourceImageCaption, { opacity: imageCaptionPulse.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }), transform: [{ scale: imageCaptionPulse.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) }] }]}>
+                <Animated.View style={[styles.sourceImageCaptionShine, { opacity: imageCaptionScan.interpolate({ inputRange: [0, 0.14, 0.52, 0.66, 1], outputRange: [0, 0, 0.44, 0, 0] }), transform: [{ translateX: imageCaptionScan.interpolate({ inputRange: [0, 1], outputRange: [-150, 190] }) }] }]} />
+                <Ionicons name="scan-outline" size={22} color="#FFFFFF" />
+                <Text style={styles.sourceImageCaptionText}>Reading your image</Text>
+              </Animated.View>
+            </>
+          ) : regionPhotos.length ? (
             <>
               {photoLayers.map((uri, index) => {
                 if (!uri) return null;
@@ -712,6 +750,10 @@ const styles = StyleSheet.create({
   hero: { marginTop: 28, width: '100%', aspectRatio: 1.72, borderRadius: 28, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: '#F0F2F0' },
   heroImageWrap: { ...StyleSheet.absoluteFill },
   heroImage: { ...StyleSheet.absoluteFill },
+  sourceImageScrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.22)' },
+  sourceImageCaption: { position: 'absolute', right: 16, bottom: 16, left: 16, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 42, paddingHorizontal: 12, borderRadius: 21, overflow: 'hidden', backgroundColor: 'rgba(10,16,13,0.26)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+  sourceImageCaptionShine: { position: 'absolute', top: -8, bottom: -8, width: 74, backgroundColor: 'rgba(255,255,255,0.72)', transform: [{ skewX: '-18deg' }] },
+  sourceImageCaptionText: { color: '#FFFFFF', fontSize: 16, lineHeight: 22, fontWeight: '600' },
   heroTitleFrame: { ...StyleSheet.absoluteFill, zIndex: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   heroTitle: { color: '#FFFFFF', fontSize: 34, lineHeight: 41, fontWeight: '600', letterSpacing: 0, textAlign: 'center', textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 7 },
   heroTagline: { marginTop: 6, color: 'rgba(255,255,255,0.88)', fontSize: 10, lineHeight: 13, fontWeight: '700', letterSpacing: 1.4, textAlign: 'center', textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 5 },

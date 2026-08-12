@@ -19,7 +19,7 @@ export interface MapMarker {
   description?: string;
   labelHint?: string;
   ai?: boolean;
-  tone?: 'saved' | 'focused' | 'atlas' | 'recommended' | 'location';
+  tone?: 'saved' | 'focused' | 'atlas' | 'recommended' | 'location' | 'home' | 'office' | 'school';
   /** Number shown inside a saved Atlas route pin. */
   order?: number;
   /** Animates a marker when an Atlas item is added. */
@@ -47,6 +47,7 @@ interface MapboxMapProps {
   style?: ViewStyle;
   onMarkerPress?: (marker: MapMarker) => void;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeVariant?: 'commute';
   /** Static-size labels projected onto the current map viewport. */
   routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   routeMarkers?: MapMarker[];
@@ -338,6 +339,7 @@ function MarkerDot({
   const entry = useSharedValue(entering ? 0 : 1);
   const pulse = useSharedValue(0);
   const selectedProgress = useSharedValue(selected || tone === 'focused' ? 1 : 0);
+  const specialPlace = tone === 'home' || tone === 'office' || tone === 'school';
   useEffect(() => {
     exit.value = deleting ? withTiming(1, { duration: 440 }) : withTiming(0, { duration: 160 });
   }, [deleting, exit]);
@@ -358,7 +360,7 @@ function MarkerDot({
   }, [hasActiveSelection, selected, selectedProgress, tone]);
   const animatedStyle = useAnimatedStyle(() => {
     const atlasPin = tone === 'atlas';
-    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : '#007AFF';
+    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : specialPlace ? '#1F2937' : '#007AFF';
     // Green is the explicit current-choice state in the editor. AI pins stay
     // purple only while unselected; an orange Atlas pin keeps its route color.
     const selectedColor = tone === 'atlas'
@@ -390,9 +392,12 @@ function MarkerDot({
     transform: [{ scale: pulsing ? tone === 'location' ? interpolate(pulse.value, [0, 1], [1, 1.2]) : interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
   }));
   return (
-    <View style={[styles.markerDotWrap, tone === 'atlas' && styles.markerDotWrapAtlas, tone === 'location' && styles.markerDotWrapLocation]}>
+    <View style={[styles.markerDotWrap, tone === 'atlas' && styles.markerDotWrapAtlas, tone === 'location' && styles.markerDotWrapLocation, specialPlace && styles.markerDotWrapSpecialPlace]}>
       {pulsing ? <Reanimated.View pointerEvents="none" style={[styles.markerSavingPulse, tone === 'atlas' && styles.markerSavingPulseAtlas, tone === 'location' && styles.markerLocationPulse, pulseStyle]} /> : null}
-      <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, tone === 'location' && styles.markerLocation, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
+      <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, tone === 'location' && styles.markerLocation, specialPlace && styles.markerSpecialPlace, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
+        {tone === 'home' ? <Ionicons name="home" size={16} color="#FFFFFF" /> : null}
+        {tone === 'office' ? <Ionicons name="business" size={16} color="#FFFFFF" /> : null}
+        {tone === 'school' ? <Ionicons name="school" size={16} color="#FFFFFF" /> : null}
         {order ? <Text style={styles.markerOrder}>{order}</Text> : null}
       </Reanimated.View>
     </View>
@@ -429,6 +434,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   style,
   onMarkerPress,
   routeGeoJSON,
+  routeVariant,
   routeDistanceLabels,
   routeMarkers,
   padding,
@@ -726,9 +732,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             <MapboxGL.LineLayer
               id="routeCasing"
               style={{
-                lineColor: '#C9693C',
+                lineColor: routeVariant === 'commute' ? '#8BB8F2' : '#C9693C',
                 lineWidth: 13,
-                lineOpacity: 0.12,
+                lineOpacity: routeVariant === 'commute' ? 0.24 : 0.12,
                 lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
@@ -737,9 +743,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             <MapboxGL.LineLayer
               id="routeLine"
               style={{
-                lineColor: '#F29A69',
+                lineColor: routeVariant === 'commute' ? '#6FA7EE' : '#F29A69',
                 lineWidth: 8,
-                lineOpacity: 0.9,
+                lineOpacity: routeVariant === 'commute' ? 0.9 : 0.9,
                 lineOffset: 2,
                 lineCap: 'round',
                 lineJoin: 'round',
@@ -767,14 +773,14 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               ? `${marker.id}:atlas`
               : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
-            style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation]}
+            style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
             // A focused point is an explicit user choice. Let its annotation
             // render above nearby markers so its mandatory label cannot be
             // discarded by native collision handling.
             // AI recommendations must remain discoverable even when they sit
             // near a saved point; native MarkerView collision would otherwise
             // hide the purple pin before the user can select it.
-            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'focused' || marker.tone === 'recommended' || marker.tone === 'atlas' || marker.tone === 'location'}
+            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'focused' || marker.tone === 'recommended' || marker.tone === 'atlas' || marker.tone === 'location' || marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school'}
           >
             <View
               style={styles.markerContainer}
@@ -843,6 +849,12 @@ const styles = StyleSheet.create({
     height: 30,
     zIndex: 130,
     elevation: 130,
+  },
+  markerAnnotationSpecialPlace: {
+    width: 30,
+    height: 30,
+    zIndex: 135,
+    elevation: 135,
   },
   markerDotWrapLocation: {
     width: 30,
@@ -930,6 +942,16 @@ const styles = StyleSheet.create({
   markerDotWrapAtlas: {
     width: 30,
     height: 30,
+  },
+  markerDotWrapSpecialPlace: {
+    width: 30,
+    height: 30,
+  },
+  markerSpecialPlace: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 4,
   },
   markerSavingPulse: {
     position: 'absolute',

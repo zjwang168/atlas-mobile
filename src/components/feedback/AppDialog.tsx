@@ -21,6 +21,7 @@ export type AppDialogOptions = {
   input?: {
     placeholder: string;
     initialValue?: string;
+    hint?: string;
   };
 };
 
@@ -85,19 +86,22 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
               <Text style={styles.title}>{dialog.title}</Text>
               {dialog.message ? <Text style={styles.message}>{dialog.message}</Text> : null}
               {dialog.input ? (
-                <TextInput
-                  autoFocus
-                  value={value}
-                  onChangeText={setValue}
-                  placeholder={dialog.input.placeholder}
-                  placeholderTextColor="#9B9B9B"
-                  style={styles.input}
-                  returnKeyType="done"
-                  onSubmitEditing={() => {
-                    const primary = actions.find((action) => action.variant === 'primary') ?? actions[0];
-                    handleAction(primary);
-                  }}
-                />
+                <>
+                  <TextInput
+                    autoFocus
+                    value={value}
+                    onChangeText={setValue}
+                    placeholder={dialog.input.placeholder}
+                    placeholderTextColor="#9B9B9B"
+                    style={styles.input}
+                    returnKeyType="done"
+                    onSubmitEditing={() => {
+                      const primary = actions.find((action) => action.variant === 'primary') ?? actions[0];
+                      handleAction(primary);
+                    }}
+                  />
+                  {dialog.input.hint ? <Text style={styles.inputHint}>{dialog.input.hint}</Text> : null}
+                </>
               ) : null}
               <View style={styles.actions}>
                 {actions.map((action) => {
@@ -182,6 +186,7 @@ const styles = StyleSheet.create({
     color: '#171D19',
     fontSize: 16,
   },
+  inputHint: { color: '#707A73', fontSize: 12, lineHeight: 17, marginTop: 8 },
   actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 24 },
   action: {
     minHeight: 42,

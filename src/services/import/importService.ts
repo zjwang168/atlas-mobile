@@ -34,6 +34,7 @@ export type ParsedPlace = {
   /** Optional thumbnail for the place row. */
   imageUri?: string;
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  confidence?: number | null;
   /**
    * Provider's own id for this place and which provider it is, persisted to
    * `places.external_place_id` / `external_source`. Set by place search;
@@ -74,6 +75,7 @@ type BackendLocation = {
   description?: string | null;
   category?: string | null;
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  confidence?: number | null;
   photo_url?: string | null;
 };
 
@@ -120,6 +122,7 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
     // thumbnails as `imageUri`, and placeService persists that value on save.
     imageUri: loc.photo_url || staticMapThumbnail(loc.latitude, loc.longitude) || undefined,
     sentiment: loc.sentiment ?? null,
+    confidence: loc.confidence ?? null,
   }));
 
   return {
@@ -293,7 +296,16 @@ export async function scanImagesForTextPlaces(
   imagesBase64: string[],
   onProgress?: ParseProgressHandler,
   onRequestId?: ParseRequestHandler,
+  imageUris?: string[],
 ): Promise<ParseResult> {
   const backend = (await apiScanImagesBase64(imagesBase64, onProgress, onRequestId)) as unknown as BackendParseResponse;
-  return adaptResponse(backend);
+  const result = adaptResponse(backend);
+  const fallbackUri = imageUris?.find(Boolean);
+  if (fallbackUri) {
+    result.places = result.places.map((place, index) => ({
+      ...place,
+      imageUri: imageUris?.[index] || fallbackUri,
+    }));
+  }
+  return result;
 }

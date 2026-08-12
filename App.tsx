@@ -8,7 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import './global.css';
 
-import { savePlaces } from '@/services/place/placeService';
+import { isSamePlace, savePlaces } from '@/services/place/placeService';
 import { HomeProvider, useHome } from './src/features/home/HomeContext';
 import { AppDialogProvider, useAppDialog } from './src/components/feedback/AppDialog';
 import { signInAnonymously, supabase } from './src/services/supabase/supabaseClient';
@@ -18,7 +18,7 @@ import AtlasAIHome from './src/features/atlas-ai/chat-history/AtlasAIHome';
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
 import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
-import { cancelParseRequest, createChatSession, type ParseProgressEvent } from './src/services/api/apiService';
+import { cancelParseRequest, createChatSession, createImportChatWelcome, type ParseProgressEvent } from './src/services/api/apiService';
 import {
   discoverFromAtlasQuery,
   formatParsedPlaceSubtitle,
@@ -60,6 +60,7 @@ type ImportMeta = {
   sourceUrl?: string;
   webSearch?: boolean;
   imageDataList?: string[];
+  imageUris?: string[];
 };
 
 type CompletedImport = {
@@ -231,6 +232,7 @@ type BackendLocation = {
   description?: string | null;
   category?: string | null;
   sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  confidence?: number | null;
 };
 
 function createParsedPlaceId(prefix: string, index: number): string {
@@ -248,6 +250,7 @@ function mapBackendLocationsToParsedPlaces(
     latitude: loc.latitude,
     longitude: loc.longitude,
     sentiment: loc.sentiment || null,
+    confidence: loc.confidence ?? null,
     type: loc.category || 'Place',
   }));
 }
@@ -358,6 +361,7 @@ function AppContent() {
     setSelectedPlaceCoordinate,
     setSelectedPlaceId,
     setActiveSidekick,
+    savedPlaces,
   } = useHome();
 
   const openCompletedImport = () => {
@@ -683,7 +687,7 @@ function AppContent() {
     // through the same progress channel as link imports.
     if (importMeta?.mode === 'image_scan') {
       const imageDataList = importMeta?.imageDataList || JSON.parse(importText);
-      scanImagesForTextPlaces(imageDataList, handleProgress, handleRequestId)
+      scanImagesForTextPlaces(imageDataList, handleProgress, handleRequestId, importMeta?.imageUris)
         .then((result) => {
           if (cancelled) return;
           if (!result) {
@@ -854,6 +858,12 @@ function AppContent() {
             const sourceUrl = importMeta?.sourceUrl || importText;
             const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
             const sourceType = chatSourceTypeForImport(importMeta, importText);
+            const previouslySaved = selected.filter((place) => savedPlaces.some((saved) => isSamePlace(place, saved)));
+            const newlyAdded = selected.filter((place) => !savedPlaces.some((saved) => isSamePlace(place, saved)));
+            const formatNames = (items: typeof selected) => items.map((place) => place.name).join(' and ');
+            const welcomeText = importMeta?.mode === 'find_image_places'
+              ? `Hey there! I spotted ${selected[0]?.name || 'a place'} in your image.\n\nThat’s ${selected.length} saved ${selected.length === 1 ? 'place' : 'places'} ready to go. Here’s what I can do with it:`
+              : `Done! I found ${parseResult.places.length} potential ${parseResult.places.length === 1 ? 'place' : 'places'} in what you shared and checked them against the map.\n\n${newlyAdded.length ? `You chose to save ${formatNames(newlyAdded)}${previouslySaved.length ? ' as new additions' : ''}.` : ''}${previouslySaved.length ? ` ${formatNames(previouslySaved)} ${previouslySaved.length === 1 ? 'was' : 'were'} already saved, so I folded ${previouslySaved.length === 1 ? 'it' : 'them'} in without duplicates.` : ''}${deselected.length ? ` ${formatNames(deselected)} ${deselected.length === 1 ? 'was' : 'were'} left out as you requested.` : ''}\n\nYou now have ${selected.length} ${selected.length === 1 ? 'place' : 'places'} ready. Here’s what I can do with them:`;
 
             // The cache is updated optimistically by savePlaces. Let its remote
             // write continue while the chat session is created so this action
@@ -870,8 +880,54 @@ function AppContent() {
                 tone: 'warning',
               });
             });
-            try {
-              const created = await createChatSession({
+            const createdAt = new Date().toISOString();
+            const initialImportWelcome = {
+              kind: 'places_map' as const,
+              title: `${selected.length} saved place${selected.length === 1 ? '' : 's'}`,
+              places: selected.map((place) => ({
+                name: place.name,
+                latitude: place.latitude,
+                longitude: place.longitude,
+                full_address: place.subtitle,
+                description: place.subtitle,
+                category: place.type || 'Place',
+              })),
+              route: null,
+            };
+            const temporaryId = addChatHistoryItem({
+              title: effectiveTitle,
+              sourceUrl,
+              sourceType,
+              locationCount: selected.length,
+              messageCount: 0,
+              places: selected,
+              updatedAt: createdAt,
+            });
+            setParsedPlaces(selected);
+            setActiveHistoryItem({
+              id: temporaryId,
+              title: effectiveTitle,
+              sourceUrl,
+              sourceType,
+              locationCount: selected.length,
+              messageCount: 0,
+              places: selected,
+              createdAt,
+              updatedAt: createdAt,
+              initialImportWelcome,
+              initialWelcomeText: welcomeText,
+              sessionInitializing: true,
+            });
+            setSelectedPlaceId(null);
+            setSelectedPlaceCoordinate(null);
+            setImportMeta(null);
+            parseResultRef.current = null;
+            setOverlay('none');
+            setActiveSidekick('aiChat');
+
+            void (async () => {
+              try {
+                const created = await createChatSession({
                 title: effectiveTitle,
                 source_url: sourceUrl,
                 source_type: sourceType,
@@ -886,16 +942,6 @@ function AppContent() {
                 })),
               });
               const conversationId = created.conversation_id || created.session_id;
-              const createdAt = new Date().toISOString();
-              const temporaryId = addChatHistoryItem({
-                title: effectiveTitle,
-                sourceUrl,
-                sourceType,
-                locationCount: selected.length,
-                messageCount: 0,
-                places: selected,
-                updatedAt: createdAt,
-              });
               replaceChatHistoryItem(temporaryId, {
                 id: conversationId,
                 title: effectiveTitle,
@@ -907,6 +953,10 @@ function AppContent() {
                 createdAt,
                 updatedAt: createdAt,
                 importWelcome: { deselectedPlaces: deselected },
+                initialImportWelcome,
+                initialWelcomeText: welcomeText,
+                initialSessionId: created.session_id,
+                sessionInitializing: false,
               });
               setParsedPlaces(selected);
               setActiveHistoryItem({
@@ -920,22 +970,34 @@ function AppContent() {
                 createdAt,
                 updatedAt: createdAt,
                 importWelcome: { deselectedPlaces: deselected },
+                initialImportWelcome,
+                initialWelcomeText: welcomeText,
+                initialSessionId: created.session_id,
+                sessionInitializing: false,
               });
-            } catch (e) {
-              console.error('Save before AI chat failed:', e);
+              // The visible chat already has deterministic welcome copy. Keep
+              // its equivalent backend message for history without delaying
+              // the transition out of the save screen.
+              void createImportChatWelcome(
+                created.session_id,
+                deselected.map((place) => ({
+                  name: place.name,
+                  latitude: place.latitude,
+                  longitude: place.longitude,
+                  full_address: place.subtitle,
+                  category: place.type || 'Place',
+                })),
+                welcomeText,
+              ).catch((error) => console.warn('Background import welcome save failed:', error));
+              } catch (e) {
+                console.error('Save before AI chat failed:', e);
               showDialog({
                 title: 'We couldn\'t start this chat',
                 message: 'Your places were not changed. Please try Save and Ask AI again.',
                 tone: 'warning',
               });
-              return;
-            }
-            setSelectedPlaceId(null);
-            setSelectedPlaceCoordinate(null);
-            setImportMeta(null);
-            parseResultRef.current = null;
-            setOverlay('none');
-            setActiveSidekick('aiChat');
+              }
+            })();
           }}
         />
       ) : null}
@@ -962,7 +1024,7 @@ function AppContent() {
                 setImportText(text);
                 setOverlay('analyzing');
               }}
-              onSubmitImageScan={(imagesBase64, submitMode) => {
+              onSubmitImageScan={(imagesBase64, submitMode, imageUris) => {
                 parseResultRef.current = null;
                 setActiveHistoryItem(null);
                 const isFindImagePlaces = submitMode === 'findImagePlaces';
@@ -971,6 +1033,7 @@ function AppContent() {
                   rawInput: isFindImagePlaces ? 'find_image_places' : 'image_scan',
                   title: isFindImagePlaces ? 'Find Image Place' : 'Scanned places from image',
                   imageDataList: imagesBase64,
+                  imageUris,
                 });
                 setImportText(isFindImagePlaces ? 'find_image_places' : 'image_scan');
                 setOverlay('analyzing');
@@ -994,6 +1057,7 @@ function AppContent() {
             <AnalyzingScreen
               url={importText}
               mode={importMeta?.mode}
+              sourceImageUri={importMeta?.imageUris?.[0]}
               progressEvents={parseProgressEvents}
               onDismiss={() => dismissActiveImportRef.current?.()}
               onCancel={() => cancelActiveImportRef.current?.()}

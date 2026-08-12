@@ -36,6 +36,9 @@ class Session:
     user_location: Optional[tuple[float, float]] = None
     chat_presentation: Optional[dict] = None
     pending_chat_action: Optional[dict] = None
+    # Sent by the authenticated mobile read model on each chat turn. It is
+    # request-scoped user data, never inferred or persisted as model memory.
+    special_places: list = field(default_factory=list)
 
     # Extracted data
     locations: list = field(default_factory=list)  # GeocodedLocation dicts

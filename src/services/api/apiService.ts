@@ -1,6 +1,7 @@
 import { GeocodedLocation, ParseResult, PlaceSuggestion } from '@/types/route';
 import { supabase } from '../supabase/supabaseClient';
 import Constants from 'expo-constants';
+import { File } from 'expo-file-system';
 import type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
 export type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
 
@@ -113,7 +114,7 @@ export type AtlasChatResponse = {
   }>;
   pending_action?: {
     action_id: string;
-    kind: 'save_places' | 'create_atlas';
+    kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
     title: string;
     places: Array<{
       name: string;
@@ -134,6 +135,8 @@ export type AtlasChatResponse = {
       travel_duration_minutes?: number | null;
     }>;
     planning_note?: string | null;
+    special_role?: 'home' | 'office' | 'school' | null;
+    operation?: 'create' | 'update' | 'delete' | null;
   } | null;
   presentation?: AtlasChatPresentation | null;
   locations: Array<{
@@ -164,6 +167,14 @@ export type AtlasChatResponse = {
   };
 };
 
+export type AtlasSpecialPlace = {
+  role: 'home' | 'office' | 'school';
+  name: string;
+  latitude: number;
+  longitude: number;
+  full_address?: string;
+};
+
 export type AtlasChatPresentation = {
   kind: 'nearby_map' | 'places_map' | 'atlas_draft';
   title: string;
@@ -187,7 +198,27 @@ export type AtlasChatPresentation = {
     travel_duration_minutes?: number | null;
   }>;
   planning_note?: string | null;
+  special_places?: Array<{
+    role: 'home' | 'office' | 'school';
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+  }>;
+  /** The explicitly requested end point of a commute, even while its route loads. */
+  commute_destination?: {
+    role: 'home' | 'office' | 'school';
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+  } | null;
   route?: {
+    route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+    distance_km?: number;
+    duration_minutes?: number;
+  } | null;
+  commute_route?: {
     route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
     distance_km?: number;
     duration_minutes?: number;
@@ -196,11 +227,13 @@ export type AtlasChatPresentation = {
 
 type AtlasChatStreamEvent =
   | { type: 'token'; delta: string }
+  | { type: 'status'; label: string }
   | { type: 'complete' } & AtlasChatResponse
   | { type: 'error'; message: string };
 
 type AtlasChatStreamHandlers = {
   onToken: (delta: string) => void;
+  onStatus?: (label: string) => void;
 };
 
 export type AtlasRouteResponse = {
@@ -282,7 +315,10 @@ export async function requestMapboxOptimization(coordinates: Array<[number, numb
 
 export async function transcribeAudio(uri: string): Promise<{ text: string }> {
   const form = new FormData();
-  form.append('file', { uri, name: 'atlas-note.m4a', type: 'audio/m4a' } as unknown as Blob);
+  // Expo File is a native Blob backed by the recorder's file URI. This avoids
+  // the legacy URI-object FormData path rejected by the current fetch bridge.
+  const audioFile = new File(uri);
+  form.append('file', audioFile, 'atlas-note.m4a');
   const response = await fetch(`${API_BASE_URL}/speech/transcribe`, {
     method: 'POST',
     headers: await authHeaders(),
@@ -480,9 +516,11 @@ export async function createImportChatWelcome(
     full_address?: string;
     category?: string;
   }>,
+  welcomeText?: string,
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/import-welcome`, {
     deselected_locations: deselectedLocations,
+    welcome_text: welcomeText,
   });
 }
 
@@ -499,12 +537,18 @@ export async function chatWithAtlas(
   message: string,
   conversationId?: string | null,
   userLocation?: [number, number],
+  specialPlaces?: AtlasSpecialPlace[],
+  imageBase64?: string | null,
+  imageMode?: 'identify_location' | 'read_text' | null,
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>('/chat', {
     session_id: sessionId,
     message,
     conversation_id: conversationId ?? undefined,
     user_location: userLocation,
+    special_places: specialPlaces,
+    image_base64: imageBase64 ?? undefined,
+    image_mode: imageMode ?? undefined,
   });
 }
 
@@ -518,9 +562,15 @@ export async function chatWithAtlasStream(
   handlers: AtlasChatStreamHandlers,
   conversationId?: string | null,
   userLocation?: [number, number],
+  specialPlaces?: AtlasSpecialPlace[],
+  imageBase64?: string | null,
+  imageMode?: 'identify_location' | 'read_text' | null,
+  signal?: AbortSignal,
 ): Promise<AtlasChatResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
 
   try {
     const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -535,6 +585,9 @@ export async function chatWithAtlasStream(
         message,
         conversation_id: conversationId ?? undefined,
         user_location: userLocation,
+        special_places: specialPlaces,
+        image_base64: imageBase64 ?? undefined,
+        image_mode: imageMode ?? undefined,
       }),
       signal: controller.signal,
     });
@@ -555,6 +608,8 @@ export async function chatWithAtlasStream(
       const event = JSON.parse(line) as AtlasChatStreamEvent;
       if (event.type === 'token') {
         handlers.onToken(event.delta);
+      } else if (event.type === 'status') {
+        handlers.onStatus?.(event.label);
       } else if (event.type === 'complete') {
         completed = event;
       } else {
@@ -582,6 +637,7 @@ export async function chatWithAtlasStream(
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abort);
   }
 }
 

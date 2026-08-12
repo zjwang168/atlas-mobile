@@ -21,6 +21,8 @@ import os
 import sys
 import base64
 import json
+import asyncio
+import time
 from collections import OrderedDict
 from typing import Optional
 import httpx
@@ -165,6 +167,7 @@ class CreateSessionRequest(BaseModel):
 
 class ImportWelcomeRequest(BaseModel):
     deselected_locations: list[dict] = []
+    welcome_text: Optional[str] = None
 
 
 class AtlasWelcomeRequest(BaseModel):
@@ -243,6 +246,11 @@ class ChatRequest(BaseModel):
     # The app supplies the foreground GPS coordinate as [longitude, latitude]
     # only for this request. It is never inferred by the model.
     user_location: Optional[tuple[float, float]] = None
+    special_places: list[dict] = []
+    # Request-scoped image attachment. Chat routes it through the same Add
+    # Place image tools; it is never included in the chat model prompt.
+    image_base64: Optional[str] = None
+    image_mode: Optional[str] = None
 
 
 class ChatActionConfirmationRequest(BaseModel):
@@ -810,6 +818,7 @@ async def chat(req: ChatRequest) -> dict:
             req_session_id = session.session_id
             if req.user_location:
                 session.user_location = req.user_location
+            session.special_places = req.special_places
         else:
             raise ValueError(f"Session {req.session_id} not found")
 
@@ -818,6 +827,8 @@ async def chat(req: ChatRequest) -> dict:
                 "task_type": "chat",
                 "session_id": req_session_id,
                 "text": req.message,
+                "image_base64": req.image_base64,
+                "image_mode": req.image_mode,
             },
             config={
                 "configurable": {"thread_id": req_session_id},
@@ -853,10 +864,16 @@ async def stream_chat(req: ChatRequest) -> StreamingResponse:
             raise ValueError(f"Session {req.session_id} not found")
         if req.user_location:
             session.user_location = req.user_location
+        session.special_places = req.special_places
 
         async def event_stream():
             try:
-                async for event in run_stream_chat(session.session_id, req.message):
+                async for event in run_stream_chat(
+                    session.session_id,
+                    req.message,
+                    req.image_base64,
+                    req.image_mode,
+                ):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except ValueError as error:
                 yield json.dumps({"type": "error", "message": str(error)}) + "\n"
@@ -1134,17 +1151,21 @@ async def list_sessions() -> list:
 
 @app.post("/sessions", response_model=SessionResponse)
 async def create_session(req: CreateSessionRequest) -> SessionResponse:
-    """Create an in-memory session, optionally seeded with current map places."""
+    """Create an in-memory session and persist it without delaying the app."""
     session = conversation_manager.create_session()
     session.title = req.title or ""
     session.source_url = req.source_url
     session.source_type = req.source_type
     session.locations = req.locations or []
     session.user_location = req.user_location
-    try:
-        await conversation_manager.save_conversation(session.session_id)
-    except Exception:
-        pass
+    # The session is ready for chat immediately. Supabase persistence is history
+    # bookkeeping and must not make the Save and Ask AI transition wait.
+    async def persist() -> None:
+        try:
+            await conversation_manager.save_conversation(session.session_id)
+        except Exception:
+            pass
+    asyncio.create_task(persist())
     return SessionResponse(
         session_id=session.session_id,
         conversation_id=session.conversation_id,
@@ -1174,7 +1195,7 @@ async def create_import_welcome(session_id: str, req: ImportWelcomeRequest) -> d
         if not session:
             raise ValueError(f"Session {session_id} not found")
         from backend.langgraph.chat_agent import generate_import_welcome
-        return await generate_import_welcome(session.session_id, req.deselected_locations)
+        return await generate_import_welcome(session.session_id, req.deselected_locations, req.welcome_text)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except Exception as error:
@@ -1214,7 +1235,11 @@ async def list_conversations():
 async def get_conversation(conversation_id: str) -> dict:
     """Load a full conversation."""
     try:
-        session = await conversation_manager.load_conversation(conversation_id)
+        # Fresh chats are available in memory before their background history
+        # write completes, so opening Save and Ask AI never has to wait for DB.
+        session = conversation_manager.get_session(conversation_id)
+        if not session:
+            session = await conversation_manager.load_conversation(conversation_id)
         if not session:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return {
@@ -1317,8 +1342,14 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
     if not req.image:
         raise HTTPException(status_code=400, detail="No image provided.")
 
+    started_at = time.perf_counter()
+    image_bytes = len(req.image) * 3 // 4
+    if image_bytes > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image is too large. Choose a photo under 8 MB.")
+
     try:
         progress.start(req.request_id, "Inspecting image.") if req.request_id else None
+        progress.stream_note(req.request_id, "image:upload", {"bytes": image_bytes})
         result_state = await atlas_graph_app.ainvoke(
             {
                 "task_type": "find_image_places",
@@ -1339,10 +1370,13 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
             f"🔍 Source: {loc.get('source', '?')}\n"
             f"{'='*50}\n"
         )
-        # Landmark/image identification returns the same ParseResponse shape,
-        # so enrich it before Pydantic serializes LocationItem.
-        await enrich_response_with_photos(result)
-        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        # Photo lookup can be slow or rate-limited. The result screen already
+        # has a map-thumbnail fallback, so it must not block place recognition.
+        total_ms = round((time.perf_counter() - started_at) * 1000)
+        logging.getLogger("atlas.find_image_places").info(
+            "[FindImagePlaces] completed in %sms (uploaded image: %s bytes)", total_ms, image_bytes
+        )
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", [])), "latency_ms": total_ms})
         return ParseResponse(**result)
     except ValueError as e:
         progress.fail(req.request_id, str(e))

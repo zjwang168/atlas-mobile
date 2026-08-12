@@ -39,6 +39,12 @@ export type ChatHistoryItem = {
   importWelcome?: {
     deselectedPlaces: ParsedPlace[];
   };
+  /** Immediate client-side presentation while a new import chat is persisted. */
+  initialImportWelcome?: AtlasChatPresentation;
+  initialWelcomeText?: string;
+  /** In-memory session returned before its background history write completes. */
+  initialSessionId?: string;
+  sessionInitializing?: boolean;
   /** Present only while opening a chat directly from a saved Atlas edit. */
   atlasWelcome?: { places: AtlasChatPresentation['places'] };
 };
@@ -134,6 +140,7 @@ export type AtlasMapState = {
   selectedMarkerId?: string | null;
   deletingMarkerId?: string | null;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeVariant?: 'commute';
   routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
   onMarkerPress?: (marker: MapMarker) => void;
   onMapPress?: () => void;

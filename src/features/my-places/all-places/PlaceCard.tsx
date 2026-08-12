@@ -50,6 +50,8 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
   const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const [locallySelected, setLocallySelected] = useState(false);
   const { overlay, setOverlay, selectedPlaceId } = useHome();
+  const specialRole = item.specialRole;
+  const displayName = specialRole ? specialRole[0].toUpperCase() + specialRole.slice(1) : item.name;
 
   useEffect(() => {
     if (selectedPlaceId !== item.id) setLocallySelected(false);
@@ -94,7 +96,7 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
           <View style={styles.cardTextAction}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Open details for ${item.name}`}
+              accessibilityLabel={`Open details for ${displayName}`}
               hitSlop={6}
               onPress={handleOpenDetail}
               style={({ pressed }) => [styles.titleAction, pressed && styles.titleActionPressed]}
@@ -103,7 +105,7 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
                 style={[typography.h3, styles.titleLink]}
                 numberOfLines={1}
               >
-                {item.name}
+                {displayName}
               </Text>
               <Ionicons name="chevron-forward" size={15} color="#5F6368" />
             </Pressable>
@@ -117,20 +119,28 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
               </Text>
             </TouchableOpacity>
           </View>
-          {/* Their broken-image guard now falls through to the cover rather
-              than dropping the thumbnail slot entirely. */}
-          <View style={styles.detailImageButton}>
-            {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
-              <Image
-                source={{ uri: item.thumbnailUrl }}
-                style={styles.detailImage}
-                resizeMode="cover"
-                onError={() => setFailedImageUri(item.thumbnailUrl)}
+          {specialRole ? (
+            <View style={styles.specialPlaceThumbnail}>
+              <Ionicons
+                name={specialRole === 'home' ? 'home' : specialRole === 'office' ? 'business' : 'school'}
+                size={30}
+                color="#FFFFFF"
               />
-            ) : (
-              <PlaceCover category={item.category} iconSize={24} />
-            )}
-          </View>
+            </View>
+          ) : (
+            <View style={styles.detailImageButton}>
+              {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
+                <Image
+                  source={{ uri: item.thumbnailUrl }}
+                  style={styles.detailImage}
+                  resizeMode="cover"
+                  onError={() => setFailedImageUri(item.thumbnailUrl)}
+                />
+              ) : (
+                <PlaceCover category={item.category} iconSize={24} />
+              )}
+            </View>
+          )}
         </View>
       </ReanimatedSwipeable>
       <TouchableOpacity
@@ -144,14 +154,14 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
         <Text style={styles.googleMapsText}>Maps</Text>
         <Ionicons name="open-outline" size={12} color="#34383A" />
       </TouchableOpacity>
-      {item.tags?.length ? (
+      {item.tags?.length || specialRole ? (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.tagsRow}
           contentContainerStyle={styles.tagsRowContent}
         >
-          {item.tags.map((tag) => (
+          {[...(specialRole ? [{ id: specialRole, label: 'Managed in Atlas AI' }] : []), ...(item.tags ?? [])].map((tag) => (
             <Badge
               key={tag.id}
               variant="outline"
@@ -244,6 +254,15 @@ const styles = StyleSheet.create({
   detailImage: {
     width: '100%',
     height: '100%',
+  },
+  specialPlaceThumbnail: {
+    width: 86,
+    height: 86,
+    borderRadius: 16,
+    backgroundColor: '#1F2937',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   cardShell: {
     position: 'relative',

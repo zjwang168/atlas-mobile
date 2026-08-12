@@ -1,20 +1,21 @@
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
-import { SpeakerHighIcon } from 'phosphor-react-native/src/icons/SpeakerHigh';
+import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
+import { ActivityIndicator, Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { transcribeAudio } from '@/services/api/apiService';
 
 type VoiceInputButtonProps = {
   onTranscript: (text: string) => void;
   onRecordingChange?: (recording: boolean) => void;
   disabled?: boolean;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   label?: string;
   onShortPress?: () => void;
+  onError?: (message: string) => void;
 };
 
 /** Hold-to-talk recorder used anywhere Atlas accepts text. */
-export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress }: VoiceInputButtonProps) {
+export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError }: VoiceInputButtonProps) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -28,12 +29,21 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
   const start = useCallback(async () => {
     if (disabled || processing || recording) return;
     const permission = await AudioModule.requestRecordingPermissionsAsync();
-    if (!permission.granted) return;
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    setActive(true);
-  }, [disabled, processing, recorder, recording, setActive]);
+    if (!permission.granted) {
+      onError?.('Microphone access is required to transcribe your voice.');
+      return;
+    }
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setActive(true);
+    } catch (error) {
+      console.warn('[VoiceInputButton] could not start recording', error);
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
+      onError?.('We could not access a microphone. Check the Simulator audio input and try again.');
+    }
+  }, [disabled, onError, processing, recorder, recording, setActive]);
 
   const stop = useCallback(async () => {
     if (!recording) return;
@@ -47,11 +57,12 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       }
     } catch (error) {
       console.warn('[VoiceInputButton] transcription failed', error);
+      onError?.('We could not transcribe that recording. Please try again.');
     } finally {
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
       setProcessing(false);
     }
-  }, [onTranscript, recorder, recording, setActive]);
+  }, [onError, onTranscript, recorder, recording, setActive]);
 
   useEffect(() => () => {
     if (holdTimer.current) clearTimeout(holdTimer.current);
@@ -64,7 +75,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       accessibilityState={{ disabled: Boolean(disabled || processing), selected: recording }}
       disabled={disabled || processing}
       onPressIn={() => {
-        if (label && onShortPress) {
+        if (onShortPress) {
           holdTimer.current = setTimeout(() => { holdTimer.current = null; start(); }, 360);
         } else start();
       }}
@@ -75,16 +86,28 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
           onShortPress?.();
         } else stop();
       }}
-      style={[styles.button, recording && styles.recording, style]}
+      style={[styles.button, style, recording && styles.recording]}
     >
-      {processing ? <ActivityIndicator size="small" color="#007AFF" /> : label ? <Text style={[styles.label, recording && styles.labelRecording]}>{label}</Text> : <SpeakerHighIcon size={22} weight="fill" color={recording ? '#FFFFFF' : '#202024'} />}
+      {processing ? (
+        <View style={styles.statusRow}>
+          <ActivityIndicator size="small" color="#0C8149" />
+          {label ? <Text numberOfLines={1} style={styles.label}>Transcribing</Text> : null}
+        </View>
+      ) : label ? (
+        <View style={styles.labelRow}>
+          <WaveformIcon size={18} weight="bold" color={recording ? '#FFFFFF' : '#0C8149'} />
+          <Text numberOfLines={1} style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Release to send' : label}</Text>
+        </View>
+      ) : <WaveformIcon size={22} weight="bold" color={recording ? '#FFFFFF' : '#202024'} />}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   button: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  recording: { backgroundColor: '#007AFF' },
-  label: { color: '#007AFF', fontSize: 12, fontWeight: '600' },
+  recording: { backgroundColor: '#0C8149', borderColor: '#0C8149' },
+  labelRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  statusRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  label: { flexShrink: 1, color: '#0C8149', fontSize: 13, fontWeight: '700', letterSpacing: 0 },
   labelRecording: { color: '#FFFFFF' },
 });

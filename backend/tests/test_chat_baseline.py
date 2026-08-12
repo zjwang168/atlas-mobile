@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.langgraph.chat_agent import generate_atlas_welcome, generate_import_welcome, run_chat, stream_chat
+from backend.langgraph.chat_agent import _system_prompt, generate_atlas_welcome, generate_import_welcome, run_chat, stream_chat
 from backend.langchain.runtime import _base_url_for_provider
 from backend.langchain.runtime import get_chat_model
 from backend.services.conversation_manager import conversation_manager
@@ -27,6 +27,25 @@ class _StreamingFakeChatModel:
         self.calls.append(messages)
         yield AIMessage(content="A streamed ")
         yield AIMessage(content="answer.")
+
+
+class _StatusFakeChatModel:
+    def __init__(self):
+        self.responses = iter([
+            AIMessage(content="", tool_calls=[{
+                "name": "web_search",
+                "args": {"query": "private query that must not reach the UI"},
+                "id": "status-call",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="A researched answer."),
+        ])
+
+    def bind_tools(self, _tools):
+        return self
+
+    async def ainvoke(self, _messages):
+        return next(self.responses)
 
 
 class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
@@ -82,6 +101,13 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(kwargs["use_responses_api"])
         self.assertEqual(kwargs["model_kwargs"], {"tools": [{"type": "web_search"}]})
 
+    async def test_commute_prompt_only_requests_the_missing_destination_anchor(self):
+        prompt = _system_prompt(self.session)
+
+        self.assertIn("ask only for the Office/Company location", prompt)
+        self.assertIn("Do not also ask for\n  Home or a separate origin", prompt)
+        self.assertIn("ask only for Home when it is missing", prompt)
+
     async def test_chat_does_not_run_memory_maintenance(self):
         model = _FakeChatModel()
         with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
@@ -103,6 +129,20 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.messages[-1]["content"], "A streamed answer.")
         self.assertEqual(len(model.calls), 1)
         save.assert_awaited_once()
+
+    async def test_chat_stream_exposes_only_safe_agent_statuses(self):
+        model = _StatusFakeChatModel()
+        with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
+             patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")):
+            events = [event async for event in stream_chat("baseline-test-session", "Research this place.")]
+
+        labels = [event["label"] for event in events if event["type"] == "status"]
+        self.assertEqual(labels, [
+            "Understanding your request",
+            "Researching current information",
+            "Preparing your response",
+        ])
+        self.assertNotIn("private query that must not reach the UI", " ".join(labels))
 
     async def test_import_welcome_is_assistant_first_and_maps_only_saved_selection(self):
         self.session.messages = []

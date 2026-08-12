@@ -49,8 +49,9 @@ const toMapMarkersFromSaved = (places: SavedPlace[]): MapMarker[] =>
     id: p.id,
     latitude: p.latitude,
     longitude: p.longitude,
-    title: p.name,
+    title: p.special_role ? p.special_role[0].toUpperCase() + p.special_role.slice(1) : p.name,
     description: p.subtitle,
+    tone: p.special_role ?? 'saved',
   }));
 
 // ---- Root export — HomeProvider is now in App.tsx ----
@@ -206,10 +207,10 @@ function HomeScreenContent({
       setChatMapOpen(false);
       return;
     }
-    // Let the selector travel from My Places to Chat before the chat surface
-    // covers the tab bar, so opening AI feels like one continuous transition.
+    // Import handoffs already animate their own result sheet away. Showing the
+    // chat surface in the next frame prevents an intermediate My Places frame.
     setActiveTab(TAB_CHAT);
-    const timeoutId = setTimeout(() => setChatPresentationVisible(true), 280);
+    const timeoutId = setTimeout(() => setChatPresentationVisible(true), 16);
     return () => clearTimeout(timeoutId);
   }, [chatRequested]);
 
@@ -401,8 +402,12 @@ function HomeScreenContent({
         padding={mapPadding}
         cameraScreenOffsetY={atlasMapState?.cameraScreenOffsetY}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
+        routeVariant={atlasMapState?.routeVariant}
         routeDistanceLabels={atlasMapState?.routeDistanceLabels}
-        selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}
+        // An Atlas owns the map selection while it is active. In particular,
+        // `null` is meaningful here: it prevents a previously selected Saved
+        // Place from being carried into an Atlas as a seemingly random pin.
+        selectedMarkerId={atlasMapState ? atlasMapState.selectedMarkerId ?? null : selectedPlaceId}
         deletingMarkerId={atlasMapState?.deletingMarkerId}
         onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
         onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
@@ -512,13 +517,31 @@ function HomeScreenContent({
           setActiveSidekick('none');
           animateToTab(TAB_PLACES);
         }}
-        onOpenHistory={onOpenChatHistory}
-        onNewChat={handleNewChat}
+        initialPrompt={null}
+        onOpenHistory={() => {
+          // Chat history is mounted by AppContent, outside this screen. The
+          // full-screen chat surface has a higher local z-index, so leave it
+          // before opening history instead of rendering the sheet beneath it.
+          setChatMapOpen(false);
+          setChatPresentationVisible(false);
+          setStandaloneChatVisible(false);
+          setActiveHistoryItem(null);
+          setActiveSidekick('none');
+          onOpenChatHistory?.();
+        }}
         showLanding={standaloneChatVisible}
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatPresented}
-        conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
+        conversationId={
+          standaloneChatVisible
+            ? null
+            : (activeHistoryItem?.sessionInitializing ? null : (activeHistoryItem?.id ?? null))
+        }
         importWelcome={standaloneChatVisible ? null : (activeHistoryItem?.importWelcome ?? null)}
+        initialImportWelcome={standaloneChatVisible ? null : (activeHistoryItem?.initialImportWelcome ?? null)}
+        initialWelcomeText={standaloneChatVisible ? null : (activeHistoryItem?.initialWelcomeText ?? null)}
+        initialSessionId={standaloneChatVisible ? null : (activeHistoryItem?.initialSessionId ?? null)}
+        sessionInitializing={standaloneChatVisible ? false : Boolean(activeHistoryItem?.sessionInitializing)}
         atlasWelcome={standaloneChatVisible ? null : (activeHistoryItem?.atlasWelcome ?? null)}
         onPresentationMapOpen={() => setChatMapOpen(true)}
         onPresentationMapReturn={() => setChatMapOpen(false)}

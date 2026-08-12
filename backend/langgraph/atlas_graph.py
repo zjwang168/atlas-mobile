@@ -31,6 +31,8 @@ class AtlasState(TypedDict, total=False):
     url: str | None
     text: str | None
     image: str | None
+    image_base64: str | None
+    image_mode: str | None
     title: str | None
     web_search: bool
     query: str | None
@@ -182,7 +184,12 @@ async def _atlas_ai_discover(state: AtlasState) -> AtlasState:
 
 async def _chat(state: AtlasState) -> AtlasState:
     from backend.langgraph.chat_agent import run_chat
-    result = await run_chat(state.get("session_id", "") or "", state.get("text", "") or "")
+    result = await run_chat(
+        state.get("session_id", "") or "",
+        state.get("text", "") or "",
+        state.get("image_base64"),
+        state.get("image_mode"),
+    )
     state["result"] = result
     return state
 

@@ -5,6 +5,7 @@ import {
 } from 'expo-glass-effect';
 import { BlurView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Icon } from 'phosphor-react-native';
 import { ArrowUpIcon } from 'phosphor-react-native/src/icons/ArrowUp';
@@ -12,15 +13,15 @@ import { ClockIcon } from 'phosphor-react-native/src/icons/Clock';
 import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
 import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
-import { PencilSimpleLineIcon } from 'phosphor-react-native/src/icons/PencilSimpleLine';
-import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { KeyboardIcon } from 'phosphor-react-native/src/icons/Keyboard';
 import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
 import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
 import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
+import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
+import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated as NativeAnimated,
   FlatList,
   Image,
@@ -34,6 +35,9 @@ import {
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Animated, {
+  FadeIn,
+  FadeInUp,
+  FadeOut,
   LinearTransition,
   SlideInDown,
   useReducedMotion,
@@ -55,13 +59,14 @@ import {
   createImportChatWelcome,
   createAtlasChatWelcome,
   fetchConversation,
+  getPlacePhoto,
   requestAtlasRoute,
   type AtlasChatPresentation,
 } from '@/services/api/apiService';
 import { addAtlasOwnedPlaces, queueAtlasPlacePhotoBackfill } from '@/services/atlas/atlasPlacesService';
 import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas } from '@/services/atlas/atlasService';
-import { isSamePlace, queueSavedPlacePhotoBackfill, savePlaces } from '@/services/place/placeService';
+import { deletePlace, isSamePlace, queueSavedPlacePhotoBackfill, savePlaces, saveSpecialPlace } from '@/services/place/placeService';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
 
@@ -98,32 +103,180 @@ const ATLAS_STARTER_PROMPTS = [
   'Build a day-by-day schedule for this Atlas',
   'What should I add near one of these stops?',
 ] as const;
+const CHAT_PLACE_PHOTO_CACHE = new Map<string, string | null>();
+const CHAT_PLACE_PHOTO_REQUESTS = new Map<string, Promise<string | null>>();
+const CHAT_PLACE_PHOTO_CONCURRENCY = 2;
+let activeChatPlacePhotoRequests = 0;
+const queuedChatPlacePhotoRequests: Array<() => void> = [];
+const IMAGE_TEXT_REQUEST_RE = /\b(?:read|extract|recognize|recognise|scan|ocr) (?:the )?(?:text|words|writing)|(?:图片|图像|照片).{0,8}(?:文字|读字|识别文字)|(?:识别|读取).{0,8}(?:图片|图像|照片).{0,8}(?:文字|文本)/i;
 
 type Message = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  imageUri?: string | null;
   streaming?: boolean;
   thinkingStartedAt?: number;
   thoughtDurationSeconds?: number;
+  thoughtText?: string;
+  agentStatus?: string;
   presentation?: AtlasChatPresentation | null;
   starterPrompts?: readonly string[];
   pendingAction?: {
     action_id: string;
-    kind: 'save_places' | 'create_atlas';
+    kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
     title: string;
     places: AtlasChatPresentation['places'];
     planning_note?: string | null;
+    special_role?: 'home' | 'office' | 'school' | null;
+    operation?: 'create' | 'update' | 'delete' | null;
+  } | null;
+  completedAction?: {
+    kind: 'save_special_place';
+    special_role: 'home' | 'office' | 'school';
+    placeName: string;
   } | null;
 };
 
 type MessageFeedback = 'up' | 'down';
+
+type ChatPresentationPlace = AtlasChatPresentation['places'][number];
+
+function currentLocationCommuteRole(text: string): 'home' | 'office' | 'school' | null {
+  const fromCurrent = /\bfrom (?:my place|where i am|my location)\b|从我的地方(?:出发)?|从我这(?:里|儿)?出发|从当前位置出发/i.test(text);
+  if (!fromCurrent) return null;
+  if (/\b(?:to|toward|going to) (?:my )?(?:office|company|work)\b|(?:去|到)(?:我的)?(?:公司|办公室|单位)/i.test(text)) return 'office';
+  if (/\b(?:to|back to|going home) (?:my )?home\b|回(?:我的)?家/i.test(text)) return 'home';
+  if (/\b(?:to|toward|going to) (?:my )?(?:school|campus|university)\b|(?:去|到)(?:我的)?(?:学校|校园|大学)/i.test(text)) return 'school';
+  return null;
+}
+
+function normalizeCommutePresentation(
+  presentation: AtlasChatPresentation | null | undefined,
+  pendingAction: Message['pendingAction'],
+  conversationText: string,
+  userLocation: [number, number] | null | undefined,
+): AtlasChatPresentation | null | undefined {
+  if (!presentation) return presentation;
+  const userTurns = conversationText.split('\n').filter(Boolean);
+  const currentTurnRole = currentLocationCommuteRole(userTurns.at(-1) ?? '');
+  const contextualRole = pendingAction?.kind === 'save_special_place'
+    ? currentLocationCommuteRole(userTurns.slice(-3).join('\n'))
+    : null;
+  const role = currentTurnRole
+    ?? (contextualRole === pendingAction?.special_role ? contextualRole : null);
+  if (!role) return presentation;
+  const actionPlace = pendingAction?.kind === 'save_special_place'
+    && pendingAction.special_role === role
+    ? pendingAction.places[0]
+    : null;
+  const existingDestination = presentation.commute_destination
+    ?? presentation.special_places?.find((place) => place.role === role);
+  const source = actionPlace ?? existingDestination;
+  if (!source) return presentation;
+  const destination = {
+    role,
+    name: source.name || role[0].toUpperCase() + role.slice(1),
+    latitude: source.latitude,
+    longitude: source.longitude,
+    full_address: source.full_address,
+  };
+  return {
+    ...presentation,
+    user_location: presentation.user_location ?? (userLocation ? {
+      longitude: userLocation[0],
+      latitude: userLocation[1],
+    } : undefined),
+    special_places: [
+      ...(presentation.special_places ?? []).filter((place) => place.role !== role),
+      destination,
+    ],
+    commute_destination: destination,
+  };
+}
+
+function limitChatPlacePhotoRequest<T>(work: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activeChatPlacePhotoRequests += 1;
+      void work()
+        .then(resolve, reject)
+        .finally(() => {
+          activeChatPlacePhotoRequests -= 1;
+          queuedChatPlacePhotoRequests.shift()?.();
+        });
+    };
+    if (activeChatPlacePhotoRequests < CHAT_PLACE_PHOTO_CONCURRENCY) run();
+    else queuedChatPlacePhotoRequests.push(run);
+  });
+}
+
+function chatPlacePhotoKey(place: Pick<ChatPresentationPlace, 'name' | 'latitude' | 'longitude'>): string {
+  return `${place.name.trim().toLocaleLowerCase()}:${place.latitude.toFixed(4)}:${place.longitude.toFixed(4)}`;
+}
+
+async function fetchChatPlacePhoto(place: ChatPresentationPlace): Promise<string | null> {
+  const key = chatPlacePhotoKey(place);
+  if (CHAT_PLACE_PHOTO_CACHE.has(key)) return CHAT_PLACE_PHOTO_CACHE.get(key) ?? null;
+  const existingRequest = CHAT_PLACE_PHOTO_REQUESTS.get(key);
+  if (existingRequest) return existingRequest;
+  const request = limitChatPlacePhotoRequest(() => getPlacePhoto(place.name))
+    .then((response) => response.photo_url || null)
+    .catch((error) => {
+      console.warn('[AIChatBox] map card photo lookup failed:', error);
+      return null;
+    })
+    .then((photoUrl) => {
+      CHAT_PLACE_PHOTO_CACHE.set(key, photoUrl);
+      CHAT_PLACE_PHOTO_REQUESTS.delete(key);
+      return photoUrl;
+    });
+  CHAT_PLACE_PHOTO_REQUESTS.set(key, request);
+  return request;
+}
+
+function applyChatPlacePhoto(
+  presentation: AtlasChatPresentation,
+  key: string,
+  photoUrl: string,
+): AtlasChatPresentation {
+  let changed = false;
+  const places = presentation.places.map((place) => {
+    if (place.photo_url || chatPlacePhotoKey(place) !== key) return place;
+    changed = true;
+    return { ...place, photo_url: photoUrl };
+  });
+  return changed ? { ...presentation, places } : presentation;
+}
 
 function stripActionMarkers(text: string): string {
   return text
     .replace(/\[\[PLACE_ACTION_CARD:[\s\S]*?\]\]/g, '')
     .replace(/\[\[CONFIRM_ADD_PLACES:[\s\S]*?\]\]/g, '')
     .trim();
+}
+
+function splitThoughtMarkup(text: string): { response: string; thoughts: string } {
+  let response = '';
+  let thoughts = '';
+  let remaining = text;
+  while (remaining) {
+    const start = remaining.indexOf('<think>');
+    if (start < 0) {
+      response += remaining;
+      break;
+    }
+    response += remaining.slice(0, start);
+    const afterStart = remaining.slice(start + '<think>'.length);
+    const end = afterStart.indexOf('</think>');
+    if (end < 0) {
+      thoughts += afterStart;
+      break;
+    }
+    thoughts += afterStart.slice(0, end);
+    remaining = afterStart.slice(end + '</think>'.length);
+  }
+  return { response: response.trim(), thoughts: thoughts.trim() };
 }
 
 function normalizeAssistantText(text: string): string {
@@ -162,9 +315,26 @@ function parseStoredToolResults(value: unknown): Array<Record<string, unknown>> 
   }
 }
 
-function restorePresentationFromToolResults(value: unknown): AtlasChatPresentation | null {
+function restorePresentationFromToolResults(
+  value: unknown,
+  conversationText = '',
+  userLocation?: [number, number] | null,
+): AtlasChatPresentation | null {
   const toolResults = parseStoredToolResults(value);
+  let specialAction: Message['pendingAction'] = null;
 
+  for (const toolResult of toolResults) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const proposal = (result as Record<string, unknown>).proposal;
+    if (!proposal || typeof proposal !== 'object') continue;
+    const candidate = proposal as Message['pendingAction'];
+    if (candidate?.kind === 'save_special_place' && Array.isArray(candidate.places)) {
+      specialAction = candidate;
+    }
+  }
+
+  // New messages persist this final presentation after every tool has run.
   for (const toolResult of [...toolResults].reverse()) {
     const result = toolResult.result;
     if (!result || typeof result !== 'object') continue;
@@ -174,6 +344,61 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
       const candidate = presentation as AtlasChatPresentation;
       if (Array.isArray(candidate.places) && typeof candidate.kind === 'string') return candidate;
     }
+  }
+
+  // Older messages only persisted individual tool outputs. Prefer an actual
+  // search result over the save proposal, then merge its special destination.
+  for (const toolResult of [...toolResults].reverse()) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const data = result as Record<string, unknown>;
+    if (!Array.isArray(data.places)) continue;
+    let candidate: AtlasChatPresentation | null = null;
+    if (toolResult.name === 'find_verified_places') {
+      candidate = {
+        kind: 'nearby_map',
+        title: 'Live-verified nearby places',
+        user_location: userLocation ? { longitude: userLocation[0], latitude: userLocation[1] } : undefined,
+        places: data.places as AtlasChatPresentation['places'],
+        special_places: (data.special_places as AtlasChatPresentation['special_places']) ?? [],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+        commute_route: (data.commute_route as AtlasChatPresentation['commute_route']) ?? null,
+      };
+    } else if (toolResult.name === 'find_nearby_places') {
+      const query = typeof data.query === 'string' ? data.query : 'places';
+      candidate = {
+        kind: 'nearby_map',
+        title: `Nearby ${query}`,
+        user_location: userLocation ? { longitude: userLocation[0], latitude: userLocation[1] } : undefined,
+        places: data.places as AtlasChatPresentation['places'],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    } else if (toolResult.name === 'find_places_between_special_places') {
+      candidate = {
+        kind: 'places_map',
+        title: 'Places along your route',
+        user_location: userLocation ? { longitude: userLocation[0], latitude: userLocation[1] } : undefined,
+        places: data.places as AtlasChatPresentation['places'],
+        special_places: (data.special_places as AtlasChatPresentation['special_places']) ?? [],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    } else if (toolResult.name === 'extract_pasted_places') {
+      candidate = {
+        kind: 'places_map',
+        title: typeof data.title === 'string' ? data.title : 'Places from your text',
+        places: data.places as AtlasChatPresentation['places'],
+        route: (data.route as AtlasChatPresentation['route']) ?? null,
+      };
+    }
+    if (candidate) {
+      return normalizeCommutePresentation(candidate, specialAction, conversationText, userLocation) ?? null;
+    }
+  }
+
+  for (const toolResult of [...toolResults].reverse()) {
+    const result = toolResult.result;
+    if (!result || typeof result !== 'object') continue;
+    const data = result as Record<string, unknown>;
     const proposal = data.proposal;
     if (proposal && typeof proposal === 'object') {
       const action = proposal as Record<string, unknown>;
@@ -187,53 +412,18 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
         };
       }
     }
-
-    if (!Array.isArray(data.places)) continue;
-    if (toolResult.name === 'find_nearby_places') {
-      const query = typeof data.query === 'string' ? data.query : 'places';
-      return {
-        kind: 'nearby_map',
-        title: `Nearby ${query}`,
-        places: data.places as AtlasChatPresentation['places'],
-        route: (data.route as AtlasChatPresentation['route']) ?? null,
-      };
-    }
-    if (toolResult.name === 'extract_pasted_places') {
-      return {
-        kind: 'places_map',
-        title: typeof data.title === 'string' ? data.title : 'Places from your text',
-        places: data.places as AtlasChatPresentation['places'],
-        route: (data.route as AtlasChatPresentation['route']) ?? null,
-      };
-    }
   }
 
   return null;
 }
 
-function FadingStreamToken({ token, reducedMotion }: { token: string; reducedMotion: boolean }) {
-  const progress = useRef(new NativeAnimated.Value(reducedMotion ? 1 : 0)).current;
-
-  useEffect(() => {
-    if (reducedMotion) return;
-    progress.setValue(0);
-    const animation = NativeAnimated.timing(progress, {
-      toValue: 1,
-      duration: 360,
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [progress, reducedMotion]);
-
-  return (
-    <NativeAnimated.Text style={[styles.streamingToken, { opacity: progress }]}>
-      {token}
-    </NativeAnimated.Text>
-  );
-}
-
-function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
+function ThinkingIndicator({
+  reducedMotion,
+  status,
+}: {
+  reducedMotion: boolean;
+  status?: string;
+}) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const breathingOpacity = useRef(new NativeAnimated.Value(1)).current;
 
@@ -257,29 +447,22 @@ function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
   return (
     <View style={styles.thinkingRow}>
       <NativeAnimated.Text style={[styles.assistantLabel, { opacity: breathingOpacity }]}>Atlas AI</NativeAnimated.Text>
-      <Text style={styles.thinkingText}>thinking {elapsedSeconds}s</Text>
+      <Text style={styles.thinkingText}>{status || 'Thinking'} {elapsedSeconds}s</Text>
     </View>
   );
 }
 
-function StreamingAssistantText({ text, reducedMotion }: { text: string; reducedMotion: boolean }) {
-  const displayTokens = Array.from(text);
-
+function StreamingAssistantText({ text }: { text: string }) {
+  // Keep streaming output as one native text node. Rendering one animated
+  // component per character makes the view and native animation graph grow
+  // on every token, eventually starving the UI thread and crashing on mobile.
   return (
-    <View style={styles.streamingResponseText}>
-      {displayTokens.map((token, index) => (
-        token === '\n' ? (
-          <View key={`${index}:line-break`} style={styles.streamingLineBreak} />
-        ) : (
-          <FadingStreamToken
-            key={`${index}:${token}`}
-            token={token}
-            reducedMotion={reducedMotion}
-          />
-        )
-      ))}
-    </View>
+    <Text style={styles.streamingToken}>{text}</Text>
   );
+}
+
+function StreamingThoughtText({ text }: { text: string }) {
+  return <Text style={styles.streamingThoughtText}>{text}</Text>;
 }
 
 
@@ -287,16 +470,20 @@ type AIChatBoxProps = {
   places: ParsedPlace[];
   onClose: () => void;
   onOpenHistory?: () => void;
-  onNewChat?: () => void;
   title?: string;
   visible?: boolean;
   conversationId?: string | null;
   importWelcome?: { deselectedPlaces: ParsedPlace[] } | null;
+  initialImportWelcome?: AtlasChatPresentation | null;
+  initialWelcomeText?: string | null;
+  initialSessionId?: string | null;
+  sessionInitializing?: boolean;
   atlasWelcome?: { places: AtlasChatPresentation['places'] } | null;
   showLanding?: boolean;
   onPresentationMapOpen?: () => void;
   onPresentationMapReturn?: () => void;
   onPresentationMapClose?: () => void;
+  initialPrompt?: string | null;
 };
 
 type ChatMapPlace = AtlasChatPresentation['places'][number] & { markerId: string };
@@ -372,16 +559,20 @@ export default function AIChatBox({
   places,
   onClose,
   onOpenHistory,
-  onNewChat,
   title,
   visible = true,
   conversationId = null,
   importWelcome = null,
+  initialImportWelcome = null,
+  initialWelcomeText = null,
+  initialSessionId = null,
+  sessionInitializing = false,
   atlasWelcome = null,
   showLanding = false,
   onPresentationMapOpen,
   onPresentationMapReturn,
   onPresentationMapClose,
+  initialPrompt = null,
 }: AIChatBoxProps) {
   const { show: showDialog } = useAppDialog();
   const {
@@ -403,9 +594,68 @@ export default function AIChatBox({
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [inputContentHeight, setInputContentHeight] = useState(21);
   const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [attachedImageUri, setAttachedImageUri] = useState<string | null>(null);
+  const [attachedImageBase64, setAttachedImageBase64] = useState<string | null>(null);
+  const photoHydrationActiveRef = useRef(true);
+  const scheduledChatPhotoKeysRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    photoHydrationActiveRef.current = visible;
+    if (visible) scheduledChatPhotoKeysRef.current.clear();
+  }, [visible]);
+
+  useEffect(() => () => {
+    photoHydrationActiveRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    const targets = messages.flatMap((message) => (
+      message.presentation?.places
+        .filter((place) => !place.photo_url)
+        .map((place) => ({ messageId: message.id, place })) ?? []
+    )).filter((target) => {
+      const key = `${target.messageId}:${chatPlacePhotoKey(target.place)}`;
+      if (scheduledChatPhotoKeysRef.current.has(key)) return false;
+      scheduledChatPhotoKeysRef.current.add(key);
+      return true;
+    });
+    if (!targets.length) return;
+
+    const hydrate = async () => {
+      let cursor = 0;
+      const worker = async () => {
+        while (photoHydrationActiveRef.current && cursor < targets.length) {
+          const target = targets[cursor++];
+          const photoUrl = await fetchChatPlacePhoto(target.place);
+          if (!photoUrl || !photoHydrationActiveRef.current) continue;
+          const key = chatPlacePhotoKey(target.place);
+          setMessages((current) => current.map((message) => (
+            message.id === target.messageId && message.presentation
+              ? { ...message, presentation: applyChatPlacePhoto(message.presentation, key, photoUrl) }
+              : message
+          )));
+          setChatMapPresentation((current) => (
+            current ? applyChatPlacePhoto(current, key, photoUrl) : current
+          ));
+        }
+      };
+      await Promise.all(Array.from(
+        { length: Math.min(CHAT_PLACE_PHOTO_CONCURRENCY, targets.length) },
+        () => worker(),
+      ));
+    };
+    void hydrate();
+  }, [messages]);
+
+  useEffect(() => {
+    if (initialPrompt && !inputText && !messages.length) setInputText(initialPrompt);
+  }, [initialPrompt, inputText, messages.length]);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
   >({});
+  const [expandedThoughtIds, setExpandedThoughtIds] = useState<Record<string, boolean>>({});
   const [chatMapPresentation, setChatMapPresentation] = useState<AtlasChatPresentation | null>(null);
   const [chatMapSelectedId, setChatMapSelectedId] = useState<string | null>(null);
   const [chatMapSelectedRoute, setChatMapSelectedRoute] = useState<RouteFeature | null>(null);
@@ -416,23 +666,55 @@ export default function AIChatBox({
   const [chatMapSaveBusy, setChatMapSaveBusy] = useState(false);
   const [chatMapSavedMarkerId, setChatMapSavedMarkerId] = useState<string | null>(null);
   const [chatMapNotice, setChatMapNotice] = useState<string | null>(null);
+  const [chatSaveNotice, setChatSaveNotice] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const hydratedConversationIdRef = useRef<string | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const lastWelcomeKeyRef = useRef<string>('');
   const streamQueueRef = useRef<string[]>([]);
+  const streamMarkupBufferRef = useRef('');
+  const streamInsideThinkRef = useRef(false);
   const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamCompletionRef = useRef<(() => void) | null>(null);
   const streamedTextRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
+  const responseScrollFrameRef = useRef<number | null>(null);
+  const streamingResponseLayoutRef = useRef<{ id: string; y: number; height: number } | null>(null);
+  const listHeightRef = useRef(0);
+  const headerOverlayHeightRef = useRef(0);
+  const composerOverlayHeightRef = useRef(0);
+  const autoFollowLatestRef = useRef(true);
   const historyItemIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const chatMapRouteRequestRef = useRef(0);
   const chatMapNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chatSaveNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestChatMapStateKeyRef = useRef<string | null>(null);
   const resolvingActionIdsRef = useRef(new Set<string>());
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const streamCancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialImportWelcome) return;
+    const placeCount = places.length;
+    const names = places.slice(0, 3).map((place) => place.name).join(', ');
+    setMessages([{
+      id: `instant_import_welcome_${Date.now()}`,
+      role: 'assistant',
+      text: initialWelcomeText || `Hi! Great picks - your ${placeCount} saved place${placeCount === 1 ? ' is' : 's are'} on the map below.\n\nWe can shape a route, group nearby stops, or find a great next place.`,
+      presentation: initialImportWelcome,
+      starterPrompts: IMPORT_STARTER_PROMPTS,
+    }]);
+  }, [conversationId, initialImportWelcome, places]);
+
+  useEffect(() => {
+    if (!initialSessionId) return;
+    setSessionId(initialSessionId);
+    conversationIdRef.current = initialSessionId;
+    activeConversationIdRef.current = initialSessionId;
+  }, [initialSessionId]);
 
   const scrollToLatest = useCallback(() => {
     if (scrollFrameRef.current !== null) return;
@@ -442,6 +724,29 @@ export default function AIChatBox({
     });
   }, []);
 
+  const scrollStreamingResponseIntoView = useCallback((animated: boolean) => {
+    if (!autoFollowLatestRef.current || responseScrollFrameRef.current !== null) return;
+    responseScrollFrameRef.current = requestAnimationFrame(() => {
+      responseScrollFrameRef.current = null;
+      const responseLayout = streamingResponseLayoutRef.current;
+      const viewportHeight = listHeightRef.current;
+      if (!responseLayout || !viewportHeight) return;
+
+      const safeTop = headerOverlayHeightRef.current + 12;
+      const safeBottom = viewportHeight - composerOverlayHeightRef.current - 16;
+      const targetOffset = Math.max(
+        0,
+        responseLayout.y - safeTop,
+        responseLayout.y + responseLayout.height - safeBottom,
+      );
+      autoFollowLatestRef.current = true;
+      flatListRef.current?.scrollToOffset({
+        offset: targetOffset,
+        animated: animated && !reducedMotion,
+      });
+    });
+  }, [reducedMotion]);
+
   const finishDisplayedStream = () => {
     const messageId = streamingMessageIdRef.current;
     if (messageId) {
@@ -450,6 +755,7 @@ export default function AIChatBox({
           ? {
               ...message,
               streaming: false,
+              agentStatus: undefined,
               thoughtDurationSeconds: Math.max(
                 1,
                 Math.round((Date.now() - (message.thinkingStartedAt ?? Date.now())) / 1000),
@@ -463,14 +769,48 @@ export default function AIChatBox({
     setPending(false);
   };
 
+  const appendParsedStreamText = (messageId: string, text: string, isThought: boolean) => {
+    if (!text) return;
+    setMessages((current) => current.map((message) => (
+      message.id === messageId
+        ? isThought
+          ? { ...message, thoughtText: `${message.thoughtText ?? ''}${text}` }
+          : { ...message, text: `${message.text}${text}`, agentStatus: undefined }
+        : message
+    )));
+  };
+
+  const parseStreamMarkup = (messageId: string, value: string, final = false) => {
+    let source = `${streamMarkupBufferRef.current}${value}`;
+    streamMarkupBufferRef.current = '';
+    while (source) {
+      const marker = streamInsideThinkRef.current ? '</think>' : '<think>';
+      const markerIndex = source.indexOf(marker);
+      if (markerIndex >= 0) {
+        appendParsedStreamText(messageId, source.slice(0, markerIndex), streamInsideThinkRef.current);
+        streamInsideThinkRef.current = !streamInsideThinkRef.current;
+        source = source.slice(markerIndex + marker.length);
+        continue;
+      }
+      if (final) {
+        appendParsedStreamText(messageId, source, streamInsideThinkRef.current);
+        break;
+      }
+      // Keep a possible partial tag until the next streamed delta arrives.
+      const holdLength = marker.length - 1;
+      const flushLength = Math.max(0, source.length - holdLength);
+      appendParsedStreamText(messageId, source.slice(0, flushLength), streamInsideThinkRef.current);
+      streamMarkupBufferRef.current = source.slice(flushLength);
+      break;
+    }
+  };
+
   const flushStreamQueue = () => {
     const messageId = streamingMessageIdRef.current;
     const nextTokens = streamQueueRef.current.splice(0, reducedMotion ? streamQueueRef.current.length : 8).join('');
     if (messageId && nextTokens) {
-      setMessages((current) => current.map((message) => (
-        message.id === messageId ? { ...message, text: `${message.text}${nextTokens}` } : message
-      )));
-      scrollToLatest();
+      parseStreamMarkup(messageId, nextTokens);
+      scrollStreamingResponseIntoView(false);
       return;
     }
 
@@ -478,6 +818,7 @@ export default function AIChatBox({
       clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
     }
+    if (messageId) parseStreamMarkup(messageId, '', true);
     const complete = streamCompletionRef.current;
     if (complete) complete();
   };
@@ -494,6 +835,16 @@ export default function AIChatBox({
     startStreamQueue();
   };
 
+  const updateAgentStatus = (messageId: string, label: string) => {
+    if (!label) return;
+    setMessages((current) => current.map((message) => (
+      message.id === messageId && message.streaming
+        ? { ...message, agentStatus: label }
+        : message
+    )));
+    scrollStreamingResponseIntoView(false);
+  };
+
   const completeStreamAfterDisplay = () => {
     streamCompletionRef.current = finishDisplayedStream;
     if (!streamTimerRef.current && streamQueueRef.current.length === 0) {
@@ -503,8 +854,11 @@ export default function AIChatBox({
 
   useEffect(() => () => {
     if (streamTimerRef.current) clearInterval(streamTimerRef.current);
+    chatAbortControllerRef.current?.abort();
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    if (responseScrollFrameRef.current !== null) cancelAnimationFrame(responseScrollFrameRef.current);
     if (chatMapNoticeTimerRef.current) clearTimeout(chatMapNoticeTimerRef.current);
+    if (chatSaveNoticeTimerRef.current) clearTimeout(chatSaveNoticeTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -539,6 +893,7 @@ export default function AIChatBox({
 
   useEffect(() => {
     if (!visible) return;
+    if (streamingMessageIdRef.current) return;
     const frame = requestAnimationFrame(scrollToLatest);
     return () => cancelAnimationFrame(frame);
   }, [inputContentHeight, keyboardHeight, messages.length, scrollToLatest, visible]);
@@ -569,7 +924,7 @@ export default function AIChatBox({
       .map((place) => `${place.id}:${place.name}:${place.latitude.toFixed(5)}:${place.longitude.toFixed(5)}`)
       .join('|')}`;
 
-    if (!conversationId && lastWelcomeKeyRef.current !== welcomeKey) {
+    if (!conversationId && !initialImportWelcome && lastWelcomeKeyRef.current !== welcomeKey) {
       lastWelcomeKeyRef.current = welcomeKey;
       setSessionId(null);
       conversationIdRef.current = null;
@@ -599,7 +954,15 @@ export default function AIChatBox({
           )
           .map((message, index) => {
             const presentation = message.role === 'assistant'
-              ? restorePresentationFromToolResults(message.tool_results)
+              ? restorePresentationFromToolResults(
+                message.tool_results,
+                (detail.messages || [])
+                  .slice(0, index + 1)
+                  .filter((item) => item.role === 'user')
+                  .map((item) => item.content)
+                  .join('\n'),
+                userLocation,
+              )
               : null;
             const isImportWelcome = Boolean(
               presentation && parseStoredToolResults(message.tool_results)
@@ -609,10 +972,14 @@ export default function AIChatBox({
               presentation && parseStoredToolResults(message.tool_results)
                 .some((result) => result.name === 'atlas_welcome'),
             );
+            const content = message.role === 'assistant'
+              ? splitThoughtMarkup(message.content)
+              : { response: message.content, thoughts: '' };
             return {
               id: `${message.role}_${index}_${Date.now()}`,
               role: message.role === 'user' ? 'user' : 'assistant',
-              text: message.content,
+              text: content.response,
+              thoughtText: content.thoughts || undefined,
               presentation,
               starterPrompts: isImportWelcome ? IMPORT_STARTER_PROMPTS : isAtlasWelcome ? ATLAS_STARTER_PROMPTS : undefined,
             };
@@ -620,7 +987,7 @@ export default function AIChatBox({
 
         setSessionId(session.session_id);
         activeConversationIdRef.current = detail.session.conversation_id || conversationId;
-        if ((importWelcome || atlasWelcome) && restoredMessages.length === 0) {
+        if ((importWelcome || atlasWelcome) && restoredMessages.length === 0 && !initialImportWelcome) {
           setPending(true);
           setMessages([{
             id: `import_welcome_${Date.now()}`,
@@ -658,7 +1025,7 @@ export default function AIChatBox({
               role: 'assistant',
               text: atlasWelcome
                 ? 'Hi, your saved Atlas is ready to explore. I can help you tighten the route, plan the schedule, or find another useful stop.'
-                : 'Hi, your saved places are ready to explore. I can help you build a route, group nearby stops, or find something to add next.',
+                : `Hi! Great picks - your ${places.length} saved ${places.length === 1 ? 'place is' : 'places are'} on the map below. We can shape a route, group nearby stops, or find a great next place.`,
               presentation: {
                 kind: atlasWelcome ? 'atlas_draft' : 'places_map',
                 title: atlasWelcome ? (title || 'Saved Atlas') : `${places.length} saved ${places.length === 1 ? 'place' : 'places'}`,
@@ -677,7 +1044,7 @@ export default function AIChatBox({
           } finally {
             if (!cancelled) setPending(false);
           }
-        } else {
+        } else if (!initialImportWelcome) {
           setMessages(restoredMessages);
         }
         hydratedConversationIdRef.current = conversationId;
@@ -691,44 +1058,82 @@ export default function AIChatBox({
     return () => {
       cancelled = true;
     };
-  }, [atlasWelcome, conversationId, importWelcome, places, title]);
+  }, [atlasWelcome, conversationId, importWelcome, initialImportWelcome, places, title]);
 
-  const handleSend = async () => {
-    const text = inputText.trim();
-    if (!text || pending) return;
+  const handleSend = async (submittedText = inputText.trim(), editingId?: string) => {
+    const text = submittedText.trim();
+    const imageUri = editingId ? null : attachedImageUri;
+    const imageBase64 = editingId ? null : attachedImageBase64;
+    const imageMode = imageBase64
+      ? (IMAGE_TEXT_REQUEST_RE.test(text) ? 'read_text' : 'identify_location')
+      : null;
+    const message = text || (imageBase64 ? 'Find relevant places based on this image.' : '');
+    if (!message || pending || sessionInitializing) return;
 
     const assistantMessageId = `ai_${Date.now()}`;
     streamQueueRef.current = [];
+    streamMarkupBufferRef.current = '';
+    streamInsideThinkRef.current = false;
     streamedTextRef.current = false;
+    streamCancelledRef.current = false;
     streamingMessageIdRef.current = assistantMessageId;
+    streamingResponseLayoutRef.current = null;
+    autoFollowLatestRef.current = true;
+    const controller = new AbortController();
+    chatAbortControllerRef.current = controller;
 
-    setMessages((prev) => [
-      ...prev,
-      { id: `user_${Date.now()}`, role: 'user', text },
-      {
+    setMessages((prev) => {
+      const base = editingId
+        ? prev.slice(0, prev.findIndex((item) => item.id === editingId) + 1).map((item) => (
+            item.id === editingId ? { ...item, text: message } : item
+          ))
+        : [...prev, { id: `user_${Date.now()}`, role: 'user' as const, text: message, imageUri }];
+      return [...base, {
         id: assistantMessageId,
         role: 'assistant',
         text: '',
         streaming: true,
         thinkingStartedAt: Date.now(),
-      },
-    ]);
-    scrollToLatest();
+        agentStatus: 'Understanding your request',
+      }];
+    });
     setInputText('');
+    setAttachedImageUri(null);
+    setAttachedImageBase64(null);
+    setEditingMessageId(null);
     setPending(true);
 
     try {
       const currentSessionId = await ensureSession();
       const result = await chatWithAtlasStream(
         currentSessionId,
-        text,
-        { onToken: enqueueStreamDelta },
+        message,
+        {
+          onToken: enqueueStreamDelta,
+          onStatus: (label) => updateAgentStatus(assistantMessageId, label),
+        },
         activeConversationIdRef.current,
+        userLocation,
+        savedPlaces.flatMap((place) => place.special_role ? [{
+          role: place.special_role,
+          name: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          full_address: place.subtitle,
+        }] : []),
+        imageBase64,
+        imageMode,
+        controller.signal,
+      );
+      const normalizedPresentation = normalizeCommutePresentation(
+        result.presentation,
+        result.pending_action,
+        [...messages.filter((item) => item.role === 'user').map((item) => item.text), message].join('\n'),
         userLocation,
       );
       setMessages((current) => current.map((message) => (
         message.id === assistantMessageId
-          ? { ...message, presentation: result.presentation, pendingAction: result.pending_action }
+          ? { ...message, presentation: normalizedPresentation, pendingAction: result.pending_action }
           // The backend has one pending confirmation per chat. A revised Atlas
           // draft replaces the older proposal, so its old card must not remain
           // actionable and accidentally create the stale itinerary.
@@ -762,11 +1167,50 @@ export default function AIChatBox({
         replaceChatHistoryItem(historyItemIdRef.current, historyItem);
       }
     } catch (error) {
-      if (!streamedTextRef.current) {
+      if (!streamCancelledRef.current && !streamedTextRef.current) {
         enqueueStreamDelta('I couldn\'t respond just now. Please try sending that again in a moment.');
       }
     } finally {
-      completeStreamAfterDisplay();
+      if (!streamCancelledRef.current) completeStreamAfterDisplay();
+      if (chatAbortControllerRef.current === controller) chatAbortControllerRef.current = null;
+    }
+  };
+
+  const cancelStream = () => {
+    if (!pending) return;
+    streamCancelledRef.current = true;
+    chatAbortControllerRef.current?.abort();
+    chatAbortControllerRef.current = null;
+    streamQueueRef.current = [];
+    if (streamTimerRef.current) {
+      clearInterval(streamTimerRef.current);
+      streamTimerRef.current = null;
+    }
+    finishDisplayedStream();
+  };
+
+  const beginEditingMessage = (message: Message) => {
+    if (pending || message.role !== 'user') return;
+    setEditingMessageId(message.id);
+    setInputText(message.text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const pickChatImage = async () => {
+    if (pending || sessionInitializing || attachedImageUri) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: false,
+      selectionLimit: 1,
+      quality: 0.65,
+      base64: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (asset?.uri && asset.base64) {
+      setInputContentHeight(21);
+      setAttachedImageUri(asset.uri);
+      setAttachedImageBase64(asset.base64);
     }
   };
 
@@ -782,14 +1226,33 @@ export default function AIChatBox({
     markerId: chatMapPlaceId(place, index),
   })), [chatMapPresentation?.places]);
 
+  const chatMapCommuteDestination = chatMapPresentation?.commute_destination ?? null;
+  const chatMapSpecialPlaces = useMemo(() => [
+    ...(chatMapPresentation?.special_places ?? []).filter((place) => place.role !== chatMapCommuteDestination?.role),
+    ...(chatMapCommuteDestination ? [chatMapCommuteDestination] : []),
+  ], [chatMapCommuteDestination, chatMapPresentation?.special_places]);
+  const chatMapIsCommute = Boolean(chatMapCommuteDestination);
+
   const chatMapMarkers = useMemo<MapMarker[]>(() => [
     ...(chatMapOrigin ? [{
       id: 'chat-user-location',
       latitude: chatMapOrigin[1],
       longitude: chatMapOrigin[0],
       title: 'You',
-      tone: 'focused' as const,
+      tone: 'location' as const,
+      pulsing: true,
     }] : []),
+    ...chatMapSpecialPlaces.map((place) => ({
+      id: `chat-special-${place.role}`,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      title: place.name || place.role[0].toUpperCase() + place.role.slice(1),
+      description: place.full_address,
+      // The destination of a commute remains visually distinct from the
+      // purple recommendation and green origin, including before it is saved.
+      tone: chatMapCommuteDestination?.role === place.role ? 'atlas' as const : place.role,
+      preserveToneOnSelect: true,
+    })),
     ...chatMapPlaces.map((place, index) => ({
       id: place.markerId,
       latitude: place.latitude,
@@ -800,7 +1263,7 @@ export default function AIChatBox({
       preserveToneOnSelect: chatMapPresentation?.kind !== 'atlas_draft',
       order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
     })),
-  ], [chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind]);
+  ], [chatMapCommuteDestination?.role, chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind, chatMapSpecialPlaces]);
 
   const selectedChatMapPlace = useMemo(
     () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
@@ -819,6 +1282,15 @@ export default function AIChatBox({
     chatMapNoticeTimerRef.current = setTimeout(() => {
       chatMapNoticeTimerRef.current = null;
       setChatMapNotice(null);
+    }, 4000);
+  }, []);
+
+  const showChatSaveNotice = useCallback((notice: string) => {
+    setChatSaveNotice(notice);
+    if (chatSaveNoticeTimerRef.current) clearTimeout(chatSaveNoticeTimerRef.current);
+    chatSaveNoticeTimerRef.current = setTimeout(() => {
+      chatSaveNoticeTimerRef.current = null;
+      setChatSaveNotice(null);
     }, 4000);
   }, []);
 
@@ -879,6 +1351,7 @@ export default function AIChatBox({
     chatMapRouteRequestRef.current = requestId;
     setChatMapSelectedId(place.markerId);
     setChatMapSelectedRoute(null);
+    setChatMapOverviewRouteVisible(false);
     if (!chatMapOrigin) return;
     try {
       const result = await requestAtlasRoute([
@@ -897,13 +1370,16 @@ export default function AIChatBox({
       return;
     }
     if (chatMapOverviewRoute) {
+      clearChatMapSelection();
       setChatMapOverviewRouteVisible(true);
       return;
     }
-    const coordinates = [
-      ...(chatMapOrigin ? [chatMapOrigin] : []),
-      ...chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number]),
-    ];
+    const coordinates = chatMapCommuteDestination && chatMapOrigin
+      ? [chatMapOrigin, [chatMapCommuteDestination.longitude, chatMapCommuteDestination.latitude] as [number, number]]
+      : [
+        ...(chatMapOrigin ? [chatMapOrigin] : []),
+        ...chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number]),
+      ];
     if (coordinates.length < 2) return;
     setChatMapRouteLoading(true);
     try {
@@ -920,7 +1396,7 @@ export default function AIChatBox({
     } finally {
       setChatMapRouteLoading(false);
     }
-  }, [chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, showDialog]);
+  }, [chatMapCommuteDestination, chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, clearChatMapSelection, showDialog]);
 
   const returnFromPresentationMap = useCallback(() => {
     clearChatMapSelection();
@@ -939,6 +1415,7 @@ export default function AIChatBox({
 
   const chatMapRoute = chatMapSelectedRoute
     ?? (chatMapOverviewRouteVisible ? chatMapOverviewRoute : null);
+  const chatMapRouteVariant = chatMapSelectedRoute ? undefined : chatMapIsCommute && chatMapOverviewRouteVisible ? 'commute' as const : undefined;
   const chatMapRouteKey = useMemo(
     () => chatMapRoute ? JSON.stringify(chatMapRoute.geometry.coordinates) : 'none',
     [chatMapRoute],
@@ -962,13 +1439,15 @@ export default function AIChatBox({
     placePopup={chatMapPopup}
     atlasItinerary={chatMapPresentation?.kind === 'atlas_draft' ? <AtlasChatMapItinerary presentation={chatMapPresentation} /> : null}
     notice={chatMapNotice}
-  />, [chatMapNotice, chatMapPopup, chatMapPresentation, closePresentationMap, insets.top, returnFromPresentationMap]);
+    routeToggle={chatMapIsCommute ? { visible: chatMapOverviewRouteVisible, loading: chatMapRouteLoading, onPress: () => { void toggleChatMapOverviewRoute(); } } : null}
+  />, [chatMapIsCommute, chatMapNotice, chatMapOverviewRouteVisible, chatMapPopup, chatMapPresentation, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
   const chatMapStateKey = [
     chatMapCameraKey,
     chatMapPresentation?.kind ?? 'none',
     chatMapMarkers.map((marker) => `${marker.id}:${marker.longitude.toFixed(6)}:${marker.latitude.toFixed(6)}:${marker.tone ?? 'saved'}`).join('|'),
     chatMapSelectedId ?? 'none',
     chatMapRouteKey,
+    chatMapRouteVariant ?? 'standard',
     chatMapOverviewRouteVisible ? 'overview' : 'route-hidden',
     chatMapRouteLoading ? 'route-loading' : 'route-idle',
     chatMapSaveBusy ? 'save-loading' : 'save-idle',
@@ -991,6 +1470,7 @@ export default function AIChatBox({
       cameraKey: `chat-map-${chatMapCameraKey}`,
       cameraAnimationDurationMs: 420,
       routeGeoJSON: chatMapRoute ?? undefined,
+      routeVariant: chatMapRouteVariant,
       selectedMarkerId: chatMapSelectedId,
       onMarkerPress: (marker) => { void selectChatMapPlace(marker); },
       onMapPress: clearChatMapSelection,
@@ -998,19 +1478,43 @@ export default function AIChatBox({
       overlay: chatMapOverlay,
       hideChrome: true,
     });
-  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
-    chatMapRouteRequestRef.current += 1;
+    const requestId = chatMapRouteRequestRef.current + 1;
+    chatMapRouteRequestRef.current = requestId;
+    const destination = presentation.commute_destination;
+    const origin = presentation.user_location
+      ? [presentation.user_location.longitude, presentation.user_location.latitude] as [number, number]
+      : userLocation;
     setChatMapPresentation(presentation);
     setChatMapSelectedId(null);
     setChatMapSelectedRoute(null);
-    setChatMapOverviewRoute(presentation.route?.route ?? null);
-    setChatMapOverviewRouteVisible(false);
-    setChatMapRouteLoading(false);
+    // A normal route points to the recommended venue. It must never stand in
+    // for the direct commute route while that route is still being fetched.
+    setChatMapOverviewRoute(destination
+      ? (presentation.commute_route?.route ?? null)
+      : (presentation.route?.route ?? null));
+    // A commute map opens on the direct origin-to-destination route. Selecting
+    // a recommendation temporarily retains the established orange route.
+    setChatMapOverviewRouteVisible(Boolean(destination || presentation.commute_route?.route));
+    setChatMapRouteLoading(Boolean(destination && !presentation.commute_route?.route && origin));
     setChatMapCameraKey(Date.now());
     onPresentationMapOpen?.();
-  }, [onPresentationMapOpen]);
+    if (destination && origin && !presentation.commute_route?.route) {
+      void requestAtlasRoute([origin, [destination.longitude, destination.latitude]])
+        .then((result) => {
+          if (chatMapRouteRequestRef.current === requestId) setChatMapOverviewRoute(result.route);
+        })
+        .catch((error) => {
+          console.warn('[AIChatBox] could not load direct commute route:', error);
+          if (chatMapRouteRequestRef.current === requestId) setChatMapOverviewRouteVisible(false);
+        })
+        .finally(() => {
+          if (chatMapRouteRequestRef.current === requestId) setChatMapRouteLoading(false);
+        });
+    }
+  }, [onPresentationMapOpen, userLocation]);
 
   const resolveAction = async (messageId: string, accepted: boolean) => {
     const message = messages.find((item) => item.id === messageId);
@@ -1059,6 +1563,45 @@ export default function AIChatBox({
     }
     try {
       let createdAtlasId: string | null = null;
+      if (accepted && action.kind === 'save_special_place') {
+        const place = action.places[0];
+        if (!place || !action.special_role) throw new Error('Special-place proposal is incomplete');
+        await saveSpecialPlace(action.special_role, {
+          name: place.name,
+          subtitle: place.full_address || place.description || '',
+          category: place.category || null,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          region: place.region || null,
+          city: place.city || null,
+          country: place.country || null,
+          photo_url: place.photo_url || null,
+        });
+        // Chat action confirmation is audit bookkeeping only. The local place
+        // cache has already been updated, so an unavailable audit endpoint
+        // must not turn a saved Office/Home/School into a visible failure.
+        void confirmAtlasChatAction(sessionId, action.action_id, true, {
+          saved_place_count: 1,
+        }).catch((error) => console.warn('[AIChatBox] special-place action audit failed:', error));
+        setMessages((current) => current.map((item) => (
+          item.id === messageId ? {
+            ...item,
+            pendingAction: null,
+            completedAction: {
+              kind: 'save_special_place',
+              special_role: action.special_role!,
+              placeName: place.name,
+            },
+          } : item
+        )));
+        showChatSaveNotice(`Saved "${place.name}" as ${action.special_role[0].toUpperCase()}${action.special_role.slice(1)} in My Places`);
+        return;
+      }
+      if (accepted && action.kind === 'delete_special_place') {
+        const target = savedPlaces.find((place) => place.special_role === action.special_role);
+        if (!target) throw new Error('This special place is no longer saved');
+        await deletePlace(target.id);
+      }
       if (accepted && action.kind === 'create_atlas') {
         const atlas = await createAtlas(action.title);
         const atlasRows = await addAtlasOwnedPlaces(atlas.id, action.places.map((place, index) => ({
@@ -1104,6 +1647,8 @@ export default function AIChatBox({
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     const displayText = normalizeAssistantText(stripActionMarkers(item.text));
+    const thoughtText = item.thoughtText?.trim() ?? '';
+    const isThoughtExpanded = Boolean(expandedThoughtIds[item.id]);
     const feedbackText = displayText.trim() || item.text.trim();
     const selectedFeedback = messageFeedback[item.id];
     const toggleFeedback = (feedback: MessageFeedback) => {
@@ -1134,25 +1679,78 @@ export default function AIChatBox({
     return (
       <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
         {isUser ? (
-          <View style={styles.userBubble}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Edit message"
+            disabled={pending}
+            onLongPress={() => beginEditingMessage(item)}
+            delayLongPress={350}
+            style={({ pressed }) => [styles.userBubble, pressed && !pending && styles.userBubblePressed]}
+          >
             <Text style={[styles.messageText, styles.userText]}>
               {item.text}
             </Text>
-          </View>
+            {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.messageAttachmentImage} /> : null}
+          </Pressable>
         ) : (
-          <View style={styles.assistantContent}>
+          <Animated.View
+            entering={item.streaming && !reducedMotion ? FadeInUp.duration(180) : undefined}
+            style={styles.assistantContent}
+            onLayout={({ nativeEvent }) => {
+              if (!item.streaming) return;
+              streamingResponseLayoutRef.current = {
+                id: item.id,
+                y: nativeEvent.layout.y,
+                height: nativeEvent.layout.height,
+              };
+              scrollStreamingResponseIntoView(true);
+            }}
+          >
             <View style={styles.assistantMessageText}>
-              {item.streaming && !displayText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
+              {item.streaming && !displayText && !thoughtText ? (
+                <ThinkingIndicator reducedMotion={reducedMotion} status={item.agentStatus} />
+              ) : null}
+              {item.streaming && thoughtText && !displayText ? (
+                <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.streamingThoughtWrap}>
+                  <StreamingThoughtText text={thoughtText} />
+                </Animated.View>
+              ) : null}
               {!item.streaming || displayText ? (
                 <View style={styles.thinkingRow}>
                   <Text style={styles.assistantLabel}>Atlas AI</Text>
                   {item.thoughtDurationSeconds ? (
                     <Text style={styles.thinkingText}>thought {item.thoughtDurationSeconds}s</Text>
                   ) : null}
+                  {thoughtText ? (
+                    <Animated.View entering={FadeIn.duration(150)} exiting={FadeOut.duration(120)}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={isThoughtExpanded ? 'Hide thoughts' : 'Show thoughts'}
+                        onPress={() => setExpandedThoughtIds((current) => ({
+                          ...current,
+                          [item.id]: !current[item.id],
+                        }))}
+                        style={({ pressed }) => [styles.thoughtToggle, pressed && styles.thoughtTogglePressed]}
+                      >
+                        <Animated.View
+                          key={isThoughtExpanded ? 'hide' : 'show'}
+                          entering={FadeIn.duration(120)}
+                          exiting={FadeOut.duration(100)}
+                        >
+                          <Text style={styles.thinkingText}>{isThoughtExpanded ? 'hide thoughts' : 'thoughts'}</Text>
+                        </Animated.View>
+                      </Pressable>
+                    </Animated.View>
+                  ) : null}
                 </View>
               ) : null}
+              {thoughtText && isThoughtExpanded ? (
+                <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.expandedThoughtWrap}>
+                  <Text style={styles.expandedThoughtText}>{thoughtText}</Text>
+                </Animated.View>
+              ) : null}
               {item.streaming && displayText ? (
-                <StreamingAssistantText text={displayText} reducedMotion={reducedMotion} />
+                <StreamingAssistantText text={displayText} />
               ) : displayText ? (
                 <Markdown style={markdownStyles}>{displayText}</Markdown>
               ) : null}
@@ -1160,6 +1758,7 @@ export default function AIChatBox({
                 <AtlasChatResultCard
                   presentation={item.presentation}
                   pendingAction={item.pendingAction}
+                  completedAction={item.completedAction}
                   onOpenMap={() => openPresentationMap(item.presentation!)}
                   onConfirm={() => { void resolveAction(item.id, true); }}
                   onCancel={() => { void resolveAction(item.id, false); }}
@@ -1252,7 +1851,7 @@ export default function AIChatBox({
                 <DotsThreeIcon size={16} weight="bold" color="#717171" />
               </Pressable>
             </View> : null}
-          </View>
+          </Animated.View>
         )}
       </View>
     );
@@ -1261,12 +1860,15 @@ export default function AIChatBox({
   if (!visible) return null;
 
   const hasComposerText = inputText.length > 0;
+  const canSendMessage = Boolean(inputText.trim() || attachedImageBase64);
+  const imageAttachmentDisabled = pending || sessionInitializing || Boolean(attachedImageUri);
   const landingVisible =
     showLanding && !messages.some((message) => message.role === 'user');
-  const hasStartedChat = messages.some((message) => message.role === 'user');
   const headerTop = Math.max(insets.top, 56);
   const headerOverlayHeight = headerTop + 68;
-  const composerHeight = hasComposerText
+  const composerHeight = attachedImageUri
+    ? Math.min(244, Math.max(180, inputContentHeight + 148))
+    : hasComposerText
     ? Math.min(196, Math.max(120, inputContentHeight + 72))
     : 56;
   const composerEdgeGap = keyboardVisible ? 12 : 28;
@@ -1276,23 +1878,29 @@ export default function AIChatBox({
   const composerMaterialHeight = composerHeight + composerEdgeGap + 6;
   const bottomMaterialOffset =
     landingVisible && keyboardVisible ? 0 : keyboardHeight;
+  headerOverlayHeightRef.current = headerOverlayHeight;
+  composerOverlayHeightRef.current = composerOverlayHeight;
 
   const sendButton = (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Send message"
-      onPress={handleSend}
-      disabled={!inputText.trim() || pending}
+      accessibilityLabel={pending ? 'Stop generating' : editingMessageId ? 'Confirm edit' : 'Send message'}
+      onPress={pending ? cancelStream : () => { void handleSend(inputText, editingMessageId ?? undefined); }}
+      disabled={sessionInitializing || (!pending && !canSendMessage)}
       style={({ pressed }) => [
         styles.sendButton,
-        pressed && inputText.trim() && !pending && styles.sendButtonPressed,
+        pressed && (canSendMessage || pending) && styles.sendButtonPressed,
       ]}
     >
-      {pending ? (
-        <ActivityIndicator size="small" color="#FFFFFF" />
-      ) : (
-        <ArrowUpIcon size={20} weight="regular" color="#FFFFFF" />
-      )}
+      <Animated.View key={pending ? 'stop' : 'send'} entering={FadeIn.duration(140)} exiting={FadeOut.duration(100)}>
+        {pending ? (
+          <View style={styles.stopIcon} />
+        ) : editingMessageId ? (
+          <ArrowUpIcon size={20} weight="bold" color="#FFFFFF" />
+        ) : (
+          <ArrowUpIcon size={20} weight="regular" color="#FFFFFF" />
+        )}
+      </Animated.View>
     </Pressable>
   );
 
@@ -1368,7 +1976,23 @@ export default function AIChatBox({
             contentInsetAdjustmentBehavior="never"
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={scrollToLatest}
+            onLayout={({ nativeEvent }) => {
+              listHeightRef.current = nativeEvent.layout.height;
+            }}
+            onContentSizeChange={() => {
+              if (streamingMessageIdRef.current) {
+                scrollStreamingResponseIntoView(false);
+              } else {
+                scrollToLatest();
+              }
+            }}
+            onScrollEndDrag={({ nativeEvent }) => {
+              const distanceFromBottom = nativeEvent.contentSize.height
+                - nativeEvent.layoutMeasurement.height
+                - nativeEvent.contentOffset.y;
+              autoFollowLatestRef.current = distanceFromBottom < 72;
+            }}
+            scrollEventThrottle={16}
             scrollIndicatorInsets={{
               top: headerOverlayHeight,
               bottom: composerHeight + composerBottom + 64,
@@ -1376,6 +2000,10 @@ export default function AIChatBox({
             showsVerticalScrollIndicator={false}
           />
         ) : null}
+
+        {chatSaveNotice ? <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(220)} pointerEvents="none" style={[styles.chatSaveNotice, { bottom: composerHeight + composerBottom + 20 }]}>
+          <Text style={styles.chatSaveNoticeText}>{chatSaveNotice}</Text>
+        </Animated.View> : null}
 
         <TopBlurFade
           height={headerMaterialHeight}
@@ -1406,62 +2034,7 @@ export default function AIChatBox({
         <View style={[styles.header, { paddingTop: headerTop }]}>
           <View style={styles.headerControls}>
             <GlassIconButton icon={XIcon} label="Close chat" onPress={onClose} />
-            <View
-              style={[
-                styles.headerActionGroupShadow,
-                !hasStartedChat && styles.headerActionGroupShadowSingle,
-              ]}
-            >
-              <View
-                style={[
-                  styles.headerActionGroup,
-                  !hasStartedChat && styles.headerActionGroupSingle,
-                ]}
-              >
-                {LIQUID_GLASS_AVAILABLE ? (
-                  <GlassView
-                    pointerEvents="none"
-                    style={StyleSheet.absoluteFill}
-                    glassEffectStyle="regular"
-                    tintColor="rgba(255,255,255,0.35)"
-                  />
-                ) : (
-                  <View pointerEvents="none" style={styles.glassButtonFallback} />
-                )}
-                {hasStartedChat ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Start a new chat"
-                    onPress={onNewChat}
-                    disabled={!onNewChat}
-                    style={({ pressed }) => [
-                      styles.headerActionButton,
-                      pressed && styles.glassButtonPressed,
-                      !onNewChat && styles.glassButtonDisabled,
-                    ]}
-                  >
-                    <PencilSimpleLineIcon
-                      size={24}
-                      weight="regular"
-                      color={COLOR.foreground}
-                    />
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Open chat history"
-                  onPress={onOpenHistory}
-                  disabled={!onOpenHistory}
-                  style={({ pressed }) => [
-                    styles.headerActionButton,
-                    pressed && styles.glassButtonPressed,
-                    !onOpenHistory && styles.glassButtonDisabled,
-                  ]}
-                >
-                  <ClockIcon size={24} weight="regular" color={COLOR.foreground} />
-                </Pressable>
-              </View>
-            </View>
+            <GlassIconButton icon={ClockIcon} label="Open chat history" onPress={onOpenHistory} />
           </View>
         </View>
 
@@ -1478,7 +2051,7 @@ export default function AIChatBox({
               {
                 height: composerHeight,
                 marginHorizontal: 12,
-                borderRadius: hasComposerText ? 24 : 32,
+                borderRadius: hasComposerText || attachedImageUri ? 24 : 32,
               },
             ]}
           >
@@ -1499,41 +2072,91 @@ export default function AIChatBox({
             )}
             <View pointerEvents="none" style={styles.composerFrost} />
 
-            <TextInput
-              ref={inputRef}
-              value={inputText}
-              onChangeText={setInputText}
-              onContentSizeChange={({ nativeEvent }) => {
-                setInputContentHeight(Math.max(21, Math.ceil(nativeEvent.contentSize.height)));
-              }}
-              placeholder={voiceRecording ? 'Hold to speak' : 'Ask AtlasAI'}
-              placeholderTextColor="#B0B0B0"
-              style={[
-                styles.composerInput,
-                hasComposerText ? styles.composerInputExpanded : styles.composerInputCompact,
-              ]}
-              multiline
-              textAlignVertical="top"
-              scrollEnabled={composerHeight >= 196}
-              editable={!pending}
-            />
-
-            <View
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-              style={styles.composerLeadingAction}
-            >
-              <PlusIcon size={24} weight="regular" color={COLOR.foreground} />
-            </View>
+            {!voiceMode ? (
+              <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={StyleSheet.absoluteFill}>
+                <TextInput
+                  ref={inputRef}
+                  value={inputText}
+                  onChangeText={setInputText}
+                  onContentSizeChange={({ nativeEvent }) => {
+                    const nextHeight = Math.max(21, Math.ceil(nativeEvent.contentSize.height));
+                    setInputContentHeight((currentHeight) => (
+                      currentHeight === nextHeight ? currentHeight : nextHeight
+                    ));
+                  }}
+                  placeholder={editingMessageId ? 'Edit your message' : 'Ask AtlasAI'}
+                  placeholderTextColor="#B0B0B0"
+                  style={[
+                    styles.composerInput,
+                    (hasComposerText || attachedImageUri) ? styles.composerInputExpanded : styles.composerInputCompact,
+                    attachedImageUri && styles.composerInputWithAttachment,
+                  ]}
+                  multiline
+                  textAlignVertical="top"
+                  scrollEnabled={composerHeight >= 196}
+                  editable={!pending && !sessionInitializing}
+                />
+                {attachedImageUri ? (
+                  <View style={styles.composerAttachment}>
+                    <Image source={{ uri: attachedImageUri }} style={styles.composerAttachmentImage} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="Remove attached image" onPress={() => {
+                      if (!inputText) setInputContentHeight(21);
+                      setAttachedImageUri(null);
+                      setAttachedImageBase64(null);
+                    }} style={styles.composerAttachmentRemove}>
+                      <XIcon size={12} weight="bold" color="#FFFFFF" />
+                    </Pressable>
+                  </View>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Add image"
+                  disabled={imageAttachmentDisabled}
+                  onPress={() => { void pickChatImage(); }}
+                  style={({ pressed }) => [
+                    styles.composerLeadingAction,
+                    imageAttachmentDisabled && styles.composerLeadingActionDisabled,
+                    pressed && !imageAttachmentDisabled && styles.utilityButtonPressed,
+                  ]}
+                >
+                  <PlusIcon
+                    size={22}
+                    weight="regular"
+                    color={imageAttachmentDisabled ? '#B4B4B4' : COLOR.primary}
+                  />
+                </Pressable>
+              </Animated.View>
+            ) : (
+              <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={styles.voiceModeWrap}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Return to keyboard input" onPress={() => setVoiceMode(false)} style={styles.voiceModeKeyboard}>
+                  <KeyboardIcon size={20} weight="regular" color="#202024" />
+                </Pressable>
+                <VoiceInputButton
+                  label="Hold to speak"
+                  disabled={pending || sessionInitializing}
+                  onRecordingChange={setVoiceRecording}
+                  onError={(message) => showDialog({ title: 'Voice input unavailable', message, tone: 'warning' })}
+                  onTranscript={(text) => {
+                    setVoiceMode(false);
+                    void handleSend(text);
+                  }}
+                  style={styles.voiceModeButton}
+                />
+              </Animated.View>
+            )}
 
             <View style={styles.composerTrailingActions}>
-              <VoiceInputButton
-                disabled={pending}
-                onRecordingChange={setVoiceRecording}
-                onTranscript={(text) => setInputText((current) => current ? `${current} ${text}` : text)}
-                style={styles.utilityButton}
-              />
-
+              {!voiceMode ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Start voice input"
+                  disabled={pending || sessionInitializing}
+                  onPress={() => setVoiceMode(true)}
+                  style={({ pressed }) => [styles.utilityButton, pressed && styles.utilityButtonPressed]}
+                >
+                  <WaveformIcon size={21} weight="bold" color={COLOR.foreground} />
+                </Pressable>
+              ) : null}
               {sendButton}
             </View>
           </Animated.View>
@@ -1719,6 +2342,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#E9FBF1',
   },
+  userBubblePressed: {
+    opacity: 0.72,
+  },
   assistantContent: {
     flex: 1,
     gap: 12,
@@ -1745,10 +2371,33 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     letterSpacing: 0,
   },
-  streamingResponseText: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'baseline',
+  streamingThoughtWrap: {
+    opacity: 0.76,
+  },
+  streamingThoughtText: {
+    color: '#8E8E93',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    letterSpacing: 0,
+  },
+  thoughtToggle: {
+    paddingVertical: 2,
+  },
+  thoughtTogglePressed: {
+    opacity: 0.48,
+  },
+  expandedThoughtWrap: {
+    paddingLeft: 10,
+    borderLeftWidth: 2,
+    borderLeftColor: '#E4E4E7',
+  },
+  expandedThoughtText: {
+    color: '#71717A',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    letterSpacing: 0,
   },
   streamingToken: {
     color: '#000000',
@@ -1756,10 +2405,6 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     fontWeight: '400',
     letterSpacing: -0.16,
-  },
-  streamingLineBreak: {
-    width: '100%',
-    height: 0,
   },
   feedbackBar: {
     minHeight: 28,
@@ -1789,12 +2434,21 @@ const styles = StyleSheet.create({
   userText: {
     color: '#000000',
   },
+  messageAttachmentImage: {
+    width: 220,
+    height: 160,
+    maxWidth: '100%',
+    marginTop: 8,
+    borderRadius: 8,
+  },
   composerWrap: {
     position: 'absolute',
     left: 0,
     right: 0,
     zIndex: 3,
   },
+  chatSaveNotice: { position: 'absolute', left: 24, right: 24, zIndex: 5, alignSelf: 'center', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(39,39,42,0.94)', shadowColor: '#18181B', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6 },
+  chatSaveNoticeText: { color: '#FFFFFF', fontSize: 13, lineHeight: 18, fontWeight: '700', textAlign: 'center' },
   bottomMaterial: {
     position: 'absolute',
     left: 0,
@@ -1838,6 +2492,12 @@ const styles = StyleSheet.create({
     bottom: 56,
     left: 16,
   },
+  composerInputWithAttachment: {
+    // The preview occupies its own row, leaving the input full-width so its
+    // placeholder never competes with the thumbnail.
+    top: 96,
+    left: 16,
+  },
   composerLeadingAction: {
     position: 'absolute',
     bottom: 12,
@@ -1847,6 +2507,43 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  composerLeadingActionDisabled: {
+    opacity: 0.72,
+    backgroundColor: 'rgba(180,180,180,0.22)',
+  },
+  utilityButtonPressed: {
+    opacity: 0.5,
+    transform: [{ scale: 0.94 }],
+  },
+  voiceModeWrap: {
+    position: 'absolute',
+    top: 0,
+    bottom: 6,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  voiceModeButton: {
+    flex: 1,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#E9FBF1',
+    borderWidth: 1,
+    borderColor: '#C5EDD8',
+  },
+  voiceModeKeyboard: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4E4E7',
   },
   composerTrailingActions: {
     position: 'absolute',
@@ -1873,6 +2570,39 @@ const styles = StyleSheet.create({
   },
   sendButtonPressed: {
     transform: [{ scale: 0.94 }],
+  },
+  stopIcon: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF',
+  },
+  composerAttachment: {
+    position: 'absolute',
+    top: 12,
+    left: 16,
+    width: 68,
+    height: 68,
+    borderRadius: 8,
+    overflow: 'visible',
+  },
+  composerAttachmentImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  composerAttachmentRemove: {
+    position: 'absolute',
+    top: -7,
+    right: -7,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#343434',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   confirmBar: {
     marginHorizontal: 16,

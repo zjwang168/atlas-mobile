@@ -56,6 +56,12 @@ async def scan_text(text: str, request_id: str | None = None) -> dict:
 
 async def _classify_text(text: str) -> str:
     """Use LLM to classify whether the OCR text has named POIs or just addresses."""
+    # OCR screenshots containing no street-address pattern should follow the
+    # same named-place path as pasted text. This avoids a redundant serial LLM
+    # classification call before entity extraction begins.
+    from backend.services.content_classifier import ADDRESS_HINT_RE
+    if not ADDRESS_HINT_RE.search(text):
+        return "named_poi"
     mode = await classify_location_content(text[:4000], source_type="image_scan")
     return "named_poi" if mode == "named_poi" else "address"
 
