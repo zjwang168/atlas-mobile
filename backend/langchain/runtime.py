@@ -9,7 +9,7 @@ from typing import Any, Literal, Optional
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-ProviderName = Literal["deepseek", "qwen", "hunyuan", "gemini", "openai_mango"]
+ProviderName = Literal["qwen", "hunyuan", "gemini", "openai_mango"]
 
 
 def normalize_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
@@ -29,8 +29,6 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
 def _base_url_for_provider(provider: ProviderName) -> Optional[str]:
     if provider == "openai_mango":
         return os.environ.get("OPENAI_BASE_URL_MANGO", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1"
-    if provider == "deepseek":
-        return os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").strip() or "https://api.deepseek.com/v1"
     if provider == "qwen":
         return os.environ.get("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1").strip() or "https://dashscope.aliyuncs.com/compatible-mode/v1"
     if provider == "hunyuan":
@@ -49,7 +47,6 @@ def get_chat_model(provider: ProviderName, model: str, temperature: float = 0.2)
 
     api_key_env = {
         "openai_mango": "OPENAI_API_KEY_MANGO",
-        "deepseek": "DEEPSEEK_API_KEY",
         "qwen": "QWEN_API_KEY",
         "hunyuan": "HUNYUAN_API_KEY",
     }[provider]  # type: ignore[index]

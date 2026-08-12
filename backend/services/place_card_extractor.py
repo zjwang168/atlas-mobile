@@ -180,7 +180,7 @@ async def extract_place_cards(text: str, request_id: str | None = None) -> list[
     if heuristic_cards:
         return heuristic_cards[:3]
 
-    model_name = os.environ.get("PLACE_CARD_EXTRACT_MODEL") or os.environ.get("CHAT_MODEL") or "deepseek-chat"
+    model_name = os.environ.get("PLACE_CARD_EXTRACT_MODEL") or os.environ.get("OPENAI_MODEL_MANGO") or "gpt-4o-mini"
 
     prompt = PLACE_CARD_EXTRACTION_PROMPT.format(text=content[:12000])
 
@@ -193,7 +193,7 @@ async def extract_place_cards(text: str, request_id: str | None = None) -> list[
         ],
         temperature=0.0,
         max_tokens=1500,
-        provider="deepseek",
+        provider="openai_mango",
         model=model_name,
         request_id=request_id,
     )

@@ -798,7 +798,7 @@ npm install
 cp .env.example .env
 ```
 
-> **Required API keys**: `MAPBOX_ACCESS_TOKEN`, `DEEPSEEK_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`. Optional: `GROQ_API_KEY` (voice transcription), `GLM_API_KEY` (OCR), `GEMINI_API_KEY` (vision), `QWEN_API_KEY` (web search), and at least one geocoding key.
+> **Required API keys**: `MAPBOX_ACCESS_TOKEN`, `OPENAI_API_KEY_MANGO`, `OPENAI_MODEL_MANGO`, `OPENAI_BASE_URL_MANGO`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`. Optional: `GROQ_API_KEY` (voice transcription), `GLM_API_KEY` (OCR), `GEMINI_API_KEY` (vision), `QWEN_API_KEY` (web search), and at least one geocoding key.
 
 ### Start the App
 

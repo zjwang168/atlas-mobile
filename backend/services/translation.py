@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 
 from backend.services.llm_client import call_llm
@@ -50,8 +51,8 @@ async def translate_to_english(text: str, request_id: str | None = None) -> str:
         messages=[{"role": "system", "content": TRANSLATE_TO_ENGLISH_PROMPT.format(text=sample[:12000])}],
         temperature=0.0,
         max_tokens=4096,
-        provider="deepseek",
-        model="deepseek-chat",
+        provider="openai_mango",
+        model=os.environ.get("OPENAI_MODEL_MANGO", "gpt-4o-mini").strip() or "gpt-4o-mini",
         request_id=request_id,
     )
     return (result.get("content", "") or "").strip() or sample

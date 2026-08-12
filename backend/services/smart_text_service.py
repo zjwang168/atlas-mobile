@@ -194,8 +194,8 @@ async def _extract_places_from_text(text: str, request_id: str | None = None) ->
         messages=[{"role": "system", "content": SMART_TEXT_EXTRACT_PROMPT.format(query=text[:4000])}],
         temperature=0.2,
         max_tokens=4096,
-        provider="deepseek",
-        model="deepseek-chat",
+        provider="openai_mango",
+        model=os.environ.get("OPENAI_MODEL_MANGO", "gpt-4o-mini").strip() or "gpt-4o-mini",
         request_id=request_id,
     )
     parsed = _parse_places_response(llm_result.get("content", "{}"))

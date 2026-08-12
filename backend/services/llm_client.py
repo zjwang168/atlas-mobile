@@ -21,7 +21,7 @@ from backend.langchain.runtime import ProgressStreamHandler, get_chat_model, nor
 
 logger = logging.getLogger("atlas.llm")
 
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL_MANGO", "gpt-4o-mini").strip() or "gpt-4o-mini"
 HUNYUAN_DEFAULT_MODEL = os.environ.get("HUNYUAN_MODEL", "hy3-preview")
 HUNYUAN_REASONING_EFFORT = os.environ.get("HUNYUAN_REASONING_EFFORT", "low").strip() or "low"
 HUNYUAN_WEB_PROMPT = """You are using Tencent Hunyuan in live-web mode.
@@ -287,7 +287,7 @@ def call_llm(
     api_key: Optional[str] = None,
     model: str = DEFAULT_MODEL,
     max_retries: int = 2,
-    provider: str = "deepseek",
+    provider: str = "openai_mango",
     extra_body: Optional[dict] = None,
     request_id: Optional[str] = None,
 ) -> dict:
@@ -298,7 +298,8 @@ def call_llm(
         tools: Optional list of tool schemas for function calling.
         temperature: 0.0-1.0, lower = more deterministic.
         max_tokens: Maximum response tokens.
-        api_key: DeepSeek API key. Falls back to DEEPSEEK_API_KEY env var.
+        api_key: Reserved for backwards compatibility. The configured provider
+            reads its credentials from the environment.
         model: Model name to use.
         max_retries: Number of retry attempts on failure (default: 2).
 
@@ -432,13 +433,13 @@ def extract_locations(
     api_key: Optional[str] = None,
     model: str = DEFAULT_MODEL,
 ) -> dict:
-    """Send text to DeepSeek and parse the returned JSON with locations.
+    """Send text to the configured OpenAI-compatible model and parse locations.
 
     This is a backward-compatible wrapper around call_llm().
 
     Args:
         text: The combined title + body text of a Reddit post.
-        api_key: DeepSeek API key. Falls back to DEEPSEEK_API_KEY env var.
+        api_key: Reserved for backwards compatibility.
         model: Model name to use.
 
     Returns:
