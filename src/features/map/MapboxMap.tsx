@@ -774,13 +774,12 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
             style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
-            // A focused point is an explicit user choice. Let its annotation
-            // render above nearby markers so its mandatory label cannot be
-            // discarded by native collision handling.
-            // AI recommendations must remain discoverable even when they sit
-            // near a saved point; native MarkerView collision would otherwise
-            // hide the purple pin before the user can select it.
-            allowOverlap={selectedMarkerId === marker.id || marker.tone === 'focused' || marker.tone === 'recommended' || marker.tone === 'atlas' || marker.tone === 'location' || marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school'}
+            // Keep the dot out of Mapbox's native view-collision cycle. That
+            // cycle considers the animated label part of this MarkerView, so
+            // tiny idle layout corrections can alternate an ordinary saved
+            // pin between hidden and visible. Labels are already collision-
+            // resolved deterministically by visibleLabelIds above.
+            allowOverlap
           >
             <View
               style={styles.markerContainer}

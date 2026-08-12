@@ -1,774 +1,293 @@
-# OurAtlas — AI-Powered Travel Location Extractor
+# OurAtlas - AI-Powered Place Discovery and Trip Planning
 
-Extract real-world places from Reddit posts, pasted text, web pages, screenshots, YouTube videos, and images — then geocode them, plan optimal routes, and visualize them on an interactive Mapbox map.
+OurAtlas is a mobile map workspace for turning travel content into places you can save, organize, discuss, and revisit. Import a link, pasted notes, a social video, screenshots, or a photo; review the extracted places on a map; then save them to My Places, build an Atlas itinerary, or continue with Atlas AI.
 
-Built with **React Native (Expo SDK 56)** + **FastAPI (Python)** + **LangChain 1.0 / LangGraph** + **DeepSeek V4 Flash** + **Qwen 3.5 Flash** + **Gemini 3.5 Flash** + **GLM-OCR** + **Mapbox**.
+Built with **React Native (Expo SDK 56)**, **FastAPI**, **Supabase**, **LangChain / LangGraph**, **OpenAI-compatible models**, **Gemini**, **GLM OCR**, and **Mapbox**.
 
-> **Expo SDK v56**: This project targets the latest Expo SDK. Always consult the [official Expo v56 docs](https://docs.expo.dev/versions/v56.0.0/) before making build/config changes.
-
----
-
-## Multi-Agent Workflow
-
-The system uses **LangChain 1.0 / LangGraph** to build a multi-agent collaboration system. Import pipelines now run through a Studio-visible LangGraph app, while the FastAPI layer stays as a thin compatibility shell for the mobile app.
-
-```mermaid
-graph TD
-    User[User submits content] --> App[React Native App]
-
-    subgraph "Import Modes"
-        ST[Smart Text<br/>Paste notes / prompts]
-        FT[Find Text Places<br/>Upload screenshots]
-        RL[Reddit Links<br/>Paste Reddit URLs]
-        AL[Any Links<br/>Vision-scan any URL]
-        YT[YouTube Links<br/>Paste YouTube URLs]
-        IF[Find Image Places<br/>Upload a photo]
-    end
-
-    subgraph "Atlas AI"
-        AA[Natural language query]
-        CH[Chat follow-ups<br/>Multi-turn with tools]
-    end
-
-    App --> ST
-    App --> FT
-    App --> RL
-    App --> AL
-    App --> YT
-    App --> IF
-    App --> AA
-    App --> CH
-
-    RL --> PL[POST /parse_link]
-    ST --> PT[POST /parse_text]
-    FT --> SI[POST /scan_images_base64]
-    AL --> SU[POST /scan_url]
-    YT --> YP[POST /parse_youtube]
-    IF --> FP[POST /find_image_places]
-    AA --> DA[POST /atlas_ai/discover]
-    CH --> CE[POST /chat]
-    CE --> LCA[LangChain Tool-Calling Agent<br/>chat_agent.py]
-    LCA --> LG
-
-    subgraph "LLM & Vision Services"
-        QW[Qwen 3.5 Flash<br/>Live web reasoning]
-        DS[DeepSeek V4 Flash<br/>Structured extraction]
-        TV[Tavily API<br/>Web search tool]
-        YTAPI[youtube-transcript-api<br/>Transcript + chapters]
-        RED[Reddit API<br/>Post title + selftext]
-        GCU[Gemini Computer Use<br/>Page screenshots]
-        OCR[GLM-OCR]
-        GPT4O[GPT-4o Vision<br/>Photo place recognition]
-    end
-
-    subgraph "LangGraph Core"
-        LG[LangGraph App<br/>Atlas graph nodes + checkpoints]
-        ORCH[Agent Orchestrator<br/>Supervisor coordination]
-        EX[Extraction Pipeline<br/>DeepSeek + hierarchy filter]
-        EL[Entity Linking<br/>Disambiguation + context]
-        GEO[Geocoder<br/>Multi-layer fallback]
-        RT[Route Planner<br/>TSP + 2-opt]
-        MEM[Memory / Checkpoints<br/>thread state + session memory]
-    end
-
-    PT --> QW
-    QW --> DS
-    QW --> TV
-    DS --> ORCH
-    PL --> ORCH
-
-    SI --> OCR
-    SU --> GCU
-    GCU --> OCR
-    OCR --> ORCH
-
-    YP --> YTAPI
-    YTAPI --> DS
-    PL --> RED
-    FP --> GPT4O
-    GPT4O --> GEO
-
-    DA --> DS2[DeepSeek<br/>Address research]
-    DS2 --> GEO
-
-    ORCH --> LG
-    LG --> EX
-    EX --> EL
-    EL --> GEO
-    GEO --> RT
-    RT --> MEM
-
-    subgraph "Geocoding Fallback Chain"
-        G1[Geoapify<br/>3k/day free]
-        G2[LocationIQ<br/>5k/day free]
-        G3[Nominatim<br/>1 req/s]
-        G4[Photon<br/>No key needed]
-        G5[Google Maps]
-        G1 -->|fallback| G2
-        G2 -->|fallback| G3
-        G3 -->|fallback| G4
-        G4 -->|fallback| G5
-    end
-
-    GEO --> G1
-
-    subgraph "Memory & Persistence"
-        MEM[Three-tier Memory<br/>Context → Session → Supabase]
-        CACHE[LRU Cache<br/>Disk-persisted]
-    end
-
-    MEM --> RESP[ParseResult JSON]
-    MEM --> CACHE
-
-    RESP --> App
-```
+> **Expo SDK 56**: This project targets Expo SDK 56. Consult the [official Expo SDK 56 documentation](https://docs.expo.dev/versions/v56.0.0/) before changing native configuration, Expo packages, or build tooling.
 
 ---
 
-## LangChain Agent Runtime
+## Product Overview
 
-The system uses two complementary AI execution models: a **LangGraph StateGraph** for deterministic pipeline orchestration and a **native LangChain tool-calling agent** for dynamic conversational interactions. Tool calls travel in the API's structured `tool_calls` field (never inside message content), and the loop re-invokes the model with tool results until it produces a plain final answer. Memory is managed in three tiers, graph runs are checkpointed by thread, and all LLM calls are traced via LangSmith.
+OurAtlas combines place import, personal map storage, trip building, and conversational planning in one shared map experience.
 
-```mermaid
-graph TD
-    subgraph "Agent Execution (Native LangChain Tool Calling)"
-        UI[User Input] --> CB[System Prompt + History + Memory]
-        CB --> LLM[llm.bind_tools TOOLS .ainvoke]
-        LLM --> TC{AIMessage.tool_calls?}
-        TC -->|yes| TREQ[ToolRegistry.execute<br/>+ _apply_tool_result]
-        TREQ --> TM[ToolMessage results]
-        TM --> LLM
-        TC -->|no| RESP[Final answer<br/>clean natural language]
-    end
-
-    subgraph "Tool Registry"
-        T1[scrape_url]
-        T2[geocode_location]
-        T3[batch_geocode]
-        T4[plan_route]
-        T5[extract_locations]
-        T6[web_search<br/>Tavily API]
-        T7[compute_region_cluster ⏳]
-        T8[save_conversation]
-        T9[load_conversation]
-        T10[map_operation ⏳]
-    end
-
-    subgraph "Memory System"
-        M1[Short-term: Session Context]
-        M2[Working: Extracted Places]
-        M3[Long-term: User Preferences]
-    end
-
-    subgraph "LangSmith Tracing"
-        LS1[Pipeline: AtlasApp]
-        LS2[Agent Steps: agent_loop_step]
-        LS3[LLM Calls: langsmith_tags]
-        LS4[Performance Metrics]
-    end
-
-    CB --> M1
-    LLM --> LS3
-    TREQ --> LS2
-```
-
-**How to view Studio and traces**
-1. Start the LangGraph Agent Server locally with the repo's `langgraph.json`.
-2. Open Studio from the LangSmith UI and connect it to that local server.
-3. Run a flow from `backend/langgraph/atlas_graph.py`.
-4. Reuse the same `thread_id` to inspect one run across multiple steps.
-5. Open a checkpoint to inspect state, replay from that point, or fork a new branch.
-
-**How to view LangSmith Evaluation**
-1. Open [smith.langchain.com](https://smith.langchain.com).
-2. Create a dataset with input examples and optional reference outputs.
-3. Run an experiment against your graph or chain.
-4. Inspect each row to see the run output, evaluator scores, and latency/cost.
-5. Compare multiple experiments to understand whether a prompt or graph change improved results.
-
-**Architecture Reference**:
-- **LangGraph App**: [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) is the Studio-facing entry point. It dispatches `parse_link`, `parse_text`, `scan_url`, `parse_youtube`, `find_image_places`, `atlas_ai_discover`, and `chat` into graph nodes.
-- **StateGraph (DAG Pipeline)**: The parse path still runs as a deterministic graph, but now it is visible to Studio as a graph run with checkpoints and thread state.
-- **Chat Agent**: Defined in [`backend/langgraph/chat_agent.py`](backend/langgraph/chat_agent.py). Native LangChain tool calling: the model is bound to the OpenAI-format `TOOLS` schemas via `bind_tools()`, tool calls arrive in `AIMessage.tool_calls` (never in content), each is executed through `ToolRegistry` with side-effects applied to the session, and results are fed back as `ToolMessage`s until the model returns a plain final answer. Runs up to 8 steps per turn with per-tool and total timeouts. Provider/model configurable via `CHAT_PROVIDER` / `CHAT_MODEL` (default DeepSeek).
-- **Memory**: [`conversation_manager.py`](backend/services/conversation_manager.py) — Short-term (session messages), working (extracted places), and long-term (user preferences via Supabase). Checkpoints give you thread-scoped time travel during runs.
-- **Tracing**: [`observability.py`](backend/services/observability.py) — LangSmith tracing is enabled through environment config, with graph runs, agent loop steps, and LLM calls visible in LangSmith.
-- **Studio Entry Point**: [`backend/langgraph_app.py`](backend/langgraph_app.py) + [`langgraph.json`](langgraph.json) expose the graph to LangGraph Studio without changing the FastAPI compatibility layer.
+| Area | What it does |
+|------|---------------|
+| **Import Places** | Extracts places from pasted text, URLs, Reddit, YouTube, TikTok, Instagram Reels, Facebook Reels, screenshots, and photos. |
+| **My Places** | Stores saved places with deduplication, notes, photos, categories, map markers, and offline-first synchronization. |
+| **Atlas AI** | Supports multi-turn place research, map results, place-save confirmations, Home / Office / School management, and persisted conversation history. |
+| **Atlases** | Groups saved places into named, map-first itineraries with routes, ordering, sharing, and editing. |
+| **Planning** | Lets users create plans, search for places, add recommendations, and build itineraries on the shared map. |
+| **Map Workspace** | Keeps one Mapbox map alive beneath panels and overlays, with saved markers, Atlas pins, routes, selection, and device location. |
 
 ---
 
 ## Architecture Overview
 
 | Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Mobile Framework** | Expo SDK 56 + React Native | Cross-platform mobile app |
-| **Backend Framework** | FastAPI (Python) | REST API server |
-| **LLM Orchestration** | LangChain 1.0 / LangGraph | StateGraph pipeline + Agent Loop |
-| **LLM Providers** | DeepSeek V4 Flash | Primary: structured extraction, classification, entity linking |
-| | Qwen 3.5 Flash | Secondary: web search decision, smart text reasoning |
-| | Gemini 3.5 Flash | Vision/OCR: Computer Use, screenshot analysis |
-| | GPT-4o | Vision: single-image place recognition |
-| **LLM Observability** | LangSmith | Full-stack tracing for LangGraph pipelines & agent calls |
-| **OCR** | GLM-OCR | Chinese text extraction from images |
-| **Geocoding** | Geoapify → LocationIQ → Google Maps (5-tier fallback) | Address → coordinates resolution |
-| **Web Scraping** | Playwright + Trafilatura + HTTPX | Content extraction from URLs |
-| **Web Search** | Tavily API | Real-time web search for agent queries |
-| **Database** | Supabase (PostgreSQL) | Places, plans, conversations, user data |
-| **Maps** | Mapbox GL | Interactive map rendering |
-
----
-
-## Data Flow
-
-Data flows are split into seven independent pipelines, each with a dedicated processing path.
-
-### Scenario A: Smart Text Pipeline
-
-```
-POST /parse_text
-→ backend/langgraph/atlas_graph.py: parse_text node
-  → smart_text_service.py: analyze_smart_text()
-    → web_search_router.py: should_use_web_search()
-    → (optional) web_search() via Tavily
-    → LLM (Qwen for web reasoning, DeepSeek for extraction)
-  → content_classifier.py: classify_content()
-  → extraction_pipeline.py: extract_places()
-  → geocoder.py: geocode()
-  → route_planner.py: plan_route()
-  → supabase_service.py: persist()
-```
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant STS as SmartTextService
-    participant WSR as WebSearchRouter
-    participant LLM as DeepSeek/Qwen
-    participant S as Services
-    participant DB as Supabase
-
-    C->>API: POST /parse_text (pasted text)
-    API->>LG: parse_text node
-    LG->>STS: analyze_smart_text()
-    STS->>WSR: should_use_web_search()
-    WSR-->>STS: decision (boolean)
-    alt web_search enabled
-        STS->>LLM: Qwen web reasoning + Tavily
-        LLM-->>STS: enriched context
-    end
-    STS->>LLM: DeepSeek extraction
-    LLM-->>STS: structured places
-    STS->>S: classify_content → extract_places → geocode → plan_route
-    S->>DB: persist_results
-    DB-->>S: saved IDs
-    S-->>STS: PipelineResult
-    STS-->>API: parsed places
-    API-->>C: structured response
-```
-
-**Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
-
-### Scenario B: Find Text Places Pipeline
-
-```
-POST /scan_images or POST /scan_images_base64
-→ backend/langgraph/atlas_graph.py: scan_url / scan_images_base64 path
-  → image_scanner.py: scan_images()
-    → gemini_computer_use.py: Gemini screenshot analysis
-    → glm_ocr.py: OCR text extraction
-  → content_classifier.py: classify_content()
-  → extraction_pipeline.py: extract_places()
-  → geocoder.py: geocode()
-  → route_planner.py: plan_route()
-  → supabase_service.py: persist()
-```
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant GCU as Gemini Computer Use
-    participant OCR as GLM-OCR
-    participant LLM as DeepSeek/Qwen
-    participant S as Services
-    participant DB as Supabase
-
-    C->>API: POST /scan_images (JPEG/PNG/HEIC)
-    API->>GCU: Gemini Computer Use (screenshot analysis)
-    GCU-->>API: page screenshots
-    API->>OCR: GLM-OCR (text extraction)
-    OCR-->>API: extracted text
-    API->>S: classify_content → extract_places → geocode → plan_route
-    S->>DB: persist_results
-    DB-->>S: saved IDs
-    S-->>API: PipelineResult
-    API-->>C: parsed places + route
-```
-
-**Key files**: [`image_scanner.py`](backend/services/image_scanner.py), [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
-
-### Scenario C: Reddit Links Pipeline
-
-```
-POST /parse_link (reddit.com URL)
-→ backend/langgraph/atlas_graph.py: parse_link node
-  → agent_orchestrator.py: run_pipeline()
-  → web_fetch_chain.py: fetch_web_content()
-    → _looks_like_reddit() → true
-    → _scrape_reddit() → reddit_fetcher.py: fetch_reddit_post()
-    → Reddit JSON API (title + selftext)
-  → content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
-```
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant WFC as WebFetchChain
-    participant RF as RedditFetcher
-    participant LLM as DeepSeek/Qwen
-    participant S as Services
-    participant DB as Supabase
-
-    C->>API: POST /parse_link (reddit.com URL)
-    API->>WFC: fetch_web_content()
-    WFC->>WFC: _looks_like_reddit() → true
-    WFC->>RF: _scrape_reddit() → fetch_reddit_post()
-    RF->>RF: Reddit JSON API (title + selftext)
-    RF-->>WFC: parsed Reddit content
-    WFC-->>API: cleaned text
-    API->>S: classify_content → extract_places → geocode → plan_route
-    S->>DB: persist_results
-    DB-->>S: saved IDs
-    S-->>API: PipelineResult
-    API-->>C: parsed places
-```
-
-**Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`reddit_fetcher.py`](backend/services/reddit_fetcher.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
-
-### Scenario D: Any Links Pipeline (Generic URL)
-
-```
-POST /parse_link (non-reddit URL) or POST /scrape_url
-→ backend/langgraph/atlas_graph.py: parse_link / scan_url path
-  → web_fetch_chain.py: fetch_web_content()
-    → Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX + BeautifulSoup (fallback chain)
-  → (optional) playwright_scraper.py or web_scraper.py for Gemini screenshot extraction
-  → content_classifier.py → extraction_pipeline.py → geocoder.py → route_planner.py → persist
-```
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant WFC as WebFetchChain
-    participant FP as FallbackProviders
-    participant PS as PlaywrightScraper
-    participant LLM as DeepSeek/Qwen
-    participant S as Services
-    participant DB as Supabase
-
-    C->>API: POST /parse_link (non-reddit URL)
-    API->>WFC: fetch_web_content()
-    WFC->>FP: Firecrawl → ScrapingAnt → Bright Data → Apify → Webpeel → HTTPX+BS4
-    FP-->>WFC: extracted content
-    alt JS-heavy / anti-bot page
-        WFC->>PS: playwright_scraper (Gemini screenshot extraction)
-        PS-->>WFC: captured text
-    end
-    WFC-->>API: cleaned content
-    API->>S: classify_content → extract_places → geocode → plan_route
-    S->>DB: persist_results
-    DB-->>S: saved IDs
-    S-->>API: PipelineResult
-    API-->>C: parsed places
-```
-
-**Key files**: [`web_fetch_chain.py`](backend/services/web_fetch_chain.py), [`playwright_scraper.py`](backend/services/playwright_scraper.py), [`web_scraper.py`](backend/services/web_scraper.py), [`content_classifier.py`](backend/services/content_classifier.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py), [`route_planner.py`](backend/services/route_planner.py), [`supabase_service.py`](backend/services/supabase_service.py)
-
-### Scenario E: YouTube Links Pipeline
-
-```
-POST /parse_youtube
-→ backend/langgraph/atlas_graph.py: parse_youtube node
-  → youtube-transcript-api: transcript / subtitles / chapters
-  → DeepSeek extraction: place extraction + dedupe + hierarchy cleanup
-  → geocoder.py: geocode()
-  → route_planner.py: plan_route()
-  → supabase_service.py: persist()
-```
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant LG as LangGraph App
-    participant YT as youtube-transcript-api
-    participant DS as DeepSeek
-    participant GEO as Geocoder
-    participant DB as Supabase
-
-    C->>API: POST /parse_youtube
-    API->>LG: parse_youtube node
-    LG->>YT: fetch transcript + chapters
-    YT-->>LG: transcript / subtitles / chapters
-    LG->>DS: extract places + dedupe + hierarchy cleanup
-    DS-->>LG: structured place candidates
-    LG->>GEO: geocode coordinates
-    GEO-->>LG: resolved locations
-    LG->>DB: persist conversation / session state
-    LG-->>API: ParseResponse
-    API-->>C: map pins + place list
-```
-
-**Key files**: [`youtube_places_service.py`](backend/services/youtube_places_service.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py), [`geocoder.py`](backend/services/geocoder.py)
-
-### Scenario F: Find Image Places Pipeline
-
-```
-POST /find_image_places
-→ backend/langgraph/atlas_graph.py: find_image_places node
-  → GPT-4o Vision: landmark / place recognition
-  → geocoder.py: optional coordinate validation / normalization
-  → supabase_service.py: persist()
-```
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant LG as LangGraph App
-    participant GPT as GPT-4o Vision
-    participant GEO as Geocoder
-    participant DB as Supabase
-
-    C->>API: POST /find_image_places
-    API->>LG: find_image_places node
-    LG->>GPT: image + prompt
-    GPT-->>LG: landmark name + coordinates + confidence
-    LG->>GEO: optional coordinate validation / normalization
-    GEO-->>LG: final location payload
-    LG->>DB: persist session or conversation context
-    LG-->>API: ParseResponse
-    API-->>C: map pin + place label
-```
-
-**Key files**: [`find_image_places_service.py`](backend/services/find_image_places_service.py), [`langchain_runtime.py`](backend/services/langchain_runtime.py)
-
-### Scenario G: Conversation Management
-
-```
-POST /chat (with session_id)
-→ backend/langgraph/atlas_graph.py: chat node
-  → backend/langgraph/chat_agent.py: run_chat()
-  → conversation_manager.py: session lookup + memory injection
-    → Short-term: current conversation history
-    → Working: extracted places buffer
-    → Long-term: user preferences from DB
-  → LangChain tool-calling loop: llm.bind_tools(TOOLS).ainvoke()
-    → AIMessage.tool_calls → ToolRegistry.execute()
-    → agent_orchestrator._apply_tool_result() (map/route side-effects)
-    → ToolMessage results fed back → model re-invoked
-  → Plain final answer + rolling summary + memory update
-  → Structured response (same shape as before)
-```
-
-On the mobile side, the Atlas AI home screen now merges the old chat-history entry point and the Atlas AI conversation entry point into one history-driven flow:
-- `GET /conversations` populates the Atlas AI history list.
-- Tapping a history item opens `GET /conversations/:id` and hydrates the chat transcript plus saved places.
-- The active chat keeps its own `session_id` for turn-by-turn continuation, while the persisted `conversation_id` is used for restore/reload.
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Mobile)
-    participant API as FastAPI
-    participant CM as ConversationManager
-    participant MEM as Memory (3-Tier)
-    participant LLM as DeepSeek/Qwen
-    participant TR as ToolRegistry
-    participant DB as Supabase
-
-    C->>API: POST /chat (message + session_id)
-    API->>CM: get_session_context()
-    CM->>MEM: Short-term (conversation history)
-    MEM-->>CM: recent messages
-    CM->>MEM: Working (extracted places buffer)
-    MEM-->>CM: active places
-    CM->>MEM: Long-term (user preferences from DB)
-    MEM-->>CM: saved preferences
-    CM-->>API: consolidated context
-
-    API->>API: chat_agent.run_chat() — native tool calling
-    loop Tool-Calling Loop (max 8 steps)
-        API->>LLM: messages + bind_tools(TOOLS)
-        LLM-->>API: AIMessage (content or tool_calls)
-        alt AIMessage.tool_calls present
-            API->>TR: ToolRegistry.execute()
-            TR-->>API: tool result
-            API->>CM: _apply_tool_result() + session bookkeeping
-            API->>LLM: ToolMessage results (auto-continue)
-        else plain content
-            API-->>API: final answer — break
-        end
-    end
-
-    API->>CM: update_session()
-    CM->>DB: persist conversation state
-    DB-->>CM: saved
-    API-->>C: structured response + updated context
-```
-
-**Key files**: [`chat_agent.py`](backend/langgraph/chat_agent.py), [`conversation_manager.py`](backend/services/conversation_manager.py), [`tool_definitions.py`](backend/services/tool_definitions.py)
-
----
-
-## LangSmith & Observability
-| Feature | Implementation | Status |
-|---------|---------------|--------|
-| **Tracing** | LangSmith via [`configure_langsmith()`](backend/services/observability.py) | ✅ Configured via environment |
-| **Pipeline Tracing** | `AtlasApp` graph in LangGraph + `AtlasParseGraph` legacy inner graph | ✅ Active |
-| **Agent Loop Tracing** | `agent_loop_step` run metadata | ✅ Active |
-| **LLM Call Tracing** | Model metadata with `langsmith_tags` | ✅ Active |
-| **Performance Metrics** | Custom [`performance_logger.py`](backend/services/performance_logger.py) | ✅ Active |
-| **Real-time Progress** | [`progress.py`](backend/services/progress.py) SSE stream | ✅ Active |
-
-Configuration in [`observability.py`](backend/services/observability.py) reads `LANGSMITH_API_KEY` from the environment and sets `LANGSMITH_TRACING=true`, `LANGCHAIN_TRACING_V2=true`, and `LANGSMITH_PROJECT=atlas-mobile`. The system degrades gracefully when the key is absent.
-
-**How to use LangGraph Studio**
-1. Start the LangGraph Agent Server locally with the repo's `langgraph.json`.
-2. Open Studio from the LangSmith UI and connect it to that local server.
-3. Run a flow from `backend/langgraph/atlas_graph.py`.
-4. Reuse the same `thread_id` to inspect one run across multiple steps.
-5. Open a checkpoint to inspect state, replay from that point, or fork a new branch.
-
-**How to use LangSmith Evaluation**
-1. Open [smith.langchain.com](https://smith.langchain.com).
-2. Create a dataset with input examples and optional reference outputs.
-3. Run an experiment against your graph or chain.
-4. Inspect each row to see the run output, evaluator scores, and latency/cost.
-5. Compare multiple experiments to see whether a prompt or graph change improved results.
-
-## Chat History & Memory
-
-The conversation system has two layers that work together:
-
-1. **Frontend conversation history** powers the Atlas AI home screen history list and chat restore flow.
-2. **Backend session memory + long-term memory** powers the active chat, rolling summaries, tool side-effects, and durable preferences.
+|-------|------------|---------|
+| **Mobile App** | Expo SDK 56, React Native 0.85 | Native iOS and Android application with a shared map workspace. |
+| **Backend API** | FastAPI, Uvicorn | Import, chat, search, route, image, progress, and persistence endpoints. |
+| **Agent Runtime** | LangChain 1.0, LangGraph 1.0 | Deterministic import graph plus a tool-calling Atlas AI conversation agent. |
+| **Primary LLM Runtime** | OpenAI-compatible Mango configuration | Chat, structured extraction, translation, and place-card generation through `OPENAI_*_MANGO` settings. |
+| **Vision and OCR** | Gemini Computer Use, GLM OCR, OpenAI vision | Webpage capture, screenshot text extraction, and photo place recognition. |
+| **Search and Maps** | Mapbox Search Box, Mapbox GL | Place suggestions, place retrieval, directions, routes, markers, and map camera control. |
+| **Persistence** | Supabase PostgreSQL, AsyncStorage | User-scoped remote data with cached, offline-first mobile reads and queued writes. |
+| **Observability** | LangSmith, backend logging | Optional LLM traces and backend request/performance logs. |
 
 ```mermaid
 graph TD
-    UI[Atlas AI Home<br/>History list + active chat] --> LIST[Load history list<br/>GET /conversations]
-    LIST --> DETAIL[Hydrate a full chat<br/>GET /conversations/:id]
-    DETAIL --> CHAT[AIChatBox<br/>Restored messages + places]
+    U[User] --> M[Expo Mobile App]
 
-    CHAT --> POSTCHAT[POST /chat<br/>session_id + message + conversation_id]
-    POSTCHAT --> RECOVER[ConversationManager<br/>session recovery]
-    RECOVER --> SHORT[Short-term session memory<br/>session.messages]
-    RECOVER --> WORK[Working chat state<br/>session.locations + pending_place_action]
-    RECOVER --> LONG[Long-term memory preload<br/>load durable memories]
+    subgraph "Mobile Workspace"
+        IMP[Import Places]
+        MP[My Places]
+        AI[Atlas AI]
+        AT[Atlas and Plan Builder]
+        MAP[Shared Mapbox Map]
+    end
 
-    SHORT --> PROMPT[Build chat system prompt<br/>history + rolling summary + user memory]
-    WORK --> PROMPT
-    LONG --> PROMPT
-    PROMPT --> AGENT[LangChain tool-calling loop<br/>chat agent]
+    M --> IMP
+    M --> MP
+    M --> AI
+    M --> AT
+    IMP --> MAP
+    MP --> MAP
+    AI --> MAP
+    AT --> MAP
 
-    AGENT --> TOOL{Tool call?}
-    TOOL -->|map_operation| MAP[Pin in Chat / Save to My Places]
-    TOOL -->|other current/future tools| REG[ToolRegistry execute]
-    REG --> AGENT
-    MAP --> STATE[Update session.locations<br/>and pending_place_action]
-    AGENT --> MSG[Append assistant/user/tool messages]
+    subgraph "FastAPI Backend"
+        API[backend/main.py]
+        GRAPH[LangGraph Import Graph]
+        CHAT[Atlas AI Tool-Calling Agent]
+        SEARCH[Mapbox Place Search]
+        ROUTE[Directions and Route Services]
+    end
 
-    MSG --> SUMMARY[Rolling summary<br/>compress every ~10 new messages]
-    SUMMARY --> SUMDB[(conversation_summaries)]
-    MSG --> MEMORY[Long-term memory update<br/>extract durable preferences]
-    MEMORY --> MEMDB[(long_term_memory)]
-    MSG --> SAVE[conversation save]
-    SAVE --> CONV[(conversations)]
-    SAVE --> MSGDB[(conversation_messages)]
-    SAVE --> LOCDB[(conversation_locations)]
-    SAVE --> CHAT
+    IMP --> API
+    AI --> API
+    AT --> API
+    API --> GRAPH
+    API --> CHAT
+    API --> SEARCH
+    API --> ROUTE
+
+    subgraph "External Services"
+        LLM[OpenAI-compatible LLM]
+        GEM[Gemini Computer Use]
+        OCR[GLM OCR]
+        MB[Mapbox]
+        DB[Supabase]
+    end
+
+    GRAPH --> LLM
+    GRAPH --> GEM
+    GRAPH --> OCR
+    CHAT --> LLM
+    SEARCH --> MB
+    ROUTE --> MB
+    API --> DB
+    M --> DB
 ```
 
-**What happens in a single chat**
-- Each turn starts from the active `session_id`; if needed, the backend can recover the session from the saved `conversation_id`.
-- `chat_agent.py` builds the prompt from recent chat messages, the rolling `conversation_summary`, and the cached `user_memory_summary`.
-- If the model emits tool calls, the agent loop executes them through `ToolRegistry`, applies side-effects to the session, and continues until a plain final answer is produced.
-- When the assistant suggests new places, the backend can attach place-action cards so the UI can show `Pin in Chat` / `Save to My Places` inside the chat bubble.
+---
 
-**How chat history is persisted**
-- `conversation_manager.save_conversation()` writes the current session snapshot to Supabase.
-- `supabase_service.py` persists:
-  - `conversations` for the summary row,
-  - `conversation_messages` for the full chat transcript,
-  - `conversation_locations` for the place list and map pins.
-- The front-end history list reads from `src/services/supabase/supabaseClient.ts` via `loadChatHistory()` and `fetchConversation()`.
-- `ChatHistoryPanel` opens a saved conversation, and `AIChatBox` rehydrates the message list plus locations from the conversation detail endpoint.
+## Core Workflows
 
-**How rolling summary and long-term memory work**
-- `agent_orchestrator._maybe_roll_conversation_summary()` compresses roughly every 10 new messages into `conversation_summaries`.
-- `agent_orchestrator._update_memory()` extracts durable facts such as preferences, visited places, dislikes, constraints, and plans.
-- Those memory items are stored in Supabase `long_term_memory` as a bounded active set plus a recursive `old_memory` archive.
-- When the active set grows beyond the cap, the oldest batch is compressed into one archive sentence, then merged into `old_memory` so the system keeps a very long-lived but increasingly abstract memory trail.
-- The backend reloads the archive entry first, then the bounded active memories in category-aware order, and injects that compact set into the system prompt so the assistant can adapt to the user consistently.
-- The active session also keeps a compact `user_memory_summary` cache so repeat turns do not need to rebuild everything from scratch.
+### 1. Import Places
 
-**Tool events in chat**
-- When the assistant identifies a new place the user may want to add, the current implementation uses the `map_operation` tool.
-- The tool can:
-  - Pin the place in the current chat map.
-  - Save the place to My Places.
-  - Keep the chat UI open and continue the conversation.
-- Future tool events can be added to the same tool-calling loop without changing the front-end chat contract.
+The import flow is a review-first pipeline. It does not automatically save results: users select the places they want on the Save screen, then explicitly save them to My Places or use them to start planning.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as Expo App
+    participant API as FastAPI
+    participant G as LangGraph / Services
+    participant X as AI, OCR, and Web Providers
+    participant DB as Supabase
+
+    U->>A: Submit text, URL, video link, images, or photo
+    A->>API: Start source-specific parse request
+    API->>G: Route to the matching import path
+    G->>X: Fetch, transcribe, inspect, OCR, or extract places
+    X-->>G: Structured candidates
+    G->>G: Validate, geocode, deduplicate, enrich photos, plan route
+    G-->>API: ParseResponse and progress events
+    API-->>A: Places and map data
+    U->>A: Review and select results
+    A->>DB: Save selected places or continue into planning/chat
+```
+
+Supported source types:
+
+| Source | Endpoint | Main path |
+|--------|----------|-----------|
+| **Smart text** | `POST /parse_text` | Extracts place references from notes, lists, itineraries, and natural-language prompts. |
+| **Generic and Reddit links** | `POST /parse_link` | Fetches page content or Reddit post data, extracts places, then geocodes and enriches results. |
+| **Any link / visual page scan** | `POST /scan_url` or `POST /scrape_url` | Uses browser capture and OCR for pages whose text is not directly available. |
+| **YouTube** | `POST /parse_youtube` | Uses video metadata, transcript, captions, and contextual extraction. |
+| **TikTok** | `POST /parse_tiktok` | Uses video metadata and available captions/transcript context. |
+| **Instagram Reels** | `POST /parse_instagram_reel` | Uses Reel metadata and available transcript/caption context. |
+| **Facebook Reels** | `POST /parse_facebook_reel` | Uses public Reel metadata and captions when available. |
+| **Screenshots / text images** | `POST /scan_images_base64` or `POST /scan_images` | Reads text with GLM OCR and sends it through the same place extraction path. |
+| **Single-photo place recognition** | `POST /find_image_places` | Identifies a landmark or place from a photo and returns a map-ready candidate. |
+
+The mobile flow is implemented in [`src/features/import-places/`](src/features/import-places/):
+
+```text
+ImportScreen -> AnalyzingScreen -> SaveScreen
+       |                |               |
+       |                |               +-> Save to My Places
+       |                |               +-> Add to a plan or Atlas
+       |                |               +-> Start an Atlas AI conversation
+       |                +-> Live progress polling and cancellation
+       +-> Text, links, images, and source-specific import modes
+```
+
+### 2. My Places and Special Places
+
+My Places is the durable, user-owned place collection. Saved places are cached locally, synchronized to Supabase, deduplicated by provider identity where available, and rendered as persistent map markers.
+
+- Place search uses Mapbox Search Box suggestions followed by retrieval of a saveable place record.
+- Imports, search results, chat recommendations, and manual additions all use the same place persistence layer.
+- Offline writes are queued and flushed when the app becomes active again.
+- Each user may designate one **Home**, **Office**, and **School** place. These are explicitly confirmed in Atlas AI before the client writes them.
+- Places can carry notes, categories, source information, provider identifiers, photos, and map-derived fallback thumbnails.
+
+Key files: [`src/services/place/placeService.ts`](src/services/place/placeService.ts), [`src/services/local/syncQueue.ts`](src/services/local/syncQueue.ts), [`src/features/my-places/`](src/features/my-places/).
+
+### 3. Atlas AI and Conversation History
+
+Atlas AI is a full-screen, session-based assistant. It can discuss the current import or selected places, research relevant locations, propose additions, open a map presentation, create or update special places, and preserve a conversation for later.
+
+```mermaid
+graph LR
+    UI[AIChatBox] --> API[POST /chat or /chat/stream]
+    API --> AGENT[chat_agent.py]
+    AGENT --> CONTEXT[Conversation history + attached places + memory]
+    CONTEXT --> MODEL[OpenAI-compatible model]
+    MODEL --> TOOLS{Tool call?}
+    TOOLS -->|Yes| TOOLSET[Search, research, route, place and Atlas tools]
+    TOOLSET --> AGENT
+    TOOLS -->|No| RESPONSE[Answer + presentation + optional confirmation card]
+    RESPONSE --> UI
+    RESPONSE --> DB[(Supabase conversations)]
+```
+
+The client owns any irreversible change. For example, the agent can propose saving Home, Office, or School, but the mobile app performs the actual saved-place write only after the user confirms the result card.
+
+Conversation data includes the session, messages, attached locations, titles, summaries, and optional long-term memory. The mobile history screen can restore a persisted conversation and its associated map context.
+
+Key files: [`backend/langgraph/chat_agent.py`](backend/langgraph/chat_agent.py), [`backend/services/conversation_manager.py`](backend/services/conversation_manager.py), [`src/features/atlas-ai/`](src/features/atlas-ai/).
+
+### 4. Atlases and Plans
+
+An **Atlas** is a named collection of saved places presented as a map itinerary. Users can create an Atlas, add or remove places, reorder stops, show routes, share an image, and continue researching inside Atlas AI.
+
+The **My Plan** area supports plan creation and plan details alongside the Atlas builder. Both experiences use the same shared map and the same place-search and saved-place services.
+
+Key files: [`src/features/my-places/atlas/`](src/features/my-places/atlas/), [`src/features/my-plan/`](src/features/my-plan/), [`src/services/atlas/`](src/services/atlas/), [`src/services/plan/`](src/services/plan/).
+
+### 5. Shared Map Workspace
+
+`HomeScreen` owns one full-screen `MapboxMap` beneath the app's bottom panels and full-screen overlays. The map can switch among saved-place markers, Atlas itinerary markers, chat presentations, route lines, search results, and the device location without remounting the main map surface.
+
+The camera accounts for the active panel height so selected places remain visible above the sheet. Marker selection, route display, map popups, and Atlas-specific controls are coordinated through `HomeContext` and `AtlasMapState`.
+
+Key files: [`src/features/home/HomeScreen.tsx`](src/features/home/HomeScreen.tsx), [`src/features/home/HomeContext.tsx`](src/features/home/HomeContext.tsx), [`src/features/map/MapboxMap.tsx`](src/features/map/MapboxMap.tsx).
 
 ---
 
-## Import Pipelines
+## AI and Service Architecture
 
-### 1. URL / Reddit Links — `POST /parse_link`
+### Import and Agent Runtime
 
-Fetches web/Reddit content, extracts geographic entities with two-stage (LLM + rule) hierarchy filtering, resolves ambiguous names via entity linking, geocodes through a multi-layer fallback chain, plans an optimal TSP route, and persists everything to the three-tier memory system. Results are cached in-memory with LRU eviction (100 entries, disk-persisted across restarts).
+`backend/langgraph/atlas_graph.py` provides the import graph used by the FastAPI compatibility layer. Source-specific services fetch or inspect source content, while shared extraction, geocoding, route, image, and progress services normalize the final response.
 
-**Key files**: [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`extraction_pipeline.py`](backend/services/extraction_pipeline.py)
+`backend/langgraph/chat_agent.py` is the conversational runtime. It uses tool calling for bounded operations and returns structured presentation data to the mobile app rather than relying on hidden text markers.
 
-### 2. Smart Text — `POST /parse_text`
+### LLM Configuration
 
-The smart-text pipeline runs a `qwen3.5-flash → deepseek-chat` cascade, then geocodes the structured output. The `web_search` flag is still accepted for API compatibility but no longer changes the pipeline behavior.
+The primary OpenAI-compatible runtime reads these backend-only environment variables:
 
-**Key files**: [`smart_text_service.py`](backend/services/smart_text_service.py), [`web_search_router.py`](backend/services/web_search_router.py), [`backend/langchain/runtime.py`](backend/langchain/runtime.py)
+```text
+OPENAI_API_KEY_MANGO=
+OPENAI_MODEL_MANGO=
+OPENAI_BASE_URL_MANGO=
+```
 
-### 3. Find Text Places — `POST /scan_images_base64` / `POST /scan_images`
+The repository also supports optional provider-specific configuration for vision, OCR, web capture, search, transcription, and geocoding. Do not expose secret backend keys with an `EXPO_PUBLIC_` prefix.
 
-Upload up to 3 images (JPEG/PNG, or HEIC converted to JPEG). GLM-OCR extracts text, then an LLM-based [`content_classifier.py`](backend/services/content_classifier.py) routes the content: named POI → extraction pipeline, address-heavy → address-first geocoding via Atlas AI Discovery.
+### Geocoding and Place Enrichment
 
-**Key files**: [`image_scanner.py`](backend/services/image_scanner.py), [`glm_ocr.py`](backend/services/glm_ocr.py), [`content_classifier.py`](backend/services/content_classifier.py)
+Geocoding uses multiple services where configured, with validation and fallback behavior. Mapbox Search Box handles interactive place search and retrieval; geocoded results can be enriched with place images before the response reaches the app.
 
-### 4. Any Links (Vision) — `POST /scan_url`
+### Progress, Caching, and Observability
 
-For anti-bot, JavaScript-heavy, or login-walled pages: Gemini Computer Use opens the page in a Playwright browser, dismisses interstitials, scrolls top-to-bottom, and captures up to 8 screenshots. GLM-OCR reads the screenshots, then reuses the Find Text Places extraction path downstream.
-
-**Key files**: [`gemini_computer_use.py`](backend/services/gemini_computer_use.py), [`glm_ocr.py`](backend/services/glm_ocr.py)
-
-### 5. YouTube Links — `POST /parse_youtube`
-
-See `Data Flow` Scenario G for the live call chain and diagram.
-
-### 6. Find Image Places — `POST /find_image_places`
-
-See `Data Flow` Scenario F for the live call chain and diagram.
-
-### 7. Atlas AI Discovery — `POST /atlas_ai/discover`
-
-For natural-language queries that need exact addresses: DeepSeek researches addresses directly (e.g. "Where did Taylor Swift get married?" → Church of St. Patrick, Killarney), then address-first geocoding returns coordinates without going through the full extraction pipeline.
-
-**Key files**: [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py)
-
----
-
-## AI Agent & LLM Architecture
-
-### Multi-Agent Pipeline
-
-| Agent | Responsibility | Implementation |
-|-------|---------------|----------------|
-| **Supervisor Orchestrator** | Routes each import through the LangGraph app, manages session context, handles follow-up chat with tool-calling | [`agent_orchestrator.py`](backend/services/agent_orchestrator.py), [`backend/langgraph/atlas_graph.py`](backend/langgraph/atlas_graph.py) |
-| **Extraction Agent** | Two-stage pipeline: LLM extracts all geographic entities with hierarchy classification → rule engine filters out redundant high-level entities (countries, states, cities) while preserving POIs, neighborhoods, and landmarks | [`extraction_pipeline.py`](backend/services/extraction_pipeline.py) |
-| **Entity Linking Agent** | DeepSeek-based disambiguation: resolves ambiguous names by appending geographic context (ROM → Royal Ontario Museum, Suzhou → Suzhou, Jiangsu, Cambridge → Cambridge, UK), resolves generic terms (monuments → Washington Monument) | Integrated in orchestrator |
-| **Content Classifier** | LLM routes OCR/pasted text to the correct pipeline: named POI content → entity extraction, address-heavy content → address-first geocoding | [`content_classifier.py`](backend/services/content_classifier.py) |
-| **Smart Text Agent** | Parses freeform travel notes, prompts, and itineraries via a fixed Qwen 3.5 Flash → DeepSeek V4 Flash cascade | [`smart_text_service.py`](backend/services/smart_text_service.py) |
-| **Web Search Router** | Retained for compatibility; smart text no longer branches on the toggle | [`web_search_router.py`](backend/services/web_search_router.py) |
-| **Find Text Places** | Orchestrates GLM-OCR → content classification → extraction/discovery pipeline | [`image_scanner.py`](backend/services/image_scanner.py) |
-| **YouTube Links Parser** | Extracts transcript/subtitles + chapters, then runs DeepSeek extraction and geocoding | [`youtube_places_service.py`](backend/services/youtube_places_service.py) |
-| **Find Image Places** | Uses GPT-4o vision to identify a landmark from a single photo | [`find_image_places_service.py`](backend/services/find_image_places_service.py) |
-| **Vision Browser Agent** | Gemini Computer Use for visual page capture — handles anti-bot, JS-heavy, and login-walled pages | [`gemini_computer_use.py`](backend/services/gemini_computer_use.py) |
-| **OCR Service** | GLM-OCR integration via Zhipu AI's Layout Parsing API, with HEIC → JPEG conversion for iOS compatibility | [`glm_ocr.py`](backend/services/glm_ocr.py) |
-| **Atlas Discovery Agent** | DeepSeek-based direct address research for natural-language queries, bypassing the extraction pipeline | [`atlas_ai_discovery.py`](backend/services/atlas_ai_discovery.py) |
-
-### Geocoding Engine
-
-A multi-layer geocoding fallback chain that maximizes coordinate resolution rate:
-
-| Layer | Service | Free Tier | Coverage |
-|-------|---------|-----------|----------|
-| 1 | Geoapify | 3,000 req/day | Best supplementary POI |
-| 2 | LocationIQ | 5,000 req/day | Excellent OSM-based |
-| 3 | Nominatim (OSM) | 1 req/s | Global OSM data |
-| 4 | Photon (OSM) | Unlimited | Complementary coverage |
-| 5 | Google Maps | Pay-as-you-go | Best global POI (final fallback) |
-
-Each layer includes country bounding-box validation to reject out-of-country results, rate limiting with per-provider async locks, and coordinate deduplication to avoid redundant lookups.
-
-**Key file**: [`geocoder.py`](backend/services/geocoder.py)
-
-### Route Planning
-
-A zero-cost TSP solver using Haversine great-circle distance, greedy nearest-neighbor construction, and 2-opt local search optimization — no external API calls required.
-
-**Key file**: [`route_planner.py`](backend/services/route_planner.py)
-
-### Three-Tier Memory System
-
-1. **Short-term**: Current agent loop iteration messages + tool results
-2. **Session memory**: Active chat sessions in backend runtime (dict-based)
-3. **Long-term memory**: Persisted conversations + auto-extracted user preferences in Supabase
-
-**Key file**: [`conversation_manager.py`](backend/services/conversation_manager.py)
-
-### Real-Time Progress Tracking
-
-An in-memory progress event system (`start` → `mark` → `finish` / `fail` lifecycle) that the frontend polls via `/parse_progress/{request_id}` at 1s intervals, enabling live status updates during the 30-45s processing window.
-
-**Key file**: [`progress.py`](backend/services/progress.py)
-
-### Multi-Model LLM Client
-
-A unified LLM client supporting three model providers with tool-calling support, token usage tracking, and model-specific prompt engineering:
-
-- **DeepSeek V4 Flash** (`deepseek-chat`) — primary structured extraction and classification
-- **Qwen 3.5 Flash** (`qwen3.5-flash`) — live web-backed natural language answers
-- **Gemini 3.5 Flash** — vision/OCR: Computer Use, screenshot analysis
-
-**Key file**: [`llm_client.py`](backend/services/llm_client.py)
-
-### Pipeline Performance Metrics
-
-The [`PipelineMetrics`](backend/services/performance_logger.py) dataclass tracks end-to-end timing and per-LLM-call token usage for every pipeline run, queryable via `GET /api/performance`.
-
-| Metric | Value |
-|--------|-------|
-| **End-to-end time** | ~30-45s per parse (varies by source type, geocoding fallback depth) |
-| **LLM calls per parse** | 2-3 (extraction + entity linking + optional memory extraction) |
-| **Cache hit time** | ~50ms (in-memory LRU, disk-persisted) |
-| **Geocoding success rate** | ~85-95% with multi-layer fallback chain |
-| **Pipeline monitoring** | Exposed via `GET /api/performance` with per-run token usage and timing |
+- Long-running imports publish progress events that the mobile app polls through `/parse_progress/{request_id}`.
+- Active import requests can be cancelled through `/parse_progress/{request_id}/cancel`.
+- The backend keeps bounded caches for source parsing and related data.
+- LangSmith tracing is optional and controlled through environment configuration.
+- The backend writes standard logs to the terminal and `atlas-backend.log`.
 
 ---
 
 ## API Endpoints
 
+### Import and Discovery
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/parse_link` | Parse a URL → extract locations → plan route |
-| `POST` | `/parse_text` | Parse pasted text with optional `web_search` |
-| `POST` | `/scan_images_base64` | Parse base64 image payloads (max 3) |
-| `POST` | `/scan_images` | Parse uploaded image files (max 3) |
-| `POST` | `/scan_url` | Gemini vision captures webpage → OCR → parse |
-| `POST` | `/scrape_url` | Gemini text extraction from page → parse |
-| `POST` | `/atlas_ai/discover` | Research exact addresses → geocode directly |
-| `POST` | `/chat` | Continue conversation with AI agent |
-| `GET` | `/sessions` | List active sessions |
-| `POST` | `/sessions` | Create a session |
-| `POST` | `/sessions/{id}/save` | Persist session to Supabase |
-| `GET` | `/conversations` | List saved conversations |
-| `GET` | `/conversations/{id}` | Load full conversation |
-| `DELETE` | `/conversations/{id}` | Delete a conversation |
-| `GET` | `/memories` | List long-term memories |
-| `POST` | `/memories` | Add a memory item |
-| `GET` | `/parse_progress/{request_id}` | Poll live progress events |
-| `GET` | `/health` | Health check |
-| `GET` | `/api/performance` | Pipeline metrics (token usage, timing) |
-| `POST` | `/cache/invalidate` | Invalidate URL cache entry |
-| `GET` | `/cache/status` | Cache statistics (hits, misses, size, hit rate) |
+| `POST` | `/parse_text` | Extract places from pasted text. |
+| `POST` | `/parse_link` | Parse a supported URL, including Reddit and general web content. |
+| `POST` | `/scrape_url` | Extract text from a web page for downstream parsing. |
+| `POST` | `/scan_url` | Visually inspect a web page, OCR it, and parse places. |
+| `POST` | `/parse_youtube` | Parse a YouTube video into places. |
+| `POST` | `/parse_tiktok` | Parse a TikTok video into places. |
+| `POST` | `/parse_instagram_reel` | Parse an Instagram Reel into places. |
+| `POST` | `/parse_facebook_reel` | Parse a Facebook Reel into places. |
+| `POST` | `/scan_images_base64` | Parse base64-encoded screenshots or text images. |
+| `POST` | `/scan_images` | Parse uploaded screenshot or text image files. |
+| `POST` | `/find_image_places` | Identify a place from a photo. |
+| `POST` | `/atlas_ai/discover` | Research and geocode places for Atlas planning. |
+| `POST` | `/link_preview` | Return preview metadata for a submitted link. |
+
+### Chat, Sessions, and Memory
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/chat` | Run one Atlas AI turn. |
+| `POST` | `/chat/stream` | Stream one Atlas AI turn. |
+| `POST` | `/chat/actions/confirm` | Confirm or reject a pending chat action. |
+| `GET` | `/sessions` | List active backend sessions. |
+| `POST` | `/sessions` | Create a chat session. |
+| `POST` | `/sessions/{session_id}/save` | Persist a session. |
+| `POST` | `/sessions/{session_id}/import-welcome` | Generate or save an import welcome context. |
+| `POST` | `/sessions/{session_id}/atlas-welcome` | Generate or save an Atlas welcome context. |
+| `GET` | `/conversations` | List persisted conversations. |
+| `GET` | `/conversations/{conversation_id}` | Load one conversation with its locations. |
+| `DELETE` | `/conversations/{conversation_id}` | Delete a persisted conversation. |
+| `GET` | `/memories` | List persisted memory records. |
+| `POST` | `/memories` | Create a memory record. |
+
+### Maps, Routes, and Supporting Services
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/places/search` | Return Mapbox Search Box suggestions. |
+| `GET` | `/places/retrieve/{mapbox_id}` | Resolve a suggestion into saveable place details. |
+| `POST` | `/atlas/route` | Request a route for supplied coordinates. |
+| `POST` | `/speech/transcribe` | Transcribe supported voice input. |
+| `GET` | `/region_photo` | Retrieve an image for a region. |
+| `GET` | `/place_photo` | Retrieve an image for a place. |
+| `GET` | `/parse_progress/{request_id}` | Read import progress events. |
+| `POST` | `/parse_progress/{request_id}/cancel` | Cancel an active import request. |
+| `GET` | `/health` | Health check. |
+| `GET` | `/cache/status` | Inspect backend cache state. |
+| `POST` | `/cache/invalidate` | Invalidate a cache entry. |
+| `GET` | `/api/performance` | Inspect available pipeline metrics. |
 
 ---
 
@@ -776,190 +295,232 @@ The [`PipelineMetrics`](backend/services/performance_logger.py) dataclass tracks
 
 ### Prerequisites
 
-- **Python 3.10+**
-- **Node.js 18+**
-- **Xcode 16+** (iOS Simulator) / Android Studio
-- **CocoaPods** >= 1.16
-- API keys for services configured in `.env`
+- Python 3.10+
+- Node.js 18+
+- Xcode 16+ for iOS development, or Android Studio for Android development
+- CocoaPods 1.16+ for iOS native dependencies
+- A Supabase project, a Mapbox token, and the API credentials required by the features you intend to run
 
-### Installation & Setup
+### Installation and Setup
 
 ```bash
 # 1. Install backend dependencies
 cd backend
 pip install -r requirements.txt
-playwright install chromium        # For Gemini Computer Use
+playwright install chromium
 cd ..
 
-# 2. Install frontend dependencies
+# 2. Install mobile dependencies
 npm install
 
-# 3. Configure .env
-cp .env.example .env
+# 3. Create and configure .env at the repository root
 ```
 
-> **Required API keys**: `MAPBOX_ACCESS_TOKEN`, `OPENAI_API_KEY_MANGO`, `OPENAI_MODEL_MANGO`, `OPENAI_BASE_URL_MANGO`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`. Optional: `GROQ_API_KEY` (voice transcription), `GLM_API_KEY` (OCR), `GEMINI_API_KEY` (vision), `QWEN_API_KEY` (web search), and at least one geocoding key.
+At minimum, configure the shared mobile/backend services:
+
+```dotenv
+EXPO_PUBLIC_SUPABASE_URL=
+EXPO_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+MAPBOX_ACCESS_TOKEN=
+EXPO_PUBLIC_API_BASE_URL=http://localhost:8000
+
+OPENAI_API_KEY_MANGO=
+OPENAI_MODEL_MANGO=
+OPENAI_BASE_URL_MANGO=
+```
+
+Depending on the enabled import modes, also configure the relevant keys such as `GLM_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` for the photo-vision service, `APIFY_TOKEN`, `GROQ_API_KEY`, `TAVILY_API_KEY`, and geocoding-provider keys.
+
+### Database Setup
+
+Run the base Supabase schema before using persistence features:
+
+```text
+docs/schema.sql
+docs/schema-auth.sql
+```
+
+Then apply every migration in `docs/migrations/`. In particular, the Home / Office / School feature requires:
+
+```text
+docs/migrations/20260812_special_places.sql
+```
+
+Without that migration, reads that request `places.special_role` will fail.
 
 ### Start the App
 
-**Terminal 1 — Backend:**
+Start the backend from the repository root:
+
 ```bash
 uvicorn backend.main:app --reload --reload-dir backend --port 8000
 ```
 
-**Terminal 2 — Frontend:**
-```bash
-npx expo run:ios
-```
+Start the Expo development server in another terminal:
 
-For subsequent runs:
 ```bash
 npx expo start --dev-client
 ```
 
-Keep this terminal open while developing. Expo's development server stays
-running and streams bundler errors and logs as the app reloads. Press `Ctrl+C`
-in that terminal when you want to stop it.
+For a first native iOS build:
 
-If you encounter errors when running `npx expo run:ios`, try:
+```bash
+npx expo run:ios
+```
+
+If native configuration changed, regenerate the native project and reinstall Pods:
+
 ```bash
 npx expo prebuild --clean
 cd ios
 pod install
+cd ..
+npx expo run:ios
 ```
 
 ### Verify
 
 ```bash
 curl http://localhost:8000/health
-# → {"status": "ok"}
+# {"status":"ok"}
 ```
 
-### Usage
+Run the available backend chat tests from the repository root:
 
-1. Tap the **+** button → choose an import mode
-2. Paste input (URL / text) or select up to 3 images
-3. Wait ~30-45s on the Analyzing Screen with live progress
-4. Review extracted places on the Save Screen (map + list)
-5. Save places or explore via Atlas AI chat
+```bash
+PYTHONPATH=. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+  backend/tests/test_chat_baseline.py \
+  backend/tests/test_chat_agent_tools.py
+```
 
 ---
 
 ## Project Structure
 
-```
+```text
 atlas-mobile/
-├── app.config.js                   # Expo configuration
-├── App.tsx                         # Root component with overlay routing
-├── package.json                    # Expo SDK 56 + React Native 0.85
+├── App.tsx                         # Root application and import-flow routing
+├── app.config.js                   # Expo configuration and runtime extras
+├── package.json                    # Expo / React Native dependencies and scripts
+├── assets/                         # App icons and static assets
+├── docs/                           # Supabase schemas, migrations, and engineering docs
+│   ├── schema.sql
+│   ├── schema-auth.sql
+│   └── migrations/
 │
 ├── backend/
-│   ├── main.py                     # FastAPI app entry point (18 endpoints)
-│   ├── requirements.txt
-│   └── services/                   # All backend services
-│       ├── agent_orchestrator.py   # Supervisor Agent — coordinates pipelines + chat tool-calling loop
-│       ├── atlas_ai_discovery.py   # Address-first discovery via DeepSeek
-│       ├── cache.py                # LRU disk-persistent cache (parse + geocoding namespaces)
-│       ├── content_classifier.py   # LLM-based POI vs address content routing
-│       ├── conversation_manager.py # Three-tier memory system (Session dataclass)
-│       ├── extraction_pipeline.py  # Two-stage: LLM extraction → rule hierarchy filtering
-│       ├── geocoder.py             # Multi-layer geocoding fallback chain
-│       ├── gemini_computer_use.py  # Gemini Computer Use browser automation
-│       ├── glm_ocr.py              # GLM-OCR via Zhipu AI Layout Parsing API
-│       ├── image_scanner.py        # Image → OCR → classify → route pipeline
-│       ├── llm_client.py           # DeepSeek / Qwen / Gemini LLM clients
-│       ├── performance_logger.py   # PipelineMetrics tracking + query API
-│       ├── progress.py             # Real-time progress event lifecycle
-│       ├── route_planner.py        # TSP + 2-opt route optimizer
-│       ├── smart_text_service.py   # Smart text pipeline with web search routing
-│       ├── supabase_service.py     # Supabase persistence layer
-│       ├── tool_definitions.py     # Tool schemas + registry for agent loop
-│       ├── web_fetch_chain.py      # Chained web fetching strategy
-│       ├── web_scraper.py          # Multi-source web scraper
-│       └── web_search_router.py    # Web search heuristics + Qwen integration
+│   ├── main.py                     # FastAPI application and public endpoints
+│   ├── langgraph/
+│   │   ├── atlas_graph.py          # Import graph entry point
+│   │   └── chat_agent.py           # Atlas AI tool-calling runtime
+│   ├── langchain/
+│   │   ├── runtime.py              # Chat-model configuration
+│   │   └── tools.py                # Agent tools
+│   ├── services/
+│   │   ├── smart_text_service.py   # Pasted-text place extraction
+│   │   ├── image_scanner.py        # Screenshot and OCR import path
+│   │   ├── *_places_service.py     # YouTube, TikTok, Instagram, Facebook imports
+│   │   ├── atlas_ai_discovery.py   # Atlas planning discovery
+│   │   ├── conversation_manager.py # Session and conversation state
+│   │   ├── place_search_service/   # Mapbox Search Box integration
+│   │   ├── place_image_service/    # Place and region image enrichment
+│   │   ├── geocoder.py             # Geocoding and validation
+│   │   ├── route_planner.py        # Route planning helpers
+│   │   └── progress.py             # Import-progress lifecycle
+│   └── tests/                      # Backend unit and integration-style tests
 │
-├── src/
-│   ├── features/
-│   │   ├── home/                   # HomeScreen, panels, AIChatBox, SearchPanel
-│   │   ├── import-places/          # Import → Analyzing → Save screens
-│   │   ├── map/                    # MapboxMap with markers + routes + camera
-│   │   ├── my-places/              # Saved places list / atlas view
-│   │   ├── my-plan/                # Trip planning (create, detail, DnD)
-│   │   └── place-detail/           # Place detail (hours, tags, visit strategy)
-│   ├── components/                 # Reusable UI components
-│   ├── services/                   # API / import / place / supabase clients
-│   ├── types/                      # TypeScript type definitions
-│   ├── theme/                      # Design tokens + typography
-│   └── lib/                        # Utilities
-│
-├── docs/                           # Database schema, RLS policies, ERD
-├── plans/                          # Feature plans
-├── mock-data/                      # Development mock data
-└── assets/                         # Icons, splash, tab bar icons
+└── src/
+    ├── components/                 # Reusable UI, sheets, dialogs, and controls
+    ├── features/
+    │   ├── home/                   # Shared map workspace, panels, and context
+    │   ├── import-places/          # Import, analysis, and save screens
+    │   ├── atlas-ai/               # Atlas AI chat and conversation history
+    │   ├── my-places/              # Saved places, place cards, and Atlases
+    │   ├── my-plan/                # Plan creation, details, and Atlas builder
+    │   ├── map/                    # Mapbox map, marker, camera, and route rendering
+    │   ├── search/                 # Full-screen search experience
+    │   ├── add-place/              # Shared place-selection overlay
+    │   └── place-detail/           # Place details and related sections
+    ├── services/
+    │   ├── api/                    # FastAPI client
+    │   ├── place/                  # Saved-place CRUD and Mapbox search client
+    │   ├── atlas/                  # Atlas persistence and membership
+    │   ├── plan/                   # Plan persistence
+    │   ├── local/                  # Local cache and queued synchronization
+    │   └── supabase/               # Supabase client and conversation access
+    ├── theme/                      # Typography and design tokens
+    └── types/                      # Shared TypeScript types
 ```
+
+Feature folders contain focused implementation notes such as [`HOME.md`](src/features/home/HOME.md), [`IMPORT-PLACES.md`](src/features/import-places/IMPORT-PLACES.md), [`AI-CHAT.md`](src/features/atlas-ai/ai-chat/AI-CHAT.md), and [`MAP.md`](src/features/map/MAP.md).
 
 ---
 
 ## Technical Stack
 
-| Component | Library |
-|-----------|---------|
-| **Mobile Framework** | React Native 0.85 + Expo SDK 56 |
-| **Maps** | `@rnmapbox/maps@10.3.1` (Mapbox v11) |
-| **Backend** | FastAPI (Python 3.10+) + Uvicorn |
-| **HTTP Client** | httpx |
-| **Browser Automation** | Playwright |
-| **LLM Framework** | LangChain (`langchain`, `langchain-core`, `langgraph`) — StateGraph pipelines and Agent loop |
-| **LLM Observability** | LangSmith (`langsmith`) — LLM observability and tracing platform |
-| **LLM Providers** | DeepSeek V4 Flash (primary structured extraction), Qwen 3.5 Flash (web reasoning), Gemini 3.5 Flash (vision/OCR) |
-| **OCR** | GLM-OCR (Zhipu AI Layout Parsing) |
-| **Database** | Supabase (PostgreSQL) |
-| **Geocoding** | Geoapify / LocationIQ / Nominatim / Photon / Google Maps |
+| Component | Library or Service |
+|-----------|--------------------|
+| **Mobile Framework** | React Native 0.85, Expo SDK 56 |
+| **Navigation and Panels** | React Native, native iOS bottom sheet support, `@gorhom/bottom-sheet` |
+| **Maps** | `@rnmapbox/maps`, Mapbox Search Box, Mapbox Directions |
+| **Backend** | FastAPI, Uvicorn, Pydantic, HTTPX |
+| **Agent Runtime** | LangChain, LangGraph, LangSmith |
+| **LLM Providers** | OpenAI-compatible Mango runtime, Gemini, optional Qwen and Hunyuan paths |
+| **Vision and OCR** | Gemini Computer Use, GLM OCR, OpenAI vision |
+| **Persistence** | Supabase PostgreSQL, AsyncStorage |
+| **Media and Device APIs** | Expo Location, Expo Image Picker, Expo Audio, Expo Notifications, Expo Sharing |
 
 ---
 
 ## Troubleshooting
 
-### Backend not responding
+### Backend is not responding
 
 ```bash
 curl http://localhost:8000/health
-# → {"status": "ok"}
 ```
 
-### Mapbox rendering issues
+If this fails, ensure Uvicorn was started from the repository root and that port `8000` is available.
 
-If the map appears blank or clipped, ensure the parent view has explicit dimensions and rebuild native dependencies:
+### The app cannot reach the backend
+
+`http://localhost:8000` works only when the app and backend run in the same simulator environment. For a physical device, set `EXPO_PUBLIC_API_BASE_URL` to your development machine's reachable LAN address, then restart Expo.
+
+### Map is blank, clipped, or lacks markers
+
+Confirm `MAPBOX_ACCESS_TOKEN` is present in `.env`, restart Expo so `app.config.js` receives it, and rebuild native dependencies after changing Mapbox configuration:
 
 ```bash
 npx expo prebuild --clean
 npx expo run:ios
 ```
 
-### `pod install` fails
+### Saved-place refresh fails with `places.special_role does not exist`
+
+Apply [`20260812_special_places.sql`](docs/migrations/20260812_special_places.sql). This migration adds the `special_role` column used by Home, Office, and School places.
+
+### OCR, webpage vision, or photo identification fails
+
+Check the provider credentials required by the source you are testing. Screenshot parsing needs `GLM_API_KEY`; visual webpage capture needs Gemini configuration; single-photo place recognition reads the OpenAI vision configuration; social-video imports require `APIFY_TOKEN` where applicable.
+
+### iOS Pods or native build fails
 
 ```bash
-cd ios && pod install --repo-update
+cd ios
+pod install --repo-update
+cd ..
 ```
 
-### OCR or vision parsing fails
+If the dependency graph changed, run `npx expo prebuild --clean` before installing Pods again.
 
-Verify environment variables:
+### Tests fail before collection because of local pytest plugins
 
-```bash
-echo $GLM_API_KEY
-echo $GEMINI_API_KEY
-echo $GEMINI_COMPUTER_USE_MODEL   # Should be gemini-3.5-flash
-echo $GEMINI_COMPUTER_USE_IMAGE_SIZE  # Should be 512
-```
-
-### Progress tracking not showing
-
-Ensure the backend is reachable and CORS is configured (allowed for `*` in development).
+Run the test command with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, as shown in the verification section. This isolates repository tests from globally installed pytest plugins.
 
 ---
 
 ## License
 
 MIT
-

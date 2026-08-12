@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { NotePencilIcon } from 'phosphor-react-native/src/icons/NotePencil';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Text } from '@/components/ui/text';
 import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
@@ -1706,7 +1707,7 @@ function AtlasItem({ item, index, onFocus, onRemove, onMove, onNote }: { item: D
     <View style={styles.orderBadge}><Text style={styles.orderBadgeText}>{index + 1}</Text></View>
     {item.photo_url ? <Image source={{ uri: item.photo_url }} style={styles.itemImage as import('react-native').ImageStyle} /> : <View style={[styles.itemImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.name.slice(0, 1).toUpperCase()}</Text></View>}
     <TouchableOpacity onPress={onFocus} style={styles.itemCopy}><Text numberOfLines={1} style={styles.itemName}>{item.name}</Text><Text numberOfLines={1} style={styles.itemAddress}>{item.subtitle}</Text>{item.note ? <Text numberOfLines={2} style={styles.itemNoteModern}>{item.note}</Text> : null}</TouchableOpacity>
-    <VoiceInputButton style={styles.noteButton} onShortPress={() => showDialog({ title: 'Note', input: { placeholder: 'Add a note', initialValue: item.note ?? '', hint: 'Tip: press and hold the voice button to add it by voice.' }, actions: [{ label: 'Cancel' }, { label: 'Save', variant: 'primary', onPress: onNote }] })} onTranscript={(text) => onNote(item.note ? `${item.note} ${text}` : text)} />
+    <VoiceInputButton icon={NotePencilIcon} showVoiceBadge style={styles.noteButton} onShortPress={() => showDialog({ title: 'Note', input: { placeholder: 'Add a note', initialValue: item.note ?? '', hint: 'Tip: press and hold the voice button to add it by voice.' }, actions: [{ label: 'Cancel' }, { label: 'Save', variant: 'primary', onPress: onNote }] })} onTranscript={(text) => onNote(item.note ? `${item.note} ${text}` : text)} />
     <GestureDetector gesture={reorderGesture}><View style={styles.dragHandle}><Ionicons name="reorder-three-outline" size={23} color="#66737C" /></View></GestureDetector>
   </Animated.View></View>;
 }

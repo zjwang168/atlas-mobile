@@ -1,4 +1,6 @@
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
+import type { Icon } from 'phosphor-react-native';
+import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
 import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
@@ -12,10 +14,12 @@ type VoiceInputButtonProps = {
   label?: string;
   onShortPress?: () => void;
   onError?: (message: string) => void;
+  icon?: Icon;
+  showVoiceBadge?: boolean;
 };
 
 /** Hold-to-talk recorder used anywhere Atlas accepts text. */
-export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError }: VoiceInputButtonProps) {
+export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError, icon: IconComponent = WaveformIcon, showVoiceBadge = false }: VoiceInputButtonProps) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -98,7 +102,16 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
           <WaveformIcon size={18} weight="bold" color={recording ? '#FFFFFF' : '#0C8149'} />
           <Text numberOfLines={1} style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Release to send' : label}</Text>
         </View>
-      ) : <WaveformIcon size={22} weight="bold" color={recording ? '#FFFFFF' : '#202024'} />}
+      ) : (
+        <View style={styles.iconWrap}>
+          <IconComponent size={22} weight="bold" color={recording ? '#FFFFFF' : '#202024'} />
+          {showVoiceBadge ? (
+            <View style={[styles.voiceBadge, recording && styles.voiceBadgeRecording]}>
+              <MicrophoneIcon size={8} weight="fill" color={recording ? '#0C8149' : '#FFFFFF'} />
+            </View>
+          ) : null}
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -106,6 +119,9 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
 const styles = StyleSheet.create({
   button: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   recording: { backgroundColor: '#0C8149', borderColor: '#0C8149' },
+  iconWrap: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+  voiceBadge: { position: 'absolute', right: -3, bottom: -2, width: 11, height: 11, borderRadius: 5.5, backgroundColor: '#0C8149', borderWidth: 1.5, borderColor: '#EEF6FD', alignItems: 'center', justifyContent: 'center' },
+  voiceBadgeRecording: { backgroundColor: '#FFFFFF', borderColor: '#0C8149' },
   labelRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
   statusRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
   label: { flexShrink: 1, color: '#0C8149', fontSize: 13, fontWeight: '700', letterSpacing: 0 },
