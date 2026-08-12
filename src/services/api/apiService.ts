@@ -480,9 +480,11 @@ export async function createImportChatWelcome(
     full_address?: string;
     category?: string;
   }>,
+  welcomeText?: string,
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/import-welcome`, {
     deselected_locations: deselectedLocations,
+    welcome_text: welcomeText,
   });
 }
 
@@ -518,9 +520,12 @@ export async function chatWithAtlasStream(
   handlers: AtlasChatStreamHandlers,
   conversationId?: string | null,
   userLocation?: [number, number],
+  signal?: AbortSignal,
 ): Promise<AtlasChatResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
 
   try {
     const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -582,6 +587,7 @@ export async function chatWithAtlasStream(
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abort);
   }
 }
 

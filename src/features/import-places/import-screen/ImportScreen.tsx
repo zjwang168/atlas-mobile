@@ -45,7 +45,7 @@ type ImageMode = Extract<ImportMode, 'findTextPlaces' | 'findImagePlaces'>;
 type ImportScreenProps = {
   onClose: () => void;
   onSubmit: (text: string, mode: ImportMode, webSearch?: boolean) => void;
-  onSubmitImageScan?: (imagesBase64: string[], mode?: ImportMode) => void;
+  onSubmitImageScan?: (imagesBase64: string[], mode?: ImportMode, imageUris?: string[]) => void;
   onScanResult?: (result: unknown) => void;
   /** Kept for App-level compatibility; chat history now belongs to Chat, not Add places. */
   onOpenChatHistory?: () => void;
@@ -493,7 +493,7 @@ export default function ImportScreen({
         return;
       }
 
-      onSubmitImageScan?.(imageDataList, imageMode);
+      onSubmitImageScan?.(imageDataList, imageMode, images.map((image) => image.uri));
       return;
     }
 
@@ -887,7 +887,7 @@ export default function ImportScreen({
         activeOpacity={0.8}
       >
         <Text style={styles.imageSubmitButtonText}>
-          {imageMode === 'findTextPlaces' ? 'Extract places' : 'Identify place'}
+          {imageMode === 'findTextPlaces' ? 'Extract places' : 'Identify places'}
         </Text>
       </TouchableOpacity>
     </BottomSheetView>

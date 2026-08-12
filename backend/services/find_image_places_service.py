@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -36,14 +37,16 @@ async def find_image_place(image_base64: str, request_id: str | None = None) -> 
     from backend.services import progress
 
     progress.stream_note(request_id, "image:vision", {"stage": "started"})
+    vision_started_at = time.perf_counter()
     place = await _call_gpt4o_vision(image_base64)
-    progress.stream_note(request_id, "image:vision", {"stage": "completed"})
+    vision_ms = round((time.perf_counter() - vision_started_at) * 1000)
+    logger.info("[FindImagePlaces] vision request completed in %sms", vision_ms)
+    progress.stream_note(request_id, "image:vision", {"stage": "completed", "latency_ms": vision_ms})
     if place:
         confidence = float(place.get("confidence", 0) or 0)
         name = str(place.get("name") or "Unknown Location").strip() or "Unknown Location"
         latitude = float(place.get("latitude", 0) or 0)
         longitude = float(place.get("longitude", 0) or 0)
-        subtitle = f'I have {confidence:.0%} confidence this place is {name}. Happy exploring!'
         tagline = str(place.get("region_tagline") or "").strip() or None
         progress.stream_note(request_id, "place:identified", {"name": name})
         progress.stream_note(request_id, "image:location", {"stage": "candidate_ready", "region": name, "tagline": tagline})
@@ -52,7 +55,7 @@ async def find_image_place(image_base64: str, request_id: str | None = None) -> 
             latitude=latitude,
             longitude=longitude,
             confidence=confidence,
-            subtitle=subtitle,
+            subtitle="",
             source="gpt4o_vision",
         )
 

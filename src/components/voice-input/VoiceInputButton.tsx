@@ -1,5 +1,5 @@
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
-import { SpeakerHighIcon } from 'phosphor-react-native/src/icons/SpeakerHigh';
+import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
 import { transcribeAudio } from '@/services/api/apiService';
@@ -11,10 +11,11 @@ type VoiceInputButtonProps = {
   style?: ViewStyle;
   label?: string;
   onShortPress?: () => void;
+  tapToToggle?: boolean;
 };
 
 /** Hold-to-talk recorder used anywhere Atlas accepts text. */
-export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress }: VoiceInputButtonProps) {
+export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, tapToToggle = false }: VoiceInputButtonProps) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -64,20 +65,27 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       accessibilityState={{ disabled: Boolean(disabled || processing), selected: recording }}
       disabled={disabled || processing}
       onPressIn={() => {
+        if (tapToToggle) return;
         if (label && onShortPress) {
           holdTimer.current = setTimeout(() => { holdTimer.current = null; start(); }, 360);
         } else start();
       }}
       onPressOut={() => {
+        if (tapToToggle) return;
         if (holdTimer.current) {
           clearTimeout(holdTimer.current);
           holdTimer.current = null;
           onShortPress?.();
         } else stop();
       }}
+      onPress={() => {
+        if (!tapToToggle) return;
+        if (recording) void stop();
+        else void start();
+      }}
       style={[styles.button, recording && styles.recording, style]}
     >
-      {processing ? <ActivityIndicator size="small" color="#007AFF" /> : label ? <Text style={[styles.label, recording && styles.labelRecording]}>{label}</Text> : <SpeakerHighIcon size={22} weight="fill" color={recording ? '#FFFFFF' : '#202024'} />}
+      {processing ? <ActivityIndicator size="small" color="#007AFF" /> : label ? <Text style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Tap to finish' : label}</Text> : <MicrophoneIcon size={22} weight="fill" color={recording ? '#FFFFFF' : '#202024'} />}
     </Pressable>
   );
 }

@@ -94,6 +94,8 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
     [isPlaceAlreadySaved, result.places]
   );
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id]);
+  const recognitionConfidence = result.places.length === 1 ? result.places[0]?.confidence : null;
+  const recognizedPlaceName = result.places[0]?.name;
 
   const markers: MapMarker[] = useMemo(
     () =>
@@ -169,13 +171,14 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
   }, [screenTransition]);
 
   const runExitAction = useCallback((action: (ids: string[]) => void) => {
+    // Start the next surface while this sheet is fading out. Waiting for the
+    // exit callback leaves a visible My Places frame before AI Chat can mount.
+    action(selectedIds);
     Animated.timing(screenTransition, {
       toValue: 0,
       duration: 260,
       useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) action(selectedIds);
-    });
+    }).start();
   }, [screenTransition, selectedIds]);
 
   const panResponder = useMemo(
@@ -359,6 +362,14 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
         ]}
         pointerEvents="box-none"
       >
+        {recognitionConfidence != null && recognizedPlaceName ? (
+          <View style={styles.recognitionNote}>
+            <Ionicons name="sparkles" size={15} color={COLOR.primaryStrong} />
+            <Text style={styles.recognitionNoteText} numberOfLines={2}>
+              {`I have ${Math.round(recognitionConfidence * 100)}% confidence this place is ${recognizedPlaceName}. Happy exploring.`}
+            </Text>
+          </View>
+        ) : null}
         {/* Save places — liquid-glass capsule */}
         <View style={styles.btnShadow}>
           <Pressable
@@ -550,6 +561,8 @@ const styles = StyleSheet.create({
   // Bottom fade + action bar
   fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 130 },
   actionBar: { position: 'absolute', left: 20, right: 20, flexDirection: 'row', gap: 10 },
+  recognitionNote: { position: 'absolute', bottom: 64, left: 0, right: 0, minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 13, paddingVertical: 10, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.92)', borderWidth: 1, borderColor: '#D8EEE2', shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4 },
+  recognitionNoteText: { flex: 1, color: COLOR.primaryStrong, fontSize: 12, lineHeight: 17, fontWeight: '600' },
 
   // Buttons — equal halves, exact 52h capsules
   btnShadow: {

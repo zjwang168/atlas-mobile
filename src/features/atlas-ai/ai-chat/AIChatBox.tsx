@@ -12,15 +12,14 @@ import { ClockIcon } from 'phosphor-react-native/src/icons/Clock';
 import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
 import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
 import { PencilSimpleLineIcon } from 'phosphor-react-native/src/icons/PencilSimpleLine';
-import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
 import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
 import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
 import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated as NativeAnimated,
   FlatList,
   Image,
@@ -34,6 +33,9 @@ import {
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Animated, {
+  FadeIn,
+  FadeInUp,
+  FadeOut,
   LinearTransition,
   SlideInDown,
   useReducedMotion,
@@ -211,28 +213,6 @@ function restorePresentationFromToolResults(value: unknown): AtlasChatPresentati
   return null;
 }
 
-function FadingStreamToken({ token, reducedMotion }: { token: string; reducedMotion: boolean }) {
-  const progress = useRef(new NativeAnimated.Value(reducedMotion ? 1 : 0)).current;
-
-  useEffect(() => {
-    if (reducedMotion) return;
-    progress.setValue(0);
-    const animation = NativeAnimated.timing(progress, {
-      toValue: 1,
-      duration: 360,
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [progress, reducedMotion]);
-
-  return (
-    <NativeAnimated.Text style={[styles.streamingToken, { opacity: progress }]}>
-      {token}
-    </NativeAnimated.Text>
-  );
-}
-
 function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const breathingOpacity = useRef(new NativeAnimated.Value(1)).current;
@@ -262,23 +242,12 @@ function ThinkingIndicator({ reducedMotion }: { reducedMotion: boolean }) {
   );
 }
 
-function StreamingAssistantText({ text, reducedMotion }: { text: string; reducedMotion: boolean }) {
-  const displayTokens = Array.from(text);
-
+function StreamingAssistantText({ text }: { text: string }) {
+  // Keep streaming output as one native text node. Rendering one animated
+  // component per character makes the view and native animation graph grow
+  // on every token, eventually starving the UI thread and crashing on mobile.
   return (
-    <View style={styles.streamingResponseText}>
-      {displayTokens.map((token, index) => (
-        token === '\n' ? (
-          <View key={`${index}:line-break`} style={styles.streamingLineBreak} />
-        ) : (
-          <FadingStreamToken
-            key={`${index}:${token}`}
-            token={token}
-            reducedMotion={reducedMotion}
-          />
-        )
-      ))}
-    </View>
+    <Text style={styles.streamingToken}>{text}</Text>
   );
 }
 
@@ -292,6 +261,10 @@ type AIChatBoxProps = {
   visible?: boolean;
   conversationId?: string | null;
   importWelcome?: { deselectedPlaces: ParsedPlace[] } | null;
+  initialImportWelcome?: AtlasChatPresentation | null;
+  initialWelcomeText?: string | null;
+  initialSessionId?: string | null;
+  sessionInitializing?: boolean;
   atlasWelcome?: { places: AtlasChatPresentation['places'] } | null;
   showLanding?: boolean;
   onPresentationMapOpen?: () => void;
@@ -377,6 +350,10 @@ export default function AIChatBox({
   visible = true,
   conversationId = null,
   importWelcome = null,
+  initialImportWelcome = null,
+  initialWelcomeText = null,
+  initialSessionId = null,
+  sessionInitializing = false,
   atlasWelcome = null,
   showLanding = false,
   onPresentationMapOpen,
@@ -403,6 +380,8 @@ export default function AIChatBox({
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [inputContentHeight, setInputContentHeight] = useState(21);
   const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
   >({});
@@ -427,12 +406,40 @@ export default function AIChatBox({
   const streamCompletionRef = useRef<(() => void) | null>(null);
   const streamedTextRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
+  const responseScrollFrameRef = useRef<number | null>(null);
+  const streamingResponseLayoutRef = useRef<{ id: string; y: number; height: number } | null>(null);
+  const listHeightRef = useRef(0);
+  const headerOverlayHeightRef = useRef(0);
+  const composerOverlayHeightRef = useRef(0);
+  const autoFollowLatestRef = useRef(true);
   const historyItemIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const chatMapRouteRequestRef = useRef(0);
   const chatMapNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestChatMapStateKeyRef = useRef<string | null>(null);
   const resolvingActionIdsRef = useRef(new Set<string>());
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const streamCancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialImportWelcome) return;
+    const placeCount = places.length;
+    const names = places.slice(0, 3).map((place) => place.name).join(', ');
+    setMessages([{
+      id: `instant_import_welcome_${Date.now()}`,
+      role: 'assistant',
+      text: initialWelcomeText || `Hi! Great picks - your ${placeCount} saved place${placeCount === 1 ? ' is' : 's are'} on the map below.\n\nWe can shape a route, group nearby stops, or find a great next place.`,
+      presentation: initialImportWelcome,
+      starterPrompts: IMPORT_STARTER_PROMPTS,
+    }]);
+  }, [conversationId, initialImportWelcome, places]);
+
+  useEffect(() => {
+    if (!initialSessionId) return;
+    setSessionId(initialSessionId);
+    conversationIdRef.current = initialSessionId;
+    activeConversationIdRef.current = initialSessionId;
+  }, [initialSessionId]);
 
   const scrollToLatest = useCallback(() => {
     if (scrollFrameRef.current !== null) return;
@@ -441,6 +448,29 @@ export default function AIChatBox({
       flatListRef.current?.scrollToEnd({ animated: false });
     });
   }, []);
+
+  const scrollStreamingResponseIntoView = useCallback((animated: boolean) => {
+    if (!autoFollowLatestRef.current || responseScrollFrameRef.current !== null) return;
+    responseScrollFrameRef.current = requestAnimationFrame(() => {
+      responseScrollFrameRef.current = null;
+      const responseLayout = streamingResponseLayoutRef.current;
+      const viewportHeight = listHeightRef.current;
+      if (!responseLayout || !viewportHeight) return;
+
+      const safeTop = headerOverlayHeightRef.current + 12;
+      const safeBottom = viewportHeight - composerOverlayHeightRef.current - 16;
+      const targetOffset = Math.max(
+        0,
+        responseLayout.y - safeTop,
+        responseLayout.y + responseLayout.height - safeBottom,
+      );
+      autoFollowLatestRef.current = true;
+      flatListRef.current?.scrollToOffset({
+        offset: targetOffset,
+        animated: animated && !reducedMotion,
+      });
+    });
+  }, [reducedMotion]);
 
   const finishDisplayedStream = () => {
     const messageId = streamingMessageIdRef.current;
@@ -470,7 +500,7 @@ export default function AIChatBox({
       setMessages((current) => current.map((message) => (
         message.id === messageId ? { ...message, text: `${message.text}${nextTokens}` } : message
       )));
-      scrollToLatest();
+      scrollStreamingResponseIntoView(false);
       return;
     }
 
@@ -503,7 +533,9 @@ export default function AIChatBox({
 
   useEffect(() => () => {
     if (streamTimerRef.current) clearInterval(streamTimerRef.current);
+    chatAbortControllerRef.current?.abort();
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    if (responseScrollFrameRef.current !== null) cancelAnimationFrame(responseScrollFrameRef.current);
     if (chatMapNoticeTimerRef.current) clearTimeout(chatMapNoticeTimerRef.current);
   }, []);
 
@@ -539,6 +571,7 @@ export default function AIChatBox({
 
   useEffect(() => {
     if (!visible) return;
+    if (streamingMessageIdRef.current) return;
     const frame = requestAnimationFrame(scrollToLatest);
     return () => cancelAnimationFrame(frame);
   }, [inputContentHeight, keyboardHeight, messages.length, scrollToLatest, visible]);
@@ -569,7 +602,7 @@ export default function AIChatBox({
       .map((place) => `${place.id}:${place.name}:${place.latitude.toFixed(5)}:${place.longitude.toFixed(5)}`)
       .join('|')}`;
 
-    if (!conversationId && lastWelcomeKeyRef.current !== welcomeKey) {
+    if (!conversationId && !initialImportWelcome && lastWelcomeKeyRef.current !== welcomeKey) {
       lastWelcomeKeyRef.current = welcomeKey;
       setSessionId(null);
       conversationIdRef.current = null;
@@ -620,7 +653,7 @@ export default function AIChatBox({
 
         setSessionId(session.session_id);
         activeConversationIdRef.current = detail.session.conversation_id || conversationId;
-        if ((importWelcome || atlasWelcome) && restoredMessages.length === 0) {
+        if ((importWelcome || atlasWelcome) && restoredMessages.length === 0 && !initialImportWelcome) {
           setPending(true);
           setMessages([{
             id: `import_welcome_${Date.now()}`,
@@ -658,7 +691,7 @@ export default function AIChatBox({
               role: 'assistant',
               text: atlasWelcome
                 ? 'Hi, your saved Atlas is ready to explore. I can help you tighten the route, plan the schedule, or find another useful stop.'
-                : 'Hi, your saved places are ready to explore. I can help you build a route, group nearby stops, or find something to add next.',
+                : `Hi! Great picks - your ${places.length} saved ${places.length === 1 ? 'place is' : 'places are'} on the map below. We can shape a route, group nearby stops, or find a great next place.`,
               presentation: {
                 kind: atlasWelcome ? 'atlas_draft' : 'places_map',
                 title: atlasWelcome ? (title || 'Saved Atlas') : `${places.length} saved ${places.length === 1 ? 'place' : 'places'}`,
@@ -677,7 +710,7 @@ export default function AIChatBox({
           } finally {
             if (!cancelled) setPending(false);
           }
-        } else {
+        } else if (!initialImportWelcome) {
           setMessages(restoredMessages);
         }
         hydratedConversationIdRef.current = conversationId;
@@ -691,30 +724,38 @@ export default function AIChatBox({
     return () => {
       cancelled = true;
     };
-  }, [atlasWelcome, conversationId, importWelcome, places, title]);
+  }, [atlasWelcome, conversationId, importWelcome, initialImportWelcome, places, title]);
 
-  const handleSend = async () => {
-    const text = inputText.trim();
-    if (!text || pending) return;
+  const handleSend = async (submittedText = inputText.trim(), editingId?: string) => {
+    const text = submittedText.trim();
+    if (!text || pending || sessionInitializing) return;
 
     const assistantMessageId = `ai_${Date.now()}`;
     streamQueueRef.current = [];
     streamedTextRef.current = false;
+    streamCancelledRef.current = false;
     streamingMessageIdRef.current = assistantMessageId;
+    streamingResponseLayoutRef.current = null;
+    autoFollowLatestRef.current = true;
+    const controller = new AbortController();
+    chatAbortControllerRef.current = controller;
 
-    setMessages((prev) => [
-      ...prev,
-      { id: `user_${Date.now()}`, role: 'user', text },
-      {
+    setMessages((prev) => {
+      const base = editingId
+        ? prev.slice(0, prev.findIndex((item) => item.id === editingId) + 1).map((item) => (
+            item.id === editingId ? { ...item, text } : item
+          ))
+        : [...prev, { id: `user_${Date.now()}`, role: 'user' as const, text }];
+      return [...base, {
         id: assistantMessageId,
         role: 'assistant',
         text: '',
         streaming: true,
         thinkingStartedAt: Date.now(),
-      },
-    ]);
-    scrollToLatest();
+      }];
+    });
     setInputText('');
+    setEditingMessageId(null);
     setPending(true);
 
     try {
@@ -725,6 +766,7 @@ export default function AIChatBox({
         { onToken: enqueueStreamDelta },
         activeConversationIdRef.current,
         userLocation,
+        controller.signal,
       );
       setMessages((current) => current.map((message) => (
         message.id === assistantMessageId
@@ -762,12 +804,33 @@ export default function AIChatBox({
         replaceChatHistoryItem(historyItemIdRef.current, historyItem);
       }
     } catch (error) {
-      if (!streamedTextRef.current) {
+      if (!streamCancelledRef.current && !streamedTextRef.current) {
         enqueueStreamDelta('I couldn\'t respond just now. Please try sending that again in a moment.');
       }
     } finally {
-      completeStreamAfterDisplay();
+      if (!streamCancelledRef.current) completeStreamAfterDisplay();
+      if (chatAbortControllerRef.current === controller) chatAbortControllerRef.current = null;
     }
+  };
+
+  const cancelStream = () => {
+    if (!pending) return;
+    streamCancelledRef.current = true;
+    chatAbortControllerRef.current?.abort();
+    chatAbortControllerRef.current = null;
+    streamQueueRef.current = [];
+    if (streamTimerRef.current) {
+      clearInterval(streamTimerRef.current);
+      streamTimerRef.current = null;
+    }
+    finishDisplayedStream();
+  };
+
+  const beginEditingMessage = (message: Message) => {
+    if (pending || message.role !== 'user') return;
+    setEditingMessageId(message.id);
+    setInputText(message.text);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const chatMapOrigin = useMemo<[number, number] | null>(() => {
@@ -1132,13 +1195,32 @@ export default function AIChatBox({
     return (
       <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
         {isUser ? (
-          <View style={styles.userBubble}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Edit message"
+            disabled={pending}
+            onLongPress={() => beginEditingMessage(item)}
+            delayLongPress={350}
+            style={({ pressed }) => [styles.userBubble, pressed && !pending && styles.userBubblePressed]}
+          >
             <Text style={[styles.messageText, styles.userText]}>
               {item.text}
             </Text>
-          </View>
+          </Pressable>
         ) : (
-          <View style={styles.assistantContent}>
+          <Animated.View
+            entering={item.streaming && !reducedMotion ? FadeInUp.duration(180) : undefined}
+            style={styles.assistantContent}
+            onLayout={({ nativeEvent }) => {
+              if (!item.streaming) return;
+              streamingResponseLayoutRef.current = {
+                id: item.id,
+                y: nativeEvent.layout.y,
+                height: nativeEvent.layout.height,
+              };
+              scrollStreamingResponseIntoView(true);
+            }}
+          >
             <View style={styles.assistantMessageText}>
               {item.streaming && !displayText ? <ThinkingIndicator reducedMotion={reducedMotion} /> : null}
               {!item.streaming || displayText ? (
@@ -1150,7 +1232,7 @@ export default function AIChatBox({
                 </View>
               ) : null}
               {item.streaming && displayText ? (
-                <StreamingAssistantText text={displayText} reducedMotion={reducedMotion} />
+                <StreamingAssistantText text={displayText} />
               ) : displayText ? (
                 <Markdown style={markdownStyles}>{displayText}</Markdown>
               ) : null}
@@ -1250,7 +1332,7 @@ export default function AIChatBox({
                 <DotsThreeIcon size={16} weight="bold" color="#717171" />
               </Pressable>
             </View> : null}
-          </View>
+          </Animated.View>
         )}
       </View>
     );
@@ -1274,23 +1356,29 @@ export default function AIChatBox({
   const composerMaterialHeight = composerHeight + composerEdgeGap + 6;
   const bottomMaterialOffset =
     landingVisible && keyboardVisible ? 0 : keyboardHeight;
+  headerOverlayHeightRef.current = headerOverlayHeight;
+  composerOverlayHeightRef.current = composerOverlayHeight;
 
   const sendButton = (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Send message"
-      onPress={handleSend}
-      disabled={!inputText.trim() || pending}
+      accessibilityLabel={pending ? 'Stop generating' : editingMessageId ? 'Confirm edit' : 'Send message'}
+      onPress={pending ? cancelStream : () => { void handleSend(inputText, editingMessageId ?? undefined); }}
+      disabled={sessionInitializing || (!pending && !inputText.trim())}
       style={({ pressed }) => [
         styles.sendButton,
-        pressed && inputText.trim() && !pending && styles.sendButtonPressed,
+        pressed && (inputText.trim() || pending) && styles.sendButtonPressed,
       ]}
     >
-      {pending ? (
-        <ActivityIndicator size="small" color="#FFFFFF" />
-      ) : (
-        <ArrowUpIcon size={20} weight="regular" color="#FFFFFF" />
-      )}
+      <Animated.View key={pending ? 'stop' : 'send'} entering={FadeIn.duration(140)} exiting={FadeOut.duration(100)}>
+        {pending ? (
+          <View style={styles.stopIcon} />
+        ) : editingMessageId ? (
+          <ArrowUpIcon size={20} weight="bold" color="#FFFFFF" />
+        ) : (
+          <ArrowUpIcon size={20} weight="regular" color="#FFFFFF" />
+        )}
+      </Animated.View>
     </Pressable>
   );
 
@@ -1366,7 +1454,23 @@ export default function AIChatBox({
             contentInsetAdjustmentBehavior="never"
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={scrollToLatest}
+            onLayout={({ nativeEvent }) => {
+              listHeightRef.current = nativeEvent.layout.height;
+            }}
+            onContentSizeChange={() => {
+              if (streamingMessageIdRef.current) {
+                scrollStreamingResponseIntoView(false);
+              } else {
+                scrollToLatest();
+              }
+            }}
+            onScrollEndDrag={({ nativeEvent }) => {
+              const distanceFromBottom = nativeEvent.contentSize.height
+                - nativeEvent.layoutMeasurement.height
+                - nativeEvent.contentOffset.y;
+              autoFollowLatestRef.current = distanceFromBottom < 72;
+            }}
+            scrollEventThrottle={16}
             scrollIndicatorInsets={{
               top: headerOverlayHeight,
               bottom: composerHeight + composerBottom + 64,
@@ -1497,41 +1601,58 @@ export default function AIChatBox({
             )}
             <View pointerEvents="none" style={styles.composerFrost} />
 
-            <TextInput
-              ref={inputRef}
-              value={inputText}
-              onChangeText={setInputText}
-              onContentSizeChange={({ nativeEvent }) => {
-                setInputContentHeight(Math.max(21, Math.ceil(nativeEvent.contentSize.height)));
-              }}
-              placeholder={voiceRecording ? 'Hold to speak' : 'Ask AtlasAI'}
-              placeholderTextColor="#B0B0B0"
-              style={[
-                styles.composerInput,
-                hasComposerText ? styles.composerInputExpanded : styles.composerInputCompact,
-              ]}
-              multiline
-              textAlignVertical="top"
-              scrollEnabled={composerHeight >= 196}
-              editable={!pending}
-            />
-
-            <View
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-              style={styles.composerLeadingAction}
-            >
-              <PlusIcon size={24} weight="regular" color={COLOR.foreground} />
-            </View>
+            {!voiceMode ? (
+              <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={StyleSheet.absoluteFill}>
+                <TextInput
+                  ref={inputRef}
+                  value={inputText}
+                  onChangeText={setInputText}
+                  onContentSizeChange={({ nativeEvent }) => {
+                    setInputContentHeight(Math.max(21, Math.ceil(nativeEvent.contentSize.height)));
+                  }}
+                  placeholder={editingMessageId ? 'Edit your message' : 'Ask AtlasAI'}
+                  placeholderTextColor="#B0B0B0"
+                  style={[
+                    styles.composerInput,
+                    hasComposerText ? styles.composerInputExpanded : styles.composerInputCompact,
+                  ]}
+                  multiline
+                  textAlignVertical="top"
+                  scrollEnabled={composerHeight >= 196}
+                  editable={!pending && !sessionInitializing}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Start voice input"
+                  disabled={pending || sessionInitializing}
+                  onPress={() => setVoiceMode(true)}
+                  style={({ pressed }) => [styles.composerLeadingAction, pressed && styles.utilityButtonPressed]}
+                >
+                  <MicrophoneIcon size={22} weight="fill" color={COLOR.foreground} />
+                </Pressable>
+              </Animated.View>
+            ) : (
+              <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={styles.voiceModeWrap}>
+                <VoiceInputButton
+                  label="Tap to speak"
+                  tapToToggle
+                  disabled={pending || sessionInitializing}
+                  onRecordingChange={setVoiceRecording}
+                  onTranscript={(text) => {
+                    setVoiceMode(false);
+                    void handleSend(text);
+                  }}
+                  style={styles.voiceModeButton}
+                />
+                {!voiceRecording ? (
+                  <Pressable accessibilityRole="button" accessibilityLabel="Cancel voice input" onPress={() => setVoiceMode(false)} style={styles.voiceModeCancel}>
+                    <XIcon size={18} weight="bold" color="#717171" />
+                  </Pressable>
+                ) : null}
+              </Animated.View>
+            )}
 
             <View style={styles.composerTrailingActions}>
-              <VoiceInputButton
-                disabled={pending}
-                onRecordingChange={setVoiceRecording}
-                onTranscript={(text) => setInputText((current) => current ? `${current} ${text}` : text)}
-                style={styles.utilityButton}
-              />
-
               {sendButton}
             </View>
           </Animated.View>
@@ -1717,6 +1838,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#E9FBF1',
   },
+  userBubblePressed: {
+    opacity: 0.72,
+  },
   assistantContent: {
     flex: 1,
     gap: 12,
@@ -1743,21 +1867,12 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     letterSpacing: 0,
   },
-  streamingResponseText: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'baseline',
-  },
   streamingToken: {
     color: '#000000',
     fontSize: 16,
     lineHeight: 24,
     fontWeight: '400',
     letterSpacing: -0.16,
-  },
-  streamingLineBreak: {
-    width: '100%',
-    height: 0,
   },
   feedbackBar: {
     minHeight: 28,
@@ -1846,6 +1961,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  utilityButtonPressed: {
+    opacity: 0.5,
+    transform: [{ scale: 0.94 }],
+  },
+  voiceModeWrap: {
+    position: 'absolute',
+    top: 0,
+    bottom: 8,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  voiceModeButton: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E9FBF1',
+  },
+  voiceModeCancel: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   composerTrailingActions: {
     position: 'absolute',
     right: 12,
@@ -1871,6 +2014,12 @@ const styles = StyleSheet.create({
   },
   sendButtonPressed: {
     transform: [{ scale: 0.94 }],
+  },
+  stopIcon: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF',
   },
   confirmBar: {
     marginHorizontal: 16,

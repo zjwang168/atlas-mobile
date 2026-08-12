@@ -5,6 +5,7 @@ Format: application/json with base64-encoded image
 Model: glm-ocr (dedicated OCR model)
 """
 
+import asyncio
 import base64
 import os
 from typing import Optional
@@ -113,12 +114,15 @@ async def ocr_images(images: list[bytes]) -> str:
         return ""
 
     images = images[:MAX_IMAGES]
-    results: list[str] = []
-
-    for i, img_data in enumerate(images):
-        text = await ocr_image(img_data)
-        if text:
-            results.append(f"--- Image {i + 1} ---\n{text}")
+    # Each image is independent. Running OCR sequentially makes a three-image
+    # import wait for up to three provider round trips before parsing can start.
+    # Keep source order when joining so downstream context remains predictable.
+    extracted = await asyncio.gather(*(ocr_image(image) for image in images))
+    results = [
+        f"--- Image {index + 1} ---\n{text}"
+        for index, text in enumerate(extracted)
+        if text
+    ]
 
     combined = "\n\n".join(results)
     print(f"[GLM-OCR] Total: {len(images)} image(s), {len(combined)} chars extracted")

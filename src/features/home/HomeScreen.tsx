@@ -146,10 +146,10 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
       setChatMapOpen(false);
       return;
     }
-    // Let the selector travel from My Places to Chat before the chat surface
-    // covers the tab bar, so opening AI feels like one continuous transition.
+    // Import handoffs already animate their own result sheet away. Showing the
+    // chat surface in the next frame prevents an intermediate My Places frame.
     setActiveTab(TAB_CHAT);
-    const timeoutId = setTimeout(() => setChatPresentationVisible(true), 280);
+    const timeoutId = setTimeout(() => setChatPresentationVisible(true), 16);
     return () => clearTimeout(timeoutId);
   }, [chatRequested]);
 
@@ -355,8 +355,12 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
         showLanding={standaloneChatVisible}
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatVisible}
-        conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
+        conversationId={standaloneChatVisible ? null : (activeHistoryItem?.sessionInitializing ? null : (activeHistoryItem?.id ?? null))}
         importWelcome={standaloneChatVisible ? null : (activeHistoryItem?.importWelcome ?? null)}
+        initialImportWelcome={standaloneChatVisible ? null : (activeHistoryItem?.initialImportWelcome ?? null)}
+        initialWelcomeText={standaloneChatVisible ? null : (activeHistoryItem?.initialWelcomeText ?? null)}
+        initialSessionId={standaloneChatVisible ? null : (activeHistoryItem?.initialSessionId ?? null)}
+        sessionInitializing={standaloneChatVisible ? false : Boolean(activeHistoryItem?.sessionInitializing)}
         atlasWelcome={standaloneChatVisible ? null : (activeHistoryItem?.atlasWelcome ?? null)}
         onPresentationMapOpen={() => setChatMapOpen(true)}
         onPresentationMapReturn={() => setChatMapOpen(false)}

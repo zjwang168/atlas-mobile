@@ -173,17 +173,17 @@ def _stored_presentation(value: Any) -> dict[str, Any] | None:
 def _import_welcome_fallback(session: Any, deselected_names: list[str]) -> str:
     places = getattr(session, "locations", []) or []
     count = len(places)
-    names = ", ".join(str(place.get("name") or "a place") for place in places[:3])
-    suffix = f", including {names}" if names else ""
-    skipped = f" I kept {len(deselected_names)} unselected place{'s' if len(deselected_names) != 1 else ''} out of this chat." if deselected_names else ""
+    skipped = (
+        f" I left {len(deselected_names)} unselected place{'s' if len(deselected_names) != 1 else ''} out of this chat."
+        if deselected_names else ""
+    )
     return (
-        f"Hi, your {count} saved place{'s' if count != 1 else ''}{suffix} are ready to explore on the map below.{skipped}\n\n"
-        "We can:\n- build a practical day-by-day route\n- compare neighborhoods and group nearby stops\n- find a good next stop, meal, or activity nearby\n\n"
-        "What would you like to plan first?"
+        f"Hi! Great picks - your {count} saved place{'s' if count != 1 else ''} are on the map below.{skipped}\n\n"
+        "We can shape a route, group nearby stops, or find a great next place."
     )
 
 
-async def generate_import_welcome(session_id: str, deselected_locations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+async def generate_import_welcome(session_id: str, deselected_locations: list[dict[str, Any]] | None = None, welcome_text: str | None = None) -> dict[str, Any]:
     """Create the first assistant turn for a saved import without a fake user turn."""
     session = conversation_manager.get_session(session_id)
     if not session:
@@ -220,7 +220,7 @@ async def generate_import_welcome(session_id: str, deselected_locations: list[di
     started_at = time.perf_counter()
     # This opening is product copy, not a question that needs model reasoning.
     # Generating it locally removes a full LLM round trip from Save and Ask AI.
-    answer = _import_welcome_fallback(session, deselected_names)
+    answer = (welcome_text or '').strip()[:1200] or _import_welcome_fallback(session, deselected_names)
     presentation = {
         "kind": "places_map",
         "title": f"{len(selected)} saved place{'s' if len(selected) != 1 else ''}",
