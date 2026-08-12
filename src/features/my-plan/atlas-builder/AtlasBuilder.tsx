@@ -347,7 +347,7 @@ function buildAtlasTitle(items: DraftPlace[]) {
 
 export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
-  const { savedPlaces, savedPlacesLoaded, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
+  const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
   const searchSession = useRef(createSearchSession()).current;
   const queryAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<TextInput>(null);
@@ -460,6 +460,46 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // the previous screen's cached viewport.
     if (initialCenter || initialBounds) setCameraKey(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   }, [initialBounds, initialCenter, started]);
+
+  useEffect(() => {
+    if (!isCreateAtlasLanding) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const deviceLocation = await refreshUserLocation();
+        if (cancelled) return;
+        // Do not leave the Create screen on its continental-US fallback while
+        // country boundaries resolve. The final bounds fit respects Home's
+        // live bottom-sheet padding, so the full country stays in the usable
+        // upper map viewport.
+        setMapCenter(deviceLocation);
+        setMapBounds(undefined);
+        setMapZoom(4);
+        const [address] = await Location.reverseGeocodeAsync({
+          latitude: deviceLocation[1],
+          longitude: deviceLocation[0],
+        });
+        const country = address?.country ?? address?.isoCountryCode;
+        if (!country) return;
+        const resolvedCountry = await geocodeAtlasArea(country);
+        if (cancelled || !resolvedCountry?.bounds) return;
+        const countryBounds = expandBounds(resolvedCountry.bounds, 0.12);
+        viewportCenterRef.current = centerOfBounds(countryBounds);
+        viewportZoomRef.current = zoomForBounds(countryBounds, 1.1);
+        setMapCenter(viewportCenterRef.current);
+        setMapBounds(countryBounds);
+        setMapZoom(viewportZoomRef.current);
+        setCameraKey(`atlas-country-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      } catch (error) {
+        // Location and country lookup are a presentation enhancement; search
+        // remains available when either service is unavailable.
+        console.warn('[AtlasBuilder] country camera unavailable', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateAtlasLanding, refreshUserLocation]);
 
   useEffect(() => {
     setTabBarVisible(false);
@@ -702,6 +742,26 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     onReturnToCreateSearch?.();
   }, [onReturnToCreateSearch]);
 
+  const resolveFirstMapboxPoi = useCallback(async (query: string, proximity: [number, number]): Promise<DraftPlace | null> => {
+    const [first] = await suggestPlaces(query, searchSession, { proximity });
+    if (!first) return null;
+    const resolved = await resolvePlace(first, searchSession);
+    if (!resolved) return null;
+    return {
+      id: first.external_id,
+      name: resolved.name,
+      subtitle: resolved.subtitle,
+      latitude: resolved.latitude,
+      longitude: resolved.longitude,
+      photo_url: resolved.imageUri ?? null,
+      city: resolved.city ?? null,
+      region: null,
+      country: resolved.country ?? null,
+      category: resolved.type ?? first.feature_type ?? null,
+      source: 'search',
+    };
+  }, [searchSession]);
+
   const discoverDeepSeekPlaces = useCallback(async (city: string, count: number, proximity?: [number, number], administrativeBounds?: { ne: [number, number]; sw: [number, number] }): Promise<DraftPlace[]> => {
     const toDraftRecommendation = (place: GeocodedLocation, index: number): DraftPlace => ({
       id: `deepseek-${aiRecommendationSessionId}-${place.external_id ?? `${normalize(place.name)}-${index}`}`,
@@ -863,10 +923,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // editor. Refresh here so Simple Start is anchored and labelled from the
     // device's actual GPS fix whenever permission is available.
     const deviceLocation = await refreshUserLocation();
-    const localSaved = savedPlaces.filter((place) => isNearCoordinate(place, deviceLocation));
-    const nearbySaved = localSaved.map((place) => toDraft(place));
     const localBounds = boundsFromRadius(deviceLocation, FOCUS_SAVED_PLACES_RADIUS_KM);
-    let city = nearbySaved.find((place) => place.city)?.city ?? 'Your area';
+    let city = 'Your area';
     try {
       const [address] = await Location.reverseGeocodeAsync({ latitude: deviceLocation[1], longitude: deviceLocation[0] });
       city = address?.city ?? address?.subregion ?? address?.region ?? city;
@@ -887,7 +945,15 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       category: 'Current location',
       source: 'search',
     };
-    handoffToPlan(city, nearbySaved.length ? nearbySaved : [gpsAnchor], deviceLocation, localBounds);
+    let firstPoi = gpsAnchor;
+    try {
+      // Mapbox Search Box requires a text query. "attractions" with the GPS
+      // proximity gives us its first nearby POI, rather than a saved place.
+      firstPoi = await resolveFirstMapboxPoi('attractions', deviceLocation) ?? gpsAnchor;
+    } catch (error) {
+      console.warn('[AtlasBuilder] nearby Mapbox POI unavailable', error);
+    }
+    handoffToPlan(city, [firstPoi], deviceLocation, localBounds);
     await waitForFirstAtlasPaint();
 
     try {
@@ -898,7 +964,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       // Recommendations are optional; search and saved places remain usable.
       console.warn('[AtlasBuilder] simple start recommendations failed', error);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, refreshUserLocation, savedPlaces]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, refreshUserLocation, resolveFirstMapboxPoi]);
 
   const revealInitialCandidate = useCallback((place: DraftPlace) => {
     if (initialPlaceSelected.current) return;
@@ -907,7 +973,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, []);
 
   useEffect(() => {
-    if ((!started && !atlasId) || initialPlaceSelected.current || !savedPlacesLoaded) return;
+    if ((!started && !atlasId) || initialPlaceSelected.current) return;
     const selectedIds = new Set([
       ...items.map((item) => item.id),
       ...atlasPlaces
@@ -915,19 +981,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         .map((row) => row.place_id ?? row.external_place_id ?? row.id),
     ]);
     const areaBounds = mapBounds ?? initialBounds ?? (initialCenter ? boundsFromRadius(initialCenter, FOCUS_SAVED_PLACES_RADIUS_KM) : undefined);
-    const savedCandidates = savedPlaces.map((place) => toDraft(place)).filter((place) => (
-      !selectedIds.has(place.id)
-      && isWithinBounds(place, areaBounds)
-    ));
     const fallbackCandidates = (initialCandidates ?? []).filter((place) => (
       !selectedIds.has(place.id)
       && isWithinBounds(place, areaBounds)
     ));
-    const candidates = savedCandidates.length ? savedCandidates : fallbackCandidates;
-    const place = candidates[Math.floor(Math.random() * candidates.length)];
+    const place = fallbackCandidates[0];
     if (!place) return;
     revealInitialCandidate(place);
-  }, [atlasId, atlasPlaces, initialBounds, initialCandidates, initialCenter, items, mapBounds, revealInitialCandidate, savedPlaces, savedPlacesLoaded, started]);
+  }, [atlasId, atlasPlaces, initialBounds, initialCandidates, initialCenter, items, mapBounds, revealInitialCandidate, started]);
 
   const resolveResult = useCallback(async (result: SearchResult): Promise<DraftPlace | null> => {
     if (result.kind === 'saved') return toDraft(result.place);
@@ -1073,7 +1134,16 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     const key = result.kind === 'saved' ? result.place.id : result.externalId;
     setAddingResult(key);
     try {
-      const place = result.kind === 'saved' ? toDraft(result.place) : await resolveResult(result);
+      const selectedPlace = result.kind === 'saved' ? toDraft(result.place) : await resolveResult(result);
+      if (!selectedPlace) return;
+      const firstPoi = await resolveFirstMapboxPoi(
+        query.trim() || selectedPlace.name,
+        [selectedPlace.longitude, selectedPlace.latitude],
+      ).catch((error) => {
+        console.warn('[AtlasBuilder] first Mapbox search POI unavailable', error);
+        return null;
+      });
+      const place = firstPoi ?? selectedPlace;
       if (!place) return;
       const coordinate: [number, number] = [place.longitude, place.latitude];
       const areaSaved = result.kind === 'remote' && result.featureType === 'country'
@@ -1137,7 +1207,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     } finally {
       setAddingResult(null);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, resolveResult, savedPlaces]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, query, resolveFirstMapboxPoi, resolveResult, savedPlaces]);
 
   const handleResultAdd = useCallback(async (result: SearchResult) => {
     const key = result.kind === 'saved' ? result.place.id : result.externalId;
@@ -1454,9 +1524,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       cameraScreenOffsetY: atlasId ? EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y : 0,
       centerCoordinate: mapCenter,
       zoomLevel: mapZoom,
-      // Edit mode and a selected Create-search area both own an explicit
-      // bounds camera. A blank Create screen remains continental.
-      bounds: atlasId || started ? mapBounds : undefined,
+      // Edit mode, selected Create-search areas, and the location-aware blank
+      // Create screen own an explicit bounds camera.
+      bounds: atlasId || started || isCreateAtlasLanding ? mapBounds : undefined,
       cameraKey,
       cameraAnimationDurationMs: atlasId ? 0 : undefined,
       selectedMarkerId: focused?.id ?? null,
@@ -1482,7 +1552,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       hideTopSearchButton: true,
       markerPopup: null,
     });
-  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
+  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, hideTransientUI, isCreateAtlasLanding, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
 
   useEffect(() => () => {
     if (!preserveMapOnUnmountRef.current) setAtlasMapState(null);
@@ -1495,7 +1565,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     <View style={styles.root}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text style={styles.heading}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
+          <Text style={[styles.heading, styles.atlasHeadingSafe]}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
           
           {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
@@ -1771,7 +1841,7 @@ const styles = StyleSheet.create({
   addResultButtonPending: { backgroundColor: '#94A3B8' },
   focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F766E' },
   candidateSlot: { minHeight: 82, paddingHorizontal: 15, paddingTop: 10, paddingBottom: 5 },
-  candidateCard: { minHeight: 67, borderRadius: 8, backgroundColor: '#F1F7F5', borderWidth: StyleSheet.hairlineWidth, borderColor: '#CDE2DB', paddingHorizontal: 11, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  candidateCard: { minHeight: 67, borderRadius: 20, backgroundColor: '#F1F7F5', borderWidth: StyleSheet.hairlineWidth, borderColor: '#CDE2DB', paddingHorizontal: 11, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
   candidateCardEmpty: { backgroundColor: '#F6F8F8', borderColor: '#E2E8E7' },
   candidateMarker: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
   candidateMarkerEmpty: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#E8EFED', alignItems: 'center', justifyContent: 'center' },
@@ -1805,5 +1875,6 @@ const styles = StyleSheet.create({
   transportOptionTextSelected: { color: '#0F766E' },
   root: { flex: 1, backgroundColor: '#FFFFFF' }, header: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E4ECEA' }, headerCopy: { flex: 1, minWidth: 0, paddingRight: 12 }, heading: { fontSize: 24, fontWeight: '700', color: '#183431' }, landingLabel: { color: '#0F766E', fontSize: 12, fontWeight: '800', marginTop: 4 }, subheading: { fontSize: 12, color: '#74747B', marginTop: 2 }, headerIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F0F4F3', alignItems: 'center', justifyContent: 'center' }, searchLayer: { paddingHorizontal: 16, zIndex: 4 }, searchBox: { minHeight: 46, borderRadius: 14, backgroundColor: '#F4F5F6', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8 }, searchInput: { flex: 1, fontSize: 16, color: '#1D1D21', paddingVertical: 9 }, results: { marginTop: 6, backgroundColor: '#FFF', borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, resultRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 10, gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E7E8EA' }, resultCopy: { flex: 1 }, resultTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, resultName: { color: '#1B1B1D', fontSize: 14, fontWeight: '600', flexShrink: 1 }, resultAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, savedTag: { backgroundColor: '#E9F3FF', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }, savedTagText: { color: '#2F78B4', fontSize: 10, fontWeight: '700' }, addResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF' }, pinPopup: { marginHorizontal: 16, marginTop: 10, borderRadius: 14, backgroundColor: '#FFFFFF', padding: 12, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.13, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 5 }, pinName: { color: '#19191B', fontSize: 14, fontWeight: '700' }, pinAddress: { color: '#77777D', fontSize: 12, marginTop: 2 }, pinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }, addedPill: { flexDirection: 'row', gap: 3, alignItems: 'center', backgroundColor: '#FFF0E6', borderRadius: 13, paddingHorizontal: 9, paddingVertical: 6 }, addedPillText: { color: '#B5551B', fontSize: 11, fontWeight: '700' }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 7 }, listHeading: { color: '#1A1A1C', fontSize: 18, fontWeight: '700' }, routeButton: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 34, paddingHorizontal: 10, borderWidth: 1, borderColor: '#B7D8D2', borderRadius: 10, backgroundColor: '#FFFFFF' }, routeButtonActive: { backgroundColor: '#0F766E', borderColor: '#0F766E' }, routeButtonText: { color: '#0F766E', fontSize: 12, fontWeight: '700' }, routeButtonTextActive: { color: '#FFF' }, timeTags: { paddingHorizontal: 16, paddingBottom: 5, gap: 6 }, routeTimeTag: { borderRadius: 12, backgroundColor: '#F2F5F7', paddingHorizontal: 9, paddingVertical: 5 }, routeTimeTagText: { color: '#53616B', fontSize: 11, fontWeight: '600' }, emptyList: { flex: 1, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14 }, emptyText: { color: '#71827F', fontSize: 14, lineHeight: 20, maxWidth: 260 }, focusSection: { marginTop: 18, flexDirection: 'row', gap: 10, height: 122 }, focusList: { flex: 1 }, focusListContent: { gap: 10, paddingBottom: 16 }, focusRow: { minHeight: 70, padding: 10, borderRadius: 14, backgroundColor: '#F6F8F7', flexDirection: 'row', alignItems: 'center', gap: 10 }, focusText: { color: '#274845', fontSize: 14, fontWeight: '700', flexShrink: 1 }, focusRail: { width: 23, borderRadius: 12, backgroundColor: '#EFF1F2', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 6 }, focusRailPaused: { backgroundColor: '#E0EDF7' }, focusRailThumb: { width: 4, height: 30, borderRadius: 2, backgroundColor: '#94B1C5' }, list: { flex: 1, paddingHorizontal: 15 }, listContent: { paddingBottom: 10 }, timeTag: { alignSelf: 'flex-start', borderRadius: 10, backgroundColor: '#EAF4FF', paddingHorizontal: 9, paddingVertical: 4, marginBottom: 5 }, timeTagText: { color: '#3179B7', fontSize: 11, fontWeight: '700' }, dividerAdd: { height: 19, alignItems: 'center', justifyContent: 'center' }, swipeShell: { marginBottom: 1, overflow: 'hidden', borderRadius: 14 }, deleteReveal: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 63, backgroundColor: '#E05252', borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, deleteHidden: { opacity: 0 }, item: { minHeight: 70, padding: 9, borderRadius: 14, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, orderBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F5822A', alignItems: 'center', justifyContent: 'center' }, orderBadgeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' }, itemImage: { width: 50, height: 50, borderRadius: 11, backgroundColor: '#E9EEF2' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, itemCopy: { flex: 1, minWidth: 0 }, itemName: { fontSize: 14, fontWeight: '700', color: '#212124' }, itemAddress: { fontSize: 12, color: '#85858C', marginTop: 2 }, itemNote: { color: '#48708C', fontSize: 11, lineHeight: 15, marginTop: 4, fontStyle: 'italic' }, noteButton: { width: 40, height: 30, borderRadius: 9, backgroundColor: '#EEF6FD' }, dragHandle: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, footer: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#DDE7E5', backgroundColor: '#FFFFFF' }, secondarySave: { flex: 0.82, height: 50, borderRadius: 18, backgroundColor: '#EDF2F1', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, secondarySaveText: { color: '#1F3938', fontSize: 14, fontWeight: '700' }, primarySave: { flex: 1.45, height: 50, borderRadius: 18, backgroundColor: '#0F766E', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }, primarySaveText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.28)' }, modalSheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFF', paddingBottom: 28 }, modalHeader: { minHeight: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E5E8' }, modalCancel: { color: '#6D6D73', fontSize: 16 }, modalTitle: { color: '#1D1D20', fontSize: 16, fontWeight: '700', textAlign: 'center' }, modalSubtitle: { color: '#85858C', fontSize: 11, textAlign: 'center', marginTop: 2 }, modalSave: { color: '#007AFF', fontSize: 16, fontWeight: '700' }, wheels: { height: 236, flexDirection: 'row', paddingHorizontal: 30 }, wheelContent: { paddingVertical: 72, flexGrow: 1 }, wheelDivider: { width: StyleSheet.hairlineWidth, backgroundColor: '#E8E8EC', marginVertical: 25 }, wheelOption: { minHeight: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 10 }, wheelOptionSelected: { backgroundColor: '#EAF4FF' }, wheelOptionLocked: { opacity: 0.32 }, wheelText: { color: '#6A6A70', fontSize: 16 }, wheelTextSelected: { color: '#1874B8', fontWeight: '700' }, wheelTextLocked: { color: '#9CA3AF' }, noDayNote: { color: '#6B7280', fontSize: 12, lineHeight: 17, marginHorizontal: 30, marginTop: -12, textAlign: 'center' },
   editGuide: { color: '#667085', fontSize: 10, lineHeight: 14, fontWeight: '600', marginTop: 3 },
+  atlasHeadingSafe: { lineHeight: 32, paddingTop: 2, includeFontPadding: true },
   timeConflictToast: { position: 'absolute', top: 70, left: 18, right: 18, minHeight: 38, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: '#FFF7E8', borderWidth: 1, borderColor: '#F3D29B', flexDirection: 'row', alignItems: 'center', gap: 7, zIndex: 10, shadowColor: '#9A6B2F', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 }, timeConflictText: { flex: 1, color: '#8A5600', fontSize: 12, lineHeight: 16, fontWeight: '600' },
 });

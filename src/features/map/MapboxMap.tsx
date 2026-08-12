@@ -340,6 +340,8 @@ function MarkerDot({
   const pulse = useSharedValue(0);
   const selectedProgress = useSharedValue(selected || tone === 'focused' ? 1 : 0);
   const specialPlace = tone === 'home' || tone === 'office' || tone === 'school';
+  const hasLocationPulse = pulsing || selected || tone === 'focused';
+  const useLocationPulseStyle = tone === 'location' || tone === 'focused';
   useEffect(() => {
     exit.value = deleting ? withTiming(1, { duration: 440 }) : withTiming(0, { duration: 160 });
   }, [deleting, exit]);
@@ -347,10 +349,10 @@ function MarkerDot({
     entry.value = entering ? withTiming(1, { duration: 420 }) : 1;
   }, [entering, entry]);
   useEffect(() => {
-    pulse.value = pulsing
-      ? withRepeat(withTiming(1, { duration: tone === 'location' ? 900 : 3600 }), -1, tone === 'location')
+    pulse.value = hasLocationPulse
+      ? withRepeat(withTiming(1, { duration: useLocationPulseStyle ? 900 : 3600 }), -1, useLocationPulseStyle)
       : withTiming(0, { duration: 280 });
-  }, [pulse, pulsing, tone]);
+  }, [hasLocationPulse, pulse, useLocationPulseStyle]);
   useEffect(() => {
     const isFocused = selected || tone === 'focused';
     // Switching directly from one point to another should never leave two
@@ -384,16 +386,16 @@ function MarkerDot({
     };
   });
   const pulseStyle = useAnimatedStyle(() => ({
-    opacity: pulsing
-      ? tone === 'location'
+    opacity: hasLocationPulse
+      ? useLocationPulseStyle
         ? interpolate(pulse.value, [0, 0.5, 1], [0.86, 0.48, 0.86])
         : interpolate(pulse.value, [0, 0.88, 1], [1, 1, 0])
       : 0,
-    transform: [{ scale: pulsing ? tone === 'location' ? interpolate(pulse.value, [0, 1], [1, 1.2]) : interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
+    transform: [{ scale: hasLocationPulse ? useLocationPulseStyle ? interpolate(pulse.value, [0, 1], [1, 1.2]) : interpolate(pulse.value, [0, 1], [1, 3.56]) : 1 }],
   }));
   return (
     <View style={[styles.markerDotWrap, tone === 'atlas' && styles.markerDotWrapAtlas, tone === 'location' && styles.markerDotWrapLocation, specialPlace && styles.markerDotWrapSpecialPlace]}>
-      {pulsing ? <Reanimated.View pointerEvents="none" style={[styles.markerSavingPulse, tone === 'atlas' && styles.markerSavingPulseAtlas, tone === 'location' && styles.markerLocationPulse, pulseStyle]} /> : null}
+      {hasLocationPulse ? <Reanimated.View pointerEvents="none" style={[styles.markerSavingPulse, tone === 'atlas' && styles.markerSavingPulseAtlas, useLocationPulseStyle && styles.markerLocationPulse, pulseStyle]} /> : null}
       <Reanimated.View style={[styles.marker, selected && styles.markerSelectedLayer, tone === 'atlas' && styles.markerAtlas, tone === 'recommended' && styles.markerRecommended, tone === 'location' && styles.markerLocation, specialPlace && styles.markerSpecialPlace, selected && tone === 'atlas' && styles.markerAtlasSelected, animatedStyle]}>
         {tone === 'home' ? <Ionicons name="home" size={16} color="#FFFFFF" /> : null}
         {tone === 'office' ? <Ionicons name="business" size={16} color="#FFFFFF" /> : null}
@@ -462,9 +464,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       displayMarkers.forEach((marker) => unique.set(marker.id, marker));
       const list = [...unique.values()];
       const markerPriority = (marker: MapMarker) => (
-        marker.tone === 'atlas' ? 30
-          : marker.tone === 'location' ? 25
-          : marker.tone === 'focused' || marker.id === selectedMarkerId ? 20
+        marker.tone === 'focused' || marker.id === selectedMarkerId ? 40
+          : marker.tone === 'atlas' ? 30
+            : marker.tone === 'location' ? 25
             : marker.tone === 'recommended' ? 10
               : 0
       );
@@ -774,9 +776,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
             style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
-            // Let Mapbox suppress overlapping native marker views while we
-            // evaluate its collision behavior for dense map areas.
-            allowOverlap={false}
+            // A current Atlas choice is the authoritative visual state. It
+            // must never lose a native collision to a nearby saved/recommended
+            // point; non-green points continue to use Mapbox collision.
+            allowOverlap={marker.tone === 'focused' || marker.id === selectedMarkerId}
           >
             <View
               style={styles.markerContainer}
