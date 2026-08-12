@@ -33,6 +33,7 @@ const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124
 // after a group snap change instead of reacting immediately.
 const PANEL_SPRING_SETTLE_DELAY = 380;
 const SHEET_OVERLAY_HANDOFF_DELAY = 360;
+const SHEET_DISMISS_FALLBACK_DELAY = 750;
 
 // ---- Types ----
 
@@ -128,6 +129,7 @@ function HomeScreenContent({
   const [chatPresented, setChatPresented] = useState(false);
   const [mainSheetPaused, setMainSheetPaused] = useState(false);
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
+  const pendingSheetFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
   // The home map and My Places list deliberately share one source of truth.
@@ -185,6 +187,20 @@ function HomeScreenContent({
     }
   }, [accountOpen, chatVisible, externalOverlayVisible, overlay.kind]);
 
+  const finishMainSheetHandoff = useCallback(() => {
+    if (pendingSheetFallbackRef.current) {
+      clearTimeout(pendingSheetFallbackRef.current);
+      pendingSheetFallbackRef.current = null;
+    }
+    const pendingAction = pendingSheetActionRef.current;
+    pendingSheetActionRef.current = null;
+    if (pendingAction) {
+      pendingAction();
+      return;
+    }
+    setMainSheetPaused(false);
+  }, []);
+
   const presentAboveMainSheet = useCallback((action: () => void) => {
     if (Platform.OS !== 'ios' || !mainSheetVisible) {
       action();
@@ -193,12 +209,21 @@ function HomeScreenContent({
 
     pendingSheetActionRef.current = action;
     setMainSheetPaused(true);
-  }, [mainSheetVisible]);
+    // Native sheet dismissal normally invokes onDismiss. Some interrupted
+    // presentations do not deliver that callback; complete the handoff rather
+    // than leaving every sheet and navigation control hidden above the map.
+    pendingSheetFallbackRef.current = setTimeout(
+      finishMainSheetHandoff,
+      SHEET_DISMISS_FALLBACK_DELAY,
+    );
+  }, [finishMainSheetHandoff, mainSheetVisible]);
 
   const handleMainSheetDismissed = useCallback(() => {
-    const pendingAction = pendingSheetActionRef.current;
-    pendingSheetActionRef.current = null;
-    pendingAction?.();
+    finishMainSheetHandoff();
+  }, [finishMainSheetHandoff]);
+
+  useEffect(() => () => {
+    if (pendingSheetFallbackRef.current) clearTimeout(pendingSheetFallbackRef.current);
   }, []);
 
   useEffect(() => {
