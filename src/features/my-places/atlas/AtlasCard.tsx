@@ -1,23 +1,29 @@
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import type { AtlasCameraPresentation } from '@/features/map/atlasCamera';
 import { typography } from '@/theme/typography';
+import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { memo } from 'react';
-import { Pressable, View } from 'react-native';
+import { Image, Pressable, View } from 'react-native';
 
 type AtlasCardProps = {
   atlasId: string;
   emoji: string;
   title: string;
+  coverUri: string | null;
+  camera?: AtlasCameraPresentation;
+  onOpen: (atlasId: string, camera?: AtlasCameraPresentation) => void;
 };
 
 /** Memoized — rendered inside a 3-per-row grid of atlases; keeps unrelated
     section re-renders from forcing every card to re-render. */
-export const AtlasCard = memo(function AtlasCard({ atlasId, emoji, title }: AtlasCardProps) {
-  const { setOverlay } = useHome();
-
+export const AtlasCard = memo(function AtlasCard({ atlasId, emoji, title, coverUri, camera, onOpen }: AtlasCardProps) {
   return (
     <Pressable
-      onPress={() => setOverlay({ kind: 'atlasDetail', atlasId })}
+      onPress={() => {
+        // This must run synchronously before the detail overlay is mounted:
+        // otherwise HomeScreen briefly receives its GPS fallback camera.
+        onOpen(atlasId, camera);
+      }}
       style={{ flexBasis: '31%', flexGrow: 0 }}
     >
       <View
@@ -31,7 +37,9 @@ export const AtlasCard = memo(function AtlasCard({ atlasId, emoji, title }: Atla
           justifyContent: 'center',
         }}
       >
-        <Text style={{ fontSize: 48, lineHeight: 56, textAlign: 'center' }}>{emoji}</Text>
+        {coverUri ? <Image source={{ uri: coverUri }} style={{ position: 'absolute', width: '100%', height: '100%' }} resizeMode="cover" /> : null}
+        {coverUri ? <View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.2)' }} /> : null}
+        {coverUri ? <View style={{ position: 'absolute', right: 9, bottom: 9, width: 30, height: 30, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.92)', alignItems: 'center', justifyContent: 'center' }}><MapTrifoldIcon size={17} color="#252525" weight="bold" /></View> : <Text style={{ fontSize: 48, lineHeight: 56, textAlign: 'center' }}>{emoji}</Text>}
       </View>
       <Text
         numberOfLines={2}

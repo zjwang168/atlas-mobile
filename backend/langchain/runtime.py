@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Literal, Optional
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-ProviderName = Literal["deepseek", "qwen", "hunyuan", "gemini"]
+ProviderName = Literal["deepseek", "qwen", "hunyuan", "gemini", "openai_mango"]
 
 
 def normalize_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
@@ -26,6 +27,8 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
 
 
 def _base_url_for_provider(provider: ProviderName) -> Optional[str]:
+    if provider == "openai_mango":
+        return os.environ.get("OPENAI_BASE_URL_MANGO", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1"
     if provider == "deepseek":
         return os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").strip() or "https://api.deepseek.com/v1"
     if provider == "qwen":
@@ -45,48 +48,62 @@ def get_chat_model(provider: ProviderName, model: str, temperature: float = 0.2)
     from langchain_openai import ChatOpenAI
 
     api_key_env = {
+        "openai_mango": "OPENAI_API_KEY_MANGO",
         "deepseek": "DEEPSEEK_API_KEY",
         "qwen": "QWEN_API_KEY",
         "hunyuan": "HUNYUAN_API_KEY",
     }[provider]  # type: ignore[index]
-    return ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        max_tokens=8192,
-        api_key=os.environ.get(api_key_env, ""),
-        base_url=_base_url_for_provider(provider),  # type: ignore[arg-type]
-        streaming=True,
-    )
+    options: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": 8192,
+        "api_key": os.environ.get(api_key_env, ""),
+        "base_url": _base_url_for_provider(provider),
+        "streaming": True,
+    }
+    if provider == "openai_mango":
+        # OpenAI-hosted web search is available through the Responses API.
+        # The model decides when searching is warranted for the user's request.
+        options["use_responses_api"] = True
+        options["model_kwargs"] = {"tools": [{"type": "web_search"}]}
+
+    return ChatOpenAI(**options)
 
 
 class ProgressStreamHandler(AsyncCallbackHandler):
-    """Mirror token stream into progress events."""
+    """Report model activity without exposing its raw structured output."""
 
     def __init__(self, request_id: str | None, stage_label: str):
         self.request_id = request_id
         self.stage_label = stage_label
-        self.buffer = ""
+        self._last_update_at = 0.0
+        self._update_count = 0
 
     async def on_chat_model_start(self, serialized: dict[str, Any], messages: list[list[BaseMessage]], **kwargs: Any) -> None:
         if not self.request_id:
             return
         from backend.services import progress
 
-        model_name = serialized.get("name") or serialized.get("id") or self.stage_label
-        progress.stream_note(self.request_id, self.stage_label, {"detail": f"Starting {model_name}."})
+        progress.stream_note(self.request_id, self.stage_label, {"stage": "model_started"})
 
     async def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
-        if not self.request_id or not token.strip():
+        # Keep the UI alive during long structured responses without exposing
+        # JSON tokens or hidden chain-of-thought content.
+        now = time.monotonic()
+        if not self.request_id or now - self._last_update_at < 1.4:
             return
-        self.buffer += token
-        if len(self.buffer) < 80 and token not in "\n。.!?":
-            return
+        self._last_update_at = now
+        self._update_count += 1
+        details = (
+            "Reviewing the source context.",
+            "Comparing place names with nearby clues.",
+            "Checking the strongest location references.",
+        )
         from backend.services import progress
-
-        progress.stream_note(self.request_id, self.stage_label, {"chunk": self.buffer[-180:]})
+        progress.stream_note(self.request_id, self.stage_label, {
+            "stage": "model_progress",
+            "detail": details[(self._update_count - 1) % len(details)],
+        })
 
     async def on_llm_end(self, response, **kwargs: Any) -> None:
-        if self.request_id and self.buffer.strip():
-            from backend.services import progress
-
-            progress.stream_note(self.request_id, self.stage_label, {"chunk": self.buffer[-240:], "final": True})
+        return

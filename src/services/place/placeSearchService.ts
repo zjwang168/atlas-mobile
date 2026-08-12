@@ -21,7 +21,7 @@ export const SEARCH_DISPLAY_LIMIT = 8;
 const SEARCH_REQUEST_LIMIT = 10;
 
 /** Shortest query worth a round trip; the backend rejects anything shorter. */
-export const MIN_QUERY_LENGTH = 2;
+export const MIN_QUERY_LENGTH = 1;
 
 /**
  * Start a search session. Hold one for a whole typing session and pass it to
@@ -57,7 +57,7 @@ function isSaveable(suggestion: PlaceSuggestion): boolean {
 export async function suggestPlaces(
   query: string,
   sessionToken: string,
-  options: { proximity?: [number, number]; language?: string; country?: string } = {},
+  options: { proximity?: [number, number]; language?: string; country?: string; types?: string; includeNonPoi?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<PlaceSuggestion[]> {
   const trimmed = query.trim();
@@ -71,11 +71,12 @@ export async function suggestPlaces(
       proximity: options.proximity,
       language: options.language,
       country: options.country,
+      types: options.types,
     },
     signal,
   );
 
-  return response.suggestions.filter(isSaveable).slice(0, SEARCH_DISPLAY_LIMIT);
+  return (options.includeNonPoi ? response.suggestions : response.suggestions.filter(isSaveable)).slice(0, SEARCH_DISPLAY_LIMIT);
 }
 
 /** Adapt one resolved location into the shape the save path already accepts. */

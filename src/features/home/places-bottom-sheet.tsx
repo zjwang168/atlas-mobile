@@ -25,7 +25,7 @@ import Animated, {
 import { useContentPanelSnapGroup } from '@/components/content-panel/ContentPanelSnapProvider';
 import type { SnapState } from '@/components/content-panel/ContentPanel';
 import type { TopMode } from '@/components/top-nav/TopNav';
-import type { Place } from '@/types/place';
+import type { Place, PlaceDetail } from '@/types/place';
 import Discover from '../discover/Discover';
 import MyPlaces, { type PlacesView } from '../my-places/MyPlaces';
 
@@ -44,6 +44,12 @@ type PlacesBottomSheetProps = {
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
   onSearchPress?: () => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
+  /** Declared to keep both platform variants type-compatible. This one never
+      renders MyPlan — off iOS the plan tab goes through HomePanel's
+      ContentPanel branch instead — so neither is read here. */
+  isActive?: boolean;
+  onExitPlan?: () => void;
   bottomBar?: ReactNode;
 };
 
@@ -75,6 +81,7 @@ function PlacesBottomSheet({
   onPlacePress,
   onHeightChange,
   onSearchPress,
+  onDeleteInitiated,
   bottomBar,
 }: PlacesBottomSheetProps) {
   const sheetRef = useRef<BottomSheet>(null);
@@ -197,6 +204,7 @@ function PlacesBottomSheet({
             active={topMode === 'saved'}
             onPlacePress={onPlacePress}
             bottomInset={BOTTOM_BAR_CLEARANCE}
+            onDeleteInitiated={onDeleteInitiated}
             activeView={activeView}
           />
         </View>

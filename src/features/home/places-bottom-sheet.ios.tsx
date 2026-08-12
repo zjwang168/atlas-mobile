@@ -27,7 +27,7 @@ import type { SnapState } from '@/components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '@/components/content-panel/ContentPanelSnapProvider';
 import TopBlurFade from '@/components/ui/top-blur-fade';
 import type { TopMode } from '@/components/top-nav/TopNav';
-import type { Place } from '@/types/place';
+import type { Place, PlaceDetail } from '@/types/place';
 import Discover from '../discover/Discover';
 import MyPlaces, { type PlacesView } from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
@@ -53,6 +53,11 @@ type PlacesBottomSheetProps = {
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
   onSearchPress?: () => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
+  /** MyPlan opens the Atlas builder only while its tab is active, and it
+      defaults to inactive — without this the plan tab renders an empty view. */
+  isActive?: boolean;
+  onExitPlan?: () => void;
   bottomBar?: ReactNode;
 };
 
@@ -85,6 +90,9 @@ function PlacesBottomSheet({
   onHeightChange,
   onDismissed,
   onSearchPress,
+  onDeleteInitiated,
+  isActive = true,
+  onExitPlan,
   bottomBar,
 }: PlacesBottomSheetProps) {
   const { width, height } = useWindowDimensions();
@@ -149,11 +157,9 @@ function PlacesBottomSheet({
             <View style={styles.content}>
               {activeTab === TAB_PLAN ? (
                 <MyPlan
-                  bottomInset={BOTTOM_BAR_CLEARANCE}
                   snapTo={handleSnapTo}
-                  verticalScrollEnabled={
-                    groupSnapState === 'tall' || groupSnapState === 'full'
-                  }
+                  active={isActive}
+                  onExit={onExitPlan}
                 />
               ) : (
                 <>
@@ -169,6 +175,7 @@ function PlacesBottomSheet({
                       active={topMode === 'saved'}
                       onPlacePress={onPlacePress}
                       bottomInset={BOTTOM_BAR_CLEARANCE}
+                      onDeleteInitiated={onDeleteInitiated}
                       activeView={activeView}
                       verticalScrollEnabled={
                         groupSnapState === 'tall' || groupSnapState === 'full'

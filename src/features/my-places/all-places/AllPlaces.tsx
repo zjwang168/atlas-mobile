@@ -52,6 +52,8 @@ export type CollectionFilter = 'all' | 'places' | 'atlas';
 type PlacesSortMode = 'distance' | 'date';
 type AtlasSortMode = 'recent' | 'alphabetical' | 'places';
 
+type SortMode = 'recent' | 'location';
+
 type AllPlacesProps = {
   onPlacePress?: (place: PlaceDetail) => void;
   bottomInset?: number;
@@ -61,6 +63,7 @@ type AllPlacesProps = {
   filter?: CollectionFilter;
   query?: string;
   onFilterChange?: (filter: CollectionFilter) => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
 type PlaceTileProps = {

@@ -8,6 +8,17 @@ Two-stage approach:
 
 import asyncio
 import json
+import re
+
+
+def _normalize_region_tagline(value: object) -> str | None:
+    """Keep model display copy short, English, and safe for the hero overlay."""
+    if not isinstance(value, str):
+        return None
+    tagline = re.sub(r"[^A-Za-z' -]", "", value).strip()
+    tagline = re.sub(r"\s+", " ", tagline)
+    words = tagline.split()
+    return tagline if 2 <= len(words) <= 4 and len(tagline) <= 36 else None
 
 # NOTE: All JSON curly braces in this prompt are doubled ({{, }}) to avoid
 #       Python str.format() interpreting them as template placeholders.
@@ -36,6 +47,7 @@ Output ONLY a JSON object with this exact structure:
       "description": null, "sentiment": null, "category": null}}
   ],
   "inferred_region": "San Francisco Bay Area",
+  "region_tagline": "Bay City Views",
   "is_multi_region": false,
   "is_multi_country": false,
   "source_summary": "A Reddit post about visiting San Francisco's tourist attractions"
@@ -72,6 +84,9 @@ Rules:
 13. If the text contains a specific street address, full mailing address, or precise venue
     address for an entity, copy it into the "address" field exactly as written (translated to English).
     Otherwise set "address" to null. Prefer exact addresses over vague area descriptions.
+14. Add "region_tagline": a refined English locale line for the inferred_region, exactly 2-4 words.
+    It should evoke the place without being a full sentence, such as "City of Light" or "Harbor and Hills".
+    Return null only when no primary region can be inferred.
 
 Text:
 {text}
@@ -83,7 +98,13 @@ class ExtractionPipeline:
     """Two-stage extraction: LLM extraction + rule-based hierarchical filtering."""
 
     @staticmethod
-    async def extract(text: str, source_type: str = "generic", request_id: str | None = None) -> dict:
+    async def extract(
+        text: str,
+        source_type: str = "generic",
+        request_id: str | None = None,
+        ranked_items: list[dict] | None = None,
+        inferred_region: str | None = None,
+    ) -> dict:
         """
         Full extraction pipeline.
 
@@ -96,10 +117,21 @@ class ExtractionPipeline:
             "is_multi_region": bool
         }
         """
-        # Stage 1: Raw extraction via LLM
         from backend.services import progress
+        if ranked_items:
+            return ExtractionPipeline._extract_ranked_items(
+                ranked_items,
+                inferred_region=inferred_region,
+                request_id=request_id,
+            )
+
+        # Stage 1: Raw extraction via LLM
         progress.stream_note(request_id, "langchain:extract:start", {"detail": "Extracting geographic entities."})
         entities = await ExtractionPipeline._stage1_extract(text, request_id=request_id)
+        inferred_region = entities.get("inferred_region")
+        region_tagline = entities.get("region_tagline")
+        if inferred_region:
+            progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
 
         # Stage 2: Filter by hierarchy
         progress.stream_note(request_id, "langchain:extract:filter", {"detail": "Filtering redundant hierarchy."})
@@ -118,8 +150,63 @@ class ExtractionPipeline:
             "locations": final.get("locations", filtered.get("locations", [])),
             "removed_hierarchy": filtered.get("removed_hierarchy", []),
             "removed_noise": final.get("removed_noise", []),
-            "inferred_region": entities.get("inferred_region"),
+            "inferred_region": inferred_region,
+            "region_tagline": region_tagline,
             "is_multi_region": entities.get("is_multi_region", False),
+        }
+
+    @staticmethod
+    def _extract_ranked_items(
+        ranked_items: list[dict],
+        inferred_region: str | None,
+        request_id: str | None,
+    ) -> dict:
+        """Use the publisher's ordered list directly instead of re-extracting it with an LLM."""
+        from backend.services import progress
+
+        progress.stream_note(request_id, "langchain:extract:start", {
+            "detail": "Using the source's ranked places.",
+            "structured": True,
+        })
+        if inferred_region:
+            progress.stream_note(request_id, "analysis:region", {"region": inferred_region})
+
+        locations: list[dict] = []
+        seen: set[str] = set()
+        for item in ranked_items:
+            name = str(item.get("name") or "").strip()
+            key = name.casefold()
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            locations.append({
+                "name": name,
+                "context": inferred_region,
+                "hierarchy_level": 0,
+                "address": str(item.get("address") or "").strip() or None,
+                "description": str(item.get("description") or "").strip() or None,
+                "sentiment": "positive",
+                "category": "Tourist Attractions",
+                "rank": item.get("rank"),
+            })
+
+        progress.stream_note(request_id, "langchain:extract:filter", {
+            "detail": "Keeping only the publisher's ranked places.",
+        })
+        progress.stream_note(request_id, "langchain:extract:validate", {
+            "detail": "Preparing the ranked places for map matching.",
+        })
+        return {
+            "locations": locations,
+            "removed_hierarchy": [],
+            "removed_noise": [],
+            "inferred_region": inferred_region,
+            "region_tagline": None,
+            # A city-branded ranking may deliberately include worthwhile
+            # nearby destinations. The publisher's explicit item list is the
+            # authority, so later geocoding must not discard one for falling
+            # just outside the coverage city.
+            "is_multi_region": True,
         }
 
     @staticmethod
@@ -151,6 +238,7 @@ class ExtractionPipeline:
             return {
                 "entities": [],
                 "inferred_region": None,
+                "region_tagline": None,
                 "is_multi_region": False,
                 "is_multi_country": False,
             }
@@ -158,6 +246,7 @@ class ExtractionPipeline:
         return {
             "entities": parsed.get("entities", []),
             "inferred_region": parsed.get("inferred_region"),
+            "region_tagline": _normalize_region_tagline(parsed.get("region_tagline")),
             "is_multi_region": parsed.get("is_multi_region", False),
             "is_multi_country": parsed.get("is_multi_country", False),
         }

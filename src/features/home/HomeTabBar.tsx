@@ -52,6 +52,10 @@ type TabItem = {
 };
 
 const TAB_ITEMS: TabItem[] = [
+  // Their branch added a second 'chat'-keyed entry here (an "AI" sparkle tab)
+  // with the same action as HJ's Chat tab below, which React rejected as a
+  // duplicate key. Dropped in favour of HJ's; revisit when the ai-chat
+  // sidekick itself lands in S4.
   {
     key: TAB_PLACES,
     label: 'My Places',

@@ -16,6 +16,9 @@ TaskType = Literal[
     "parse_text",
     "scan_url",
     "parse_youtube",
+    "parse_tiktok",
+    "parse_instagram_reel",
+    "parse_facebook_reel",
     "find_image_places",
     "atlas_ai_discover",
     "chat",
@@ -44,6 +47,9 @@ def build_atlas_graph():
     graph.add_node("parse_text", _parse_text)
     graph.add_node("scan_url", _scan_url)
     graph.add_node("parse_youtube", _parse_youtube)
+    graph.add_node("parse_tiktok", _parse_tiktok)
+    graph.add_node("parse_instagram_reel", _parse_instagram_reel)
+    graph.add_node("parse_facebook_reel", _parse_facebook_reel)
     graph.add_node("find_image_places", _find_image_places)
     graph.add_node("atlas_ai_discover", _atlas_ai_discover)
     graph.add_node("chat", _chat)
@@ -57,6 +63,9 @@ def build_atlas_graph():
             "parse_text": "parse_text",
             "scan_url": "scan_url",
             "parse_youtube": "parse_youtube",
+            "parse_tiktok": "parse_tiktok",
+            "parse_instagram_reel": "parse_instagram_reel",
+            "parse_facebook_reel": "parse_facebook_reel",
             "find_image_places": "find_image_places",
             "atlas_ai_discover": "atlas_ai_discover",
             "chat": "chat",
@@ -68,6 +77,9 @@ def build_atlas_graph():
         "parse_text",
         "scan_url",
         "parse_youtube",
+        "parse_tiktok",
+        "parse_instagram_reel",
+        "parse_facebook_reel",
         "find_image_places",
         "atlas_ai_discover",
         "chat",
@@ -130,10 +142,34 @@ async def _parse_youtube(state: AtlasState) -> AtlasState:
     return state
 
 
+async def _parse_tiktok(state: AtlasState) -> AtlasState:
+    from backend.services.tiktok_places_service import parse_tiktok_url
+
+    state["result"] = await parse_tiktok_url(state.get("url", "") or "", request_id=state.get("request_id"))
+    return state
+
+
+async def _parse_instagram_reel(state: AtlasState) -> AtlasState:
+    from backend.services.instagram_reels_service import parse_instagram_reel_url
+
+    state["result"] = await parse_instagram_reel_url(state.get("url", "") or "", request_id=state.get("request_id"))
+    return state
+
+
+async def _parse_facebook_reel(state: AtlasState) -> AtlasState:
+    from backend.services.facebook_reels_service import parse_facebook_reel_url
+
+    state["result"] = await parse_facebook_reel_url(state.get("url", "") or "", request_id=state.get("request_id"))
+    return state
+
+
 async def _find_image_places(state: AtlasState) -> AtlasState:
     from backend.services.find_image_places_service import find_image_place
 
-    state["result"] = await find_image_place(state.get("image", "") or "")
+    state["result"] = await find_image_place(
+        state.get("image", "") or "",
+        request_id=state.get("request_id"),
+    )
     return state
 
 

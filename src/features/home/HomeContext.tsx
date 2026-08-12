@@ -1,5 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AppState } from 'react-native';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AppState, Image, InteractionManager } from 'react-native';
+import * as Location from 'expo-location';
+import { useAppDialog } from '../../components/feedback/AppDialog';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
 import { createAtlas as createAtlasService, deleteAtlas as deleteAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
 import { addPlacesToAtlas as addPlacesToAtlasService, fetchAtlasPlaces, removePlaceFromAtlas as removePlaceFromAtlasService, subscribeAtlasPlaces } from '../../services/atlas/atlasPlacesService';
@@ -14,6 +16,8 @@ import { loadChatHistory, supabase } from '../../services/supabase/supabaseClien
 import type { Atlas } from '../../types/atlas';
 import type { AtlasPlace, PlaceDetail } from '../../types/place';
 import { DEFAULT_MAP_CENTER } from '../../utils/constants';
+import type { MapMarker } from '../map/MapboxMap';
+import type { AtlasChatPresentation } from '../../services/api/apiService';
 
 // --- Chat History ---
 
@@ -30,9 +34,73 @@ export type ChatHistoryItem = {
       'reddit_links' | 'any_links' | 'link' | 'text'. Stored in
       conversations.source_type. */
   sourceType?: string;
+  /** Present only while opening a newly saved import. The first assistant
+      message is persisted by the backend; this context is not history data. */
+  importWelcome?: {
+    deselectedPlaces: ParsedPlace[];
+  };
+  /** Present only while opening a chat directly from a saved Atlas edit. */
+  atlasWelcome?: { places: AtlasChatPresentation['places'] };
 };
 
 const MAX_CHAT_HISTORY = 50;
+
+function hasRenderableCoordinates(place: SavedPlace): boolean {
+  return Number.isFinite(place.latitude)
+    && Number.isFinite(place.longitude)
+    && place.latitude >= -90
+    && place.latitude <= 90
+    && place.longitude >= -180
+    && place.longitude <= 180;
+}
+
+const prefetchedPhotoUrls = new Set<string>();
+const prefetchingPhotoUrls = new Set<string>();
+
+function uniquePhotoUrls(urls: Array<string | null | undefined>): string[] {
+  return [...new Set(urls.filter((url): url is string => Boolean(url)))];
+}
+
+function focusCardPhotoUrls(places: SavedPlace[]): string[] {
+  const areas = new Map<string, SavedPlace[]>();
+  places.forEach((place) => {
+    const label = [place.city, place.region, place.country].find((value) => value?.trim());
+    if (!label) return;
+    const key = label.toLocaleLowerCase().trim();
+    areas.set(key, [...(areas.get(key) ?? []), place]);
+  });
+  return uniquePhotoUrls(
+    [...areas.values()]
+      .sort((a, b) => b.length - a.length || (a[0]?.city ?? a[0]?.region ?? a[0]?.country ?? '').localeCompare(b[0]?.city ?? b[0]?.region ?? b[0]?.country ?? ''))
+      .map((area) => area.find((place) => Boolean(place.photo_url))?.photo_url),
+  );
+}
+
+function atlasCoverPhotoUrls(atlases: Atlas[], atlasPlaces: AtlasPlace[], savedPlaces: SavedPlace[]): string[] {
+  const savedById = new Map(savedPlaces.map((place) => [place.id, place]));
+  return uniquePhotoUrls(atlases.flatMap((atlas) => {
+    const rows = atlasPlaces.filter((row) => row.atlas_id === atlas.id).sort((a, b) => a.sort_order - b.sort_order);
+    for (const row of rows) {
+      const uri = row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url;
+      if (uri) return [uri];
+    }
+    return [];
+  }));
+}
+
+async function prefetchPhotoUrlsInOrder(urls: string[]): Promise<void> {
+  for (const url of urls) {
+    if (prefetchedPhotoUrls.has(url) || prefetchingPhotoUrls.has(url)) continue;
+    prefetchingPhotoUrls.add(url);
+    try {
+      if (await Image.prefetch(url)) prefetchedPhotoUrls.add(url);
+    } catch {
+      // A later idle pass may retry transient image failures.
+    } finally {
+      prefetchingPhotoUrls.delete(url);
+    }
+  }
+}
 
 // --- Overlay ---
 
@@ -46,16 +114,54 @@ export type Overlay =
   | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }
   | { kind: 'createPlan' };
 
+/**
+ * Temporary map ownership for the map-first Atlas editor. It deliberately
+ * lives outside the editor panel so there is always one full-screen map.
+ */
+export type AtlasMapState = {
+  markers: MapMarker[];
+  /** Per-Atlas camera adjustment. Create an Atlas deliberately leaves this at zero. */
+  cameraVerticalOffset?: number;
+  /** Moves map content vertically in screen points without changing panel layout. */
+  cameraScreenOffsetY?: number;
+  centerCoordinate?: [number, number];
+  zoomLevel?: number;
+  bounds?: { ne: [number, number]; sw: [number, number] };
+  /** Changes when an Atlas view must re-apply identical bounds after reopening. */
+  cameraKey?: string;
+  /** Optional override for the shared map camera transition. */
+  cameraAnimationDurationMs?: number;
+  selectedMarkerId?: string | null;
+  deletingMarkerId?: string | null;
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
+  onMarkerPress?: (marker: MapMarker) => void;
+  onMapPress?: () => void;
+  onViewportChanged?: (center: [number, number], zoom: number) => void;
+  /** Atlas-only controls live above the one shared map, never in its panel. */
+  overlay?: ReactNode;
+  /** Receives the live Edit atlas panel height so map overlays can follow it. */
+  onPanelHeightChange?: (height: number) => void;
+  markerPopup?: { markerId: string; content: ReactNode } | null;
+  hideTopSearchButton?: boolean;
+  /** Briefly removes app chrome while an Atlas share image is captured. */
+  hideChrome?: boolean;
+} | null;
+
 type HomeContextValue = {
   overlay: Overlay;
   setOverlay: (overlay: Overlay) => void;
   tabBarVisible: boolean;
   setTabBarVisible: (visible: boolean) => void;
+  atlasMapState: AtlasMapState;
+  setAtlasMapState: (state: AtlasMapState) => void;
   /** 最新解析出的地点（来自 import 流程），供 HomeScreen 地图显示 */
   parsedPlaces: ParsedPlace[];
   setParsedPlaces: (places: ParsedPlace[]) => void;
   /** 从 Supabase 已加载的已保存地点 */
   savedPlaces: SavedPlace[];
+  /** Whether the initial saved-place read has completed. */
+  savedPlacesLoaded: boolean;
   setSavedPlaces: (places: SavedPlace[]) => void;
   /** 从 Supabase 刷新已保存地点列表 */
   refreshSavedPlaces: () => Promise<void>;
@@ -123,9 +229,12 @@ const HomeContext = createContext<HomeContextValue>({
   setOverlay: () => {},
   tabBarVisible: true,
   setTabBarVisible: () => {},
+  atlasMapState: null,
+  setAtlasMapState: () => {},
   parsedPlaces: [],
   setParsedPlaces: () => {},
   savedPlaces: [],
+  savedPlacesLoaded: false,
   setSavedPlaces: () => {},
   refreshSavedPlaces: async () => {},
   chatHistory: [],
@@ -175,12 +284,17 @@ function mergeHistoryItems(existing: ChatHistoryItem[], incoming: ChatHistoryIte
 }
 
 export function HomeProvider({ children }: { children: React.ReactNode }) {
+  const { show: showDialog } = useAppDialog();
   const [overlay, setOverlay] = useState<Overlay>({ kind: 'none' });
   const [tabBarVisible, setTabBarVisible] = useState(true);
+  const [atlasMapState, setAtlasMapState] = useState<AtlasMapState>(null);
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  const [savedPlacesLoaded, setSavedPlacesLoaded] = useState(false);
   const [atlases, setAtlases] = useState<Atlas[]>([]);
+  const [atlasesLoaded, setAtlasesLoaded] = useState(false);
   const [atlasPlaces, setAtlasPlaces] = useState<AtlasPlace[]>([]);
+  const [atlasPlacesLoaded, setAtlasPlacesLoaded] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
   const [deletedChatHistory, setDeletedChatHistory] = useState<ChatHistoryItem[]>([]);
   const [activeHistoryItem, setActiveHistoryItem] = useState<ChatHistoryItem | null>(null);
@@ -213,12 +327,37 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
 
   const currentUserIdRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!permission.granted) return;
+        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (mounted) setUserLocation([position.coords.longitude, position.coords.latitude]);
+      } catch (error) {
+        console.warn('[HomeContext] GPS location unavailable:', error);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
   const refreshSavedPlaces = useCallback(async () => {
     try {
       const places = await fetchSavedPlaces();
-      setSavedPlaces(places);
+      const validPlaces = places.filter(hasRenderableCoordinates);
+      const invalidPlaces = places.filter((place) => !hasRenderableCoordinates(place));
+      setSavedPlaces(validPlaces);
+      // An entry without legal coordinates cannot have its corresponding map pin.
+      if (invalidPlaces.length) {
+        void Promise.all(invalidPlaces.map((place) => deletePlace(place.id))).catch((error) => {
+          console.warn('[HomeContext] invalid saved-place cleanup failed:', error);
+        });
+      }
     } catch (e) {
       console.error('[HomeContext] refreshSavedPlaces failed:', e);
+    } finally {
+      setSavedPlacesLoaded(true);
     }
   }, []);
 
@@ -228,6 +367,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setAtlases(rows);
     } catch (e) {
       console.error('[HomeContext] refreshAtlases failed:', e);
+    } finally {
+      setAtlasesLoaded(true);
     }
   }, []);
 
@@ -237,6 +378,8 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setAtlasPlaces(rows);
     } catch (e) {
       console.error('[HomeContext] refreshAtlasPlaces failed:', e);
+    } finally {
+      setAtlasPlacesLoaded(true);
     }
   }, []);
 
@@ -254,27 +397,27 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       await deleteAtlasService(id);
     } catch (e) {
       console.error('[HomeContext] deleteAtlas failed:', e);
-      Alert.alert('Couldn’t delete atlas', 'Something went wrong deleting this atlas. Please try again.');
+      showDialog({ title: 'We couldn\'t delete this atlas', message: 'Nothing has changed. Please try again in a moment.', tone: 'warning' });
     }
-  }, []);
+  }, [showDialog]);
 
   const addPlacesToAtlas = useCallback(async (atlasId: string, placeIds: string[]) => {
     try {
       await addPlacesToAtlasService(atlasId, placeIds);
     } catch (e) {
       console.error('[HomeContext] addPlacesToAtlas failed:', e);
-      Alert.alert('Couldn’t add places', 'Something went wrong adding those places to the atlas. Please try again.');
+      showDialog({ title: 'We couldn\'t update this atlas', message: 'Those places are still in My Places. Please try again in a moment.', tone: 'warning' });
     }
-  }, []);
+  }, [showDialog]);
 
   const removePlaceFromAtlas = useCallback(async (joinRowId: string) => {
     try {
       await removePlaceFromAtlasService(joinRowId);
     } catch (e) {
       console.error('[HomeContext] removePlaceFromAtlas failed:', e);
-      Alert.alert('Couldn’t remove place', 'Something went wrong removing that place from the atlas. Please try again.');
+      showDialog({ title: 'We couldn\'t update this atlas', message: 'That place is still in the atlas. Please try again in a moment.', tone: 'warning' });
     }
-  }, []);
+  }, [showDialog]);
 
   // 初始加载已保存地点，让地图在启动时显示已保存的标记
   useEffect(() => {
@@ -283,7 +426,28 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     refreshAtlasPlaces();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => subscribeSavedPlaces(setSavedPlaces), []);
+  useEffect(() => subscribeSavedPlaces((places) => {
+    setSavedPlaces(places.filter(hasRenderableCoordinates));
+    setSavedPlacesLoaded(true);
+  }), []);
+
+  // Idle prefetch intentionally mirrors the user-visible priority: Create an
+  // Atlas focus cards, Bookmark Atlas covers, then My Places newest first.
+  useEffect(() => {
+    if (!savedPlacesLoaded || !atlasesLoaded || !atlasPlacesLoaded) return;
+    const urls = uniquePhotoUrls([
+      ...focusCardPhotoUrls(savedPlaces),
+      ...atlasCoverPhotoUrls(atlases, atlasPlaces, savedPlaces),
+      ...[...savedPlaces]
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+        .map((place) => place.photo_url),
+    ]);
+    if (!urls.length) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void prefetchPhotoUrlsInOrder(urls);
+    });
+    return () => task.cancel();
+  }, [atlasPlaces, atlasPlacesLoaded, atlases, atlasesLoaded, savedPlaces, savedPlacesLoaded]);
   useEffect(() => subscribeAtlases(setAtlases), []);
   useEffect(() => subscribeAtlasPlaces(setAtlasPlaces), []);
 
@@ -305,15 +469,20 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
         flushQueue(previousUserId)
           .then((result) => {
             if (!result.success || result.remaining > 0) {
-              Alert.alert(
-                'Unsynced local changes discarded',
-                `${result.remaining} queued change${result.remaining === 1 ? '' : 's'} could not be synced before switching accounts.`,
-              );
+              showDialog({
+                title: 'Some recent changes could not sync',
+                message: 'A few changes were still waiting to upload when the account changed. Please check your saved places after signing in again.',
+                tone: 'warning',
+              });
             }
           })
           .catch((error) => {
             console.warn('[HomeContext] final queue flush failed:', error);
-            Alert.alert('Unsynced local changes discarded', 'Some queued local changes could not be synced before switching accounts.');
+            showDialog({
+              title: 'Some recent changes could not sync',
+              message: 'A few changes were still waiting to upload when the account changed. Please check your saved places after signing in again.',
+              tone: 'warning',
+            });
           })
           .finally(() => {
             clearUserCache(previousUserId).catch((error) => console.warn('[HomeContext] clearUserCache failed:', error));
@@ -321,6 +490,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       }
 
       setSavedPlaces([]);
+      setSavedPlacesLoaded(false);
       refreshSavedPlaces();
       setAtlases([]);
       refreshAtlases();
@@ -332,7 +502,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       data.subscription.unsubscribe();
     };
-  }, [refreshSavedPlaces, refreshAtlases, refreshAtlasPlaces]);
+  }, [refreshSavedPlaces, refreshAtlases, refreshAtlasPlaces, showDialog]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -391,13 +561,20 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteSavedPlace = useCallback(async (id: string) => {
+    // The map derives directly from savedPlaces, so optimistic removal makes
+    // the list row and marker disappear together before persistence completes.
+    setSavedPlaces((prev) => prev.filter((place) => place.id !== id));
+    if (selectedPlaceId === id) {
+      setSelectedPlaceId(null);
+      setSelectedPlaceCoordinate(null);
+    }
     try {
       await deletePlace(id);
-      setSavedPlaces((prev) => prev.filter((p) => p.id !== id));
     } catch (e) {
       console.error('[HomeContext] deleteSavedPlace failed:', e);
+      void refreshSavedPlaces();
     }
-  }, []);
+  }, [refreshSavedPlaces, selectedPlaceId]);
 
   const updateSavedPlaceNote = useCallback(async (id: string, note: string) => {
     try {
@@ -434,9 +611,12 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setOverlay,
       tabBarVisible,
       setTabBarVisible,
+      atlasMapState,
+      setAtlasMapState,
       parsedPlaces,
       setParsedPlaces,
       savedPlaces,
+      savedPlacesLoaded,
       setSavedPlaces,
       refreshSavedPlaces,
       chatHistory,
@@ -473,8 +653,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     [
       overlay,
       tabBarVisible,
+      atlasMapState,
       parsedPlaces,
       savedPlaces,
+      savedPlacesLoaded,
       refreshSavedPlaces,
       chatHistory,
       deletedChatHistory,

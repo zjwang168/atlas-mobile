@@ -10,14 +10,15 @@
  * session and tighten RLS to `created_by = auth.uid()`.
  */
 
-import Constants from 'expo-constants';
 import type { PlaceDetail } from '@/types/place';
 import type { ParsedPlace } from '../import/importService';
 import { buildPlaceStableKey } from '../import/importService';
 import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, type SavedPlacesIndexEntry, withTimeout } from '../local/syncQueue';
+import { getPlacePhoto } from '../api/apiService';
 import { supabase } from '../supabase/supabaseClient';
+import { staticMapThumbnail } from './staticMapThumbnail';
 
 export type SavedPlace = {
   id: string;
@@ -30,6 +31,8 @@ export type SavedPlace = {
   region: string | null;
   external_place_id?: string | null;
   external_source?: string | null;
+  city?: string | null;
+  country?: string | null;
   photo_url?: string | null;
   note?: string | null;
   created_at: string;
@@ -42,11 +45,12 @@ export type SavedPlace = {
  * that silently fall back to fuzzy matching.
  */
 const PLACE_COLUMNS =
-  'id, name, subtitle, category, latitude, longitude, region, external_place_id, external_source, photo_url, created_at';
+  'id, name, subtitle, category, latitude, longitude, region, external_place_id, external_source, city, country, photo_url, created_at';
 
 type SavedPlacesListener = (places: SavedPlace[]) => void;
 
 const savedPlacesListeners = new Set<SavedPlacesListener>();
+let photoBackfillTail: Promise<void> = Promise.resolve();
 
 export function subscribeSavedPlaces(listener: SavedPlacesListener): () => void {
   savedPlacesListeners.add(listener);
@@ -77,6 +81,20 @@ function withStableKey(place: SavedPlace): SavedPlace {
     ...place,
     stableKey: makeStableKey(place),
   };
+}
+
+async function recordPinHistory(eventType: 'saved' | 'deleted', places: SavedPlace[]): Promise<void> {
+  if (!places.length) return;
+  const rows = places.map((place) => ({
+    place_id: place.id,
+    stable_key: place.stableKey ?? makeStableKey(place),
+    name: place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    event_type: eventType,
+  }));
+  const { error } = await supabase.from('place_pin_history').insert(rows);
+  if (error) throw new Error(`Saving pin history failed: ${error.message}`);
 }
 
 async function setSavedPlacesCache(userId: string, places: SavedPlace[]): Promise<void> {
@@ -210,6 +228,35 @@ export type SavePlacesResult = {
   duplicates: SavedPlace[];
 };
 
+async function backfillSavedPlacePhoto(place: SavedPlace): Promise<void> {
+  if (place.photo_url) return;
+
+  const response = await getPlacePhoto(place.name);
+  const photoUrl = response.photo_url || staticMapThumbnail(place.latitude, place.longitude);
+  if (!photoUrl) return;
+
+  const userId = await getCurrentUserId();
+  if (!userId) return;
+  await updateSavedPlacesCache(userId, (current) => current.map((row) => (
+    row.id === place.id ? { ...row, photo_url: photoUrl } : row
+  )));
+
+  if (place.id.startsWith('local-')) return;
+  const { error } = await withTimeout(
+    supabase.from('places').update({ photo_url: photoUrl }).eq('id', place.id),
+    'Saving place photo timed out',
+  );
+  if (error) throw new Error(`Failed to save place photo: ${error.message}`);
+}
+
+/** Queue photo enrichment after a place save, one request at a time. */
+export function queueSavedPlacePhotoBackfill(place: SavedPlace): void {
+  photoBackfillTail = photoBackfillTail
+    .catch(() => undefined)
+    .then(() => backfillSavedPlacePhoto(place))
+    .catch((error) => console.warn('[placeService] photo backfill failed:', error));
+}
+
 /**
  * Persist the selected places from an import or a search.
  *
@@ -228,21 +275,11 @@ export async function savePlaces(
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot save places before auth is ready');
 
-  await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before save failed:', error));
-
-  let existingRows = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces)) ?? [];
-  try {
-    const { data: existing, error: existingError } = await withTimeout(
-      supabase.from('places').select(PLACE_COLUMNS),
-      'Checking existing places timed out',
-    );
-    if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
-    existingRows = ((existing ?? []) as SavedPlace[]).map(withStableKey);
-    await setSavedPlacesCache(userId, existingRows);
-  } catch (error) {
-    if (!isRetryableError(error)) throw error;
-    console.warn('[placeService] existing-place check failed; using local cache:', error);
-  }
+  // Saving must not wait for unrelated queued writes or a full-table remote
+  // read. The local cache is already the My Places read model and gives us
+  // immediate dedupe + optimistic rendering; normal refresh reconciles it.
+  void flushQueue(userId).catch((error) => console.warn('[placeService] background queue flush failed:', error));
+  const existingRows = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces)) ?? [];
 
   /** The existing row each input place matched, for the callers' duplicates list. */
   const matchedExisting = () => places
@@ -314,6 +351,8 @@ export async function savePlaces(
     // next dedup reads from, and a row without them falls back to fuzzy matching.
     external_place_id: row.external_place_id,
     external_source: row.external_source,
+    city: row.city,
+    country: row.country,
     photo_url: row.photo_url,
     created_at: new Date().toISOString(),
   }));
@@ -386,6 +425,7 @@ export async function savePlaces(
       return localIndex >= 0 ? (savedRows[localIndex] ?? row) : row;
     })
   ));
+  recordPinHistory('saved', savedRows).catch((error) => console.warn('[placeService] pin history insert failed:', error));
 
   // Record provenance (best-effort; a failure here shouldn't lose the places).
   if (source?.url && data) {
@@ -409,12 +449,24 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   const cached = await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces);
   const fetchFresh = async () => {
     await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before fetch failed:', error));
-    const { data, error } = await supabase
-      .from('places')
-      .select(PLACE_COLUMNS)
-      .order('created_at', { ascending: false });
-    if (error) throw new Error(`Failed to fetch places: ${error.message}`);
-    const fresh = ((data ?? []) as SavedPlace[]).map(withStableKey);
+    // PostgREST projects commonly cap a single response at 1,000 rows. Read
+    // explicit pages so older saved places are never omitted from the map just
+    // because the user has not scrolled the list yet.
+    const pageSize = 500;
+    const rows: SavedPlace[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from('places')
+        .select(PLACE_COLUMNS)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw new Error(`Failed to fetch places: ${error.message}`);
+      const page = (data ?? []) as SavedPlace[];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+    const fresh = rows.map(withStableKey);
     await setSavedPlacesCache(userId, fresh);
     return fresh;
   };
@@ -425,22 +477,6 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   }
 
   return fetchFresh();
-}
-
-const MAPBOX_TOKEN: string =
-  (Constants.expoConfig?.extra?.mapboxAccessToken as string) ||
-  (process.env.MAPBOX_ACCESS_TOKEN as string) ||
-  '';
-
-/** Static map thumbnail centered on the place (Mapbox Static Images API).
-    Note: Mapbox expects LONGITUDE first. */
-function staticMapThumb(lat: number, lng: number): string {
-  if (!MAPBOX_TOKEN) return '';
-  return (
-    `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-    `pin-s+3b82f6(${lng},${lat})/${lng},${lat},14,0/200x200@2x` +
-    `?access_token=${MAPBOX_TOKEN}`
-  );
 }
 
 /**
@@ -459,7 +495,7 @@ export function resolvePlaceThumbnail(
   options: { fallback?: 'staticMap' | 'none' } = {},
 ): string {
   if (place.photo_url) return place.photo_url;
-  return options.fallback === 'none' ? '' : staticMapThumb(place.latitude, place.longitude);
+  return options.fallback === 'none' ? '' : staticMapThumbnail(place.latitude, place.longitude);
 }
 
 /** Adapt a DB row to the PlaceDetail shape the detail screens expect.
@@ -494,7 +530,14 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
 export async function deletePlace(id: string): Promise<void> {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot delete places before auth is ready');
-  await updateSavedPlacesCache(userId, (current) => current.filter((place) => place.id !== id));
+  let deletedPlace: SavedPlace | undefined;
+  await updateSavedPlacesCache(userId, (current) => {
+    deletedPlace = current.find((place) => place.id === id);
+    return current.filter((place) => place.id !== id);
+  });
+  if (deletedPlace) {
+    recordPinHistory('deleted', [deletedPlace]).catch((error) => console.warn('[placeService] pin history delete record failed:', error));
+  }
 
   if (id.startsWith('local-')) {
     await enqueueWrite(userId, { kind: 'deletePlace', placeId: id });

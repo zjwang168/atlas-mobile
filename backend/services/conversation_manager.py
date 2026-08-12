@@ -1,10 +1,9 @@
-"""
-Three-tier memory system for the agentic pipeline.
+"""Conversation session and persistence support.
 
-Tiers:
-1. Short-term context — Current agent loop iteration messages + tool results
-2. Session memory — Active chat sessions in backend runtime (dict)
-3. Long-term memory — Persisted conversations in Supabase
+Persisted conversations are product history, not long-term user memory. The
+plain chat baseline uses only a bounded window from its own active session.
+Legacy summary and memory fields remain here solely so old database rows can
+still be loaded without a migration; the chat path does not read or write them.
 """
 
 import time
@@ -25,11 +24,18 @@ class Session:
 
     # Messages: list of {"role", "content", "tool_calls", "tool_results", "timestamp"}
     messages: list = field(default_factory=list)
+    # Legacy fields kept for backwards-compatible reads of existing rows.
     conversation_summary: str = ""
     summary_message_count: int = 0
     last_summary_at: float = 0.0
     user_memory_summary: str = ""
     pending_place_action: Optional[dict] = None
+    # Ephemeral AI-agent state. It is deliberately kept separate from saved
+    # Atlas data: a model may propose an action, but only the mobile client can
+    # confirm and persist it through the normal domain services.
+    user_location: Optional[tuple[float, float]] = None
+    chat_presentation: Optional[dict] = None
+    pending_chat_action: Optional[dict] = None
 
     # Extracted data
     locations: list = field(default_factory=list)  # GeocodedLocation dicts
@@ -72,6 +78,9 @@ class Session:
             "summary_message_count": self.summary_message_count,
             "user_memory_summary": self.user_memory_summary,
             "pending_place_action": self.pending_place_action,
+            "user_location": self.user_location,
+            "chat_presentation": self.chat_presentation,
+            "pending_chat_action": self.pending_chat_action,
             "removed_noise": self.removed_noise,
             "removed_hierarchy": self.removed_hierarchy,
             "inferred_region": self.inferred_region,
@@ -169,7 +178,9 @@ class ConversationManager:
             return session.get_recent_context(max_messages)
         return []
 
-    # ---- Long-term Memory ----
+    # ---- Legacy Long-term Memory API ----
+    # These endpoints are retained for administrative compatibility. The
+    # baseline chat intentionally never calls them.
 
     async def add_memory(self, session_id: str, key: str, value: str, category: str = "preference") -> bool:
         """Store a memory item (user preference, visited place, etc.).

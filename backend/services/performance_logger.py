@@ -33,8 +33,10 @@ class PipelineMetrics:
 
     # 时间点（绝对时间戳）
     t_request: float = 0.0       # 收到请求
+    t_fetch_done: float = 0.0    # 来源抓取和必要翻译完成
     t_parse_done: float = 0.0    # 文本解析/提取完成
     t_geocode_done: float = 0.0  # 地理编码完成
+    t_photo_done: float = 0.0    # 图片补全完成
     t_response: float = 0.0      # 返回响应
 
     # Token 使用（每次 LLM 调用）
@@ -49,12 +51,22 @@ class PipelineMetrics:
 
     @property
     def parse_duration_s(self) -> float:
-        return self.t_parse_done - self.t_request if self.t_parse_done and self.t_request else 0.0
+        return self.t_parse_done - self.t_fetch_done if self.t_parse_done and self.t_fetch_done else 0.0
+
+    @property
+    def fetch_duration_s(self) -> float:
+        return self.t_fetch_done - self.t_request if self.t_fetch_done and self.t_request else 0.0
 
     @property
     def geocode_duration_s(self) -> float:
         if self.t_geocode_done and self.t_parse_done:
             return self.t_geocode_done - self.t_parse_done
+        return 0.0
+
+    @property
+    def photo_duration_s(self) -> float:
+        if self.t_photo_done and self.t_geocode_done:
+            return self.t_photo_done - self.t_geocode_done
         return 0.0
 
     @property
@@ -70,13 +82,15 @@ class PipelineMetrics:
     def log(self):
         """输出格式化的日志记录。"""
         logger.info(
-            "[PERF] run_id=%s | url=%s | total=%.1fs | parse=%.1fs | "
-            "geocode=%.1fs | input_tokens=%s | output_tokens=%s | llm_calls=%s",
+            "[PERF] run_id=%s | url=%s | total=%.1fs | fetch=%.1fs | parse=%.1fs | "
+            "geocode=%.1fs | photos=%.1fs | input_tokens=%s | output_tokens=%s | llm_calls=%s",
             self.run_id,
             self.source_url[:80],
             self.total_duration_s,
+            self.fetch_duration_s,
             self.parse_duration_s,
             self.geocode_duration_s,
+            self.photo_duration_s,
             self.total_input_tokens,
             self.total_output_tokens,
             len(self.llm_calls),
@@ -97,8 +111,10 @@ class PipelineMetrics:
             "run_id": self.run_id,
             "source_url": self.source_url,
             "total_duration_s": round(self.total_duration_s, 2),
+            "fetch_duration_s": round(self.fetch_duration_s, 2),
             "parse_duration_s": round(self.parse_duration_s, 2),
             "geocode_duration_s": round(self.geocode_duration_s, 2),
+            "photo_duration_s": round(self.photo_duration_s, 2),
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
             "llm_calls": self.llm_calls,

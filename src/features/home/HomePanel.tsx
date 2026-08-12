@@ -2,7 +2,7 @@ import { memo, useCallback, type ReactNode } from 'react';
 import { Platform, View } from 'react-native';
 import type { TopMode } from '../../components/top-nav/TopNav';
 import ContentPanel from '../../components/content-panel/ContentPanel';
-import { Place } from '../../types/place';
+import { Place, PlaceDetail } from '../../types/place';
 import { type PlacesView } from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
 import { useHome } from './HomeContext';
@@ -22,8 +22,11 @@ type HomePanelProps = {
   onHeightChange?: (height: number) => void;
   onDismissed?: () => void;
   onSearchPress?: () => void;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
   placesView?: PlacesView;
   bottomBar?: ReactNode;
+  onExitPlan?: () => void;
+  isActive?: boolean;
 };
 
 function HomePanel({
@@ -37,8 +40,11 @@ function HomePanel({
   onHeightChange,
   onDismissed,
   onSearchPress,
+  onDeleteInitiated,
   placesView = 'all',
   bottomBar,
+  onExitPlan,
+  isActive = true,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
   const handlePlacePress = useCallback((place: Place) => {
@@ -58,6 +64,11 @@ function HomePanel({
         onHeightChange={onHeightChange}
         onDismissed={onDismissed}
         onSearchPress={onSearchPress}
+        onDeleteInitiated={onDeleteInitiated}
+        // On iOS the sheet — not the ContentPanel branch below — is what
+        // renders MyPlan, so these have to reach it here too.
+        isActive={isActive}
+        onExitPlan={onExitPlan}
         bottomBar={bottomBar}
       />
     );
@@ -75,6 +86,7 @@ function HomePanel({
         onHeightChange={onHeightChange}
         onDismissed={onDismissed}
         onSearchPress={onSearchPress}
+        onDeleteInitiated={onDeleteInitiated}
         bottomBar={bottomBar}
       />
     );
@@ -92,10 +104,13 @@ function HomePanel({
     >
       {({ reportScrollY, snapTo }) => (
         <View style={{ flex: 1 }}>
+          {/* Places go through PlacesBottomSheet on both platforms, so this
+              ContentPanel branch is plan-only. MyPlan's props are Jay's set —
+              it hosts AtlasBuilder now and no longer scrolls a grid itself. */}
           <MyPlan
-            onScroll={reportScrollY}
-            bottomInset={BOTTOM_BAR_CLEARANCE}
             snapTo={snapTo}
+            active={isActive}
+            onExit={onExitPlan}
           />
         </View>
       )}

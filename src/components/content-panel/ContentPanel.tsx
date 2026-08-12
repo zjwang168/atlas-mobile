@@ -473,30 +473,8 @@ export default function ContentPanel({
   const dragToHeightRef = useRef(dragToHeight);
   dragToHeightRef.current = dragToHeight;
 
-  // Captures downward drag only when scroll is at the top.
-  const panelPanResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gs) =>
-          !isProgrammaticTransition.current && scrollY.current <= 0 && gs.dy > 4,
-        onPanResponderGrant: () => {
-          isDragging.current = true;
-          gestureStartHeight.current = currentPanelHeight.current;
-        },
-        onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
-        onPanResponderRelease: (_, gs) => {
-          isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
-        },
-        onPanResponderTerminate: (_, gs) => {
-          isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
-        },
-      }),
-    [],
-  );
-
-  // Captures all directions — used on the drag handle bar
+  // The panel only moves from its explicit handle. Content can therefore own
+  // vertical gestures (lists, maps, inputs) without accidentally resizing it.
   const handlePanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -551,7 +529,6 @@ export default function ContentPanel({
           overflow: 'hidden',
           paddingTop: animatedPaddingTop,
         }}
-        {...panelPanResponder.panHandlers}
       >
         {frosted ? (
           <>

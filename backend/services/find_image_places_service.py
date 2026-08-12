@@ -31,15 +31,22 @@ OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
 OPENAI_VISION_TEMPERATURE = float(os.environ.get("OPENAI_VISION_TEMPERATURE", "0.1"))
 
 
-async def find_image_place(image_base64: str) -> dict:
+async def find_image_place(image_base64: str, request_id: str | None = None) -> dict:
     """Identify a place from one image using GPT-4o vision."""
+    from backend.services import progress
+
+    progress.stream_note(request_id, "image:vision", {"stage": "started"})
     place = await _call_gpt4o_vision(image_base64)
+    progress.stream_note(request_id, "image:vision", {"stage": "completed"})
     if place:
         confidence = float(place.get("confidence", 0) or 0)
         name = str(place.get("name") or "Unknown Location").strip() or "Unknown Location"
         latitude = float(place.get("latitude", 0) or 0)
         longitude = float(place.get("longitude", 0) or 0)
         subtitle = f'I have {confidence:.0%} confidence this place is {name}. Happy exploring!'
+        tagline = str(place.get("region_tagline") or "").strip() or None
+        progress.stream_note(request_id, "place:identified", {"name": name})
+        progress.stream_note(request_id, "image:location", {"stage": "candidate_ready", "region": name, "tagline": tagline})
         return _build_response(
             name=name,
             latitude=latitude,
@@ -49,6 +56,7 @@ async def find_image_place(image_base64: str) -> dict:
             source="gpt4o_vision",
         )
 
+    progress.stream_note(request_id, "image:location", {"stage": "no_candidate"})
     return _build_response(
         name="Unknown Location",
         latitude=0,
@@ -75,12 +83,13 @@ async def _call_gpt4o_vision(image_base64: str) -> Optional[dict]:
     system_prompt = (
         "You identify geographic places from photos.\n"
         "Return ONLY valid JSON with this exact schema:\n"
-        '{"name":"place name","latitude":0.0,"longitude":0.0,"confidence":0.0}\n\n'
+        '{"name":"place name","latitude":0.0,"longitude":0.0,"confidence":0.0,"region_tagline":"2-4 English words"}\n\n'
         "Rules:\n"
         "1. If you can identify the landmark or place, include the best known coordinates.\n"
         "2. confidence must be a number from 0 to 1.\n"
         "3. If unsure, still return your best guess, but lower confidence.\n"
         "4. Do not include markdown or any text outside JSON."
+        "\n5. region_tagline must be exactly 2-4 refined English words that evoke the location."
     )
 
     messages = [

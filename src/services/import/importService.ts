@@ -13,10 +13,15 @@ import {
   findImagePlace as apiFindImagePlace,
   parseLink as apiParseLink,
   parseText as apiParseText,
+  parseTikTok as apiParseTikTok,
+  parseInstagramReel as apiParseInstagramReel,
+  parseFacebookReel as apiParseFacebookReel,
   parseYoutube as apiParseYoutube,
-  scanUrl as apiScanUrl,
+  scanImagesBase64 as apiScanImagesBase64,
+  type ParseRequestIdHandler,
   type ParseProgress,
 } from '../api/apiService';
+import { staticMapThumbnail } from '../place/staticMapThumbnail';
 
 export type ParsedPlace = {
   id: string;
@@ -75,6 +80,7 @@ type BackendLocation = {
 /** Fields of the backend parse response that we consume. */
 type BackendParseResponse = {
   title: string;
+  source_thumbnail?: string | null;
   locations: BackendLocation[];
   inferred_region?: string | null;
 };
@@ -112,12 +118,13 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
     longitude: loc.longitude,
     // Backend photo enrichment uses `photo_url`; import screens already carry
     // thumbnails as `imageUri`, and placeService persists that value on save.
-    imageUri: loc.photo_url ?? undefined,
+    imageUri: loc.photo_url || staticMapThumbnail(loc.latitude, loc.longitude) || undefined,
     sentiment: loc.sentiment ?? null,
   }));
 
   return {
     sourceTitle: backend.title || 'Imported content',
+    sourceThumbnail: backend.source_thumbnail || undefined,
     centerCoordinate: medianCenter(backend.locations ?? []),
     region: backend.inferred_region ?? undefined,
     places,
@@ -178,12 +185,14 @@ export function formatParsedPlaceSubtitle(loc: BackendLocation): string {
  * Parse a pasted URL into places by calling the backend parser.
  */
 export type ParseProgressHandler = (progress: ParseProgress) => void;
+export type ParseRequestHandler = ParseRequestIdHandler;
 
 export async function parseLink(
   input: string,
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiParseLink(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  const backend = (await apiParseLink(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 
@@ -194,8 +203,9 @@ export async function parseText(
   input: string,
   options?: { webSearch?: boolean },
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiParseText(input.trim(), options?.webSearch ?? false, onProgress)) as unknown as BackendParseResponse;
+  const backend = (await apiParseText(input.trim(), options?.webSearch ?? false, onProgress, onRequestId)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 
@@ -206,31 +216,63 @@ export async function parseText(
 export async function parseInput(
   input: string,
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  return looksLikeUrl(input) ? parseLink(input, onProgress) : parseText(input, undefined, onProgress);
+  return looksLikeUrl(input) ? parseLink(input, onProgress, onRequestId) : parseText(input, undefined, onProgress, onRequestId);
 }
 
 export async function discoverFromAtlasQuery(
   input: string,
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiDiscoverAtlasPlaces(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  const backend = (await apiDiscoverAtlasPlaces(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 
 export async function scanAnyLink(
   input: string,
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiScanUrl(input.trim(), onProgress)) as unknown as BackendParseResponse;
-  return adaptResponse(backend);
+  // Any Links now uses the same Universal Web Agent as all generic URLs:
+  // HTTP reader extraction, then Playwright for JavaScript-rendered pages.
+  return parseLink(input, onProgress, onRequestId);
 }
 
 export async function parseYoutubeLink(
   input: string,
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiParseYoutube(input.trim(), onProgress)) as unknown as BackendParseResponse;
+  const backend = (await apiParseYoutube(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseTikTokLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseTikTok(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseInstagramReelLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseInstagramReel(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function parseFacebookReelLink(
+  input: string,
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiParseFacebookReel(input.trim(), onProgress, onRequestId)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }
 
@@ -241,7 +283,17 @@ export async function parseYoutubeLink(
 export async function findImagePlace(
   imageBase64: string,
   onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
 ): Promise<ParseResult> {
-  const backend = (await apiFindImagePlace(imageBase64, onProgress)) as unknown as BackendParseResponse;
+  const backend = (await apiFindImagePlace(imageBase64, onProgress, onRequestId)) as unknown as BackendParseResponse;
+  return adaptResponse(backend);
+}
+
+export async function scanImagesForTextPlaces(
+  imagesBase64: string[],
+  onProgress?: ParseProgressHandler,
+  onRequestId?: ParseRequestHandler,
+): Promise<ParseResult> {
+  const backend = (await apiScanImagesBase64(imagesBase64, onProgress, onRequestId)) as unknown as BackendParseResponse;
   return adaptResponse(backend);
 }

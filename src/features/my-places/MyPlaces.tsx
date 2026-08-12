@@ -1,7 +1,7 @@
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
-import type { Place } from '@/types/place';
+import type { Place, PlaceDetail } from '@/types/place';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
 import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
@@ -29,6 +29,7 @@ type MyPlacesProps = {
   active?: boolean;
   /** Renders a condensed label only — used when the panel is compact. */
   compact?: boolean;
+  onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
 const FILTERS: Array<{
@@ -49,6 +50,7 @@ function MyPlaces({
   verticalScrollEnabled = true,
   active = true,
   compact = false,
+  onDeleteInitiated,
 }: MyPlacesProps) {
   const [selectedView, setSelectedView] = useState<PlacesView>(activeView);
   const [searchExpanded, setSearchExpanded] = useState(false);
@@ -188,6 +190,7 @@ function MyPlaces({
         filter={selectedView}
         query={query}
         onFilterChange={setSelectedView}
+        onDeleteInitiated={onDeleteInitiated}
       />
     </View>
   );

@@ -19,7 +19,11 @@ Endpoints:
 import logging
 import os
 import sys
+import base64
+import json
+from collections import OrderedDict
 from typing import Optional
+import httpx
 
 from dotenv import load_dotenv
 
@@ -47,17 +51,55 @@ logging.getLogger("atlas").setLevel(logging.INFO)
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.services import progress
 from backend.services.conversation_manager import conversation_manager
 from backend.services.gemini_computer_use import extract_web_text
-from backend.services.place_image_service.place_image_service import enrich_locations_with_photos, enrich_response_with_photos, get_or_build_response
+from backend.services.place_image_service.place_image_service import (
+    enrich_locations_with_photos,
+    enrich_response_with_photos,
+    fetch_photos_for_places,
+    get_or_build_response,
+)
 from backend.services import place_search_service
+from backend.services.link_preview import build_link_preview
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
 
 NO_PLACE_INFO = "No Place Information that can be extracted"
+
+# Atlas discovery is intentionally ephemeral: a session lasts for one mounted
+# Edit Atlas screen, while this bounded cache provides the next request with
+# the prior turns needed to avoid repeating recommendations.
+ATLAS_DISCOVERY_CONVERSATIONS: OrderedDict[str, list[dict[str, object]]] = OrderedDict()
+ATLAS_DISCOVERY_CONVERSATION_LIMIT = 64
+
+
+def atlas_discovery_context(session_id: Optional[str]) -> str:
+    if not session_id:
+        return ""
+    turns = ATLAS_DISCOVERY_CONVERSATIONS.get(session_id, [])
+    if not turns:
+        return ""
+    ATLAS_DISCOVERY_CONVERSATIONS.move_to_end(session_id)
+    history = []
+    for turn in turns[-12:]:
+        names = "; ".join(turn["places"])
+        history.append(f"User: {turn['query']}\nAtlas AI recommended: {names}")
+    return "\n\nPrevious turns in this Atlas editing conversation:\n" + "\n\n".join(history)
+
+
+def remember_atlas_discovery(session_id: Optional[str], query: str, locations: list[dict]) -> None:
+    if not session_id:
+        return
+    places = [str(location.get("name") or "").strip() for location in locations]
+    turns = ATLAS_DISCOVERY_CONVERSATIONS.setdefault(session_id, [])
+    turns.append({"query": query[:800], "places": [name for name in places if name]})
+    ATLAS_DISCOVERY_CONVERSATIONS.move_to_end(session_id)
+    while len(ATLAS_DISCOVERY_CONVERSATIONS) > ATLAS_DISCOVERY_CONVERSATION_LIMIT:
+        ATLAS_DISCOVERY_CONVERSATIONS.popitem(last=False)
 
 app = FastAPI(
     title="OurAtlas Parse & Fetch API",
@@ -109,16 +151,31 @@ class ParseTextRequest(BaseModel):
     web_search: bool = False
 
 
+class AtlasRouteRequest(BaseModel):
+    coordinates: list[tuple[float, float]]
+
+
 class CreateSessionRequest(BaseModel):
     title: str = ""
     source_url: Optional[str] = None
     source_type: Optional[str] = None
     locations: Optional[list[dict]] = None
+    user_location: Optional[tuple[float, float]] = None
+
+
+class ImportWelcomeRequest(BaseModel):
+    deselected_locations: list[dict] = []
+
+
+class AtlasWelcomeRequest(BaseModel):
+    locations: list[dict] = []
 
 
 class AtlasDiscoverRequest(BaseModel):
     query: str
     request_id: Optional[str] = None
+    session_id: Optional[str] = None
+    exclude_place_names: list[str] = []
 
 
 class LocationItem(BaseModel):
@@ -131,6 +188,8 @@ class LocationItem(BaseModel):
     category: Optional[str] = None
     is_exact: Optional[bool] = None
     confidence: Optional[float] = None
+    provisional: Optional[bool] = None
+    geocode_verified: Optional[bool] = None
     source: Optional[str] = None
     photo_url: Optional[str] = None
     # Provider's own id for this place, paired with `source`. Populated by
@@ -167,6 +226,7 @@ class NoiseInfo(BaseModel):
 
 class ParseResponse(BaseModel):
     title: str
+    source_thumbnail: Optional[str] = None
     locations: list[LocationItem]
     route: RouteResult
     removed_noise: Optional[list[NoiseInfo | str]] = None
@@ -180,6 +240,16 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     conversation_id: Optional[str] = None
+    # The app supplies the foreground GPS coordinate as [longitude, latitude]
+    # only for this request. It is never inferred by the model.
+    user_location: Optional[tuple[float, float]] = None
+
+
+class ChatActionConfirmationRequest(BaseModel):
+    session_id: str
+    action_id: str
+    accepted: bool
+    outcome: Optional[dict] = None
 
 
 class MemoryRequest(BaseModel):
@@ -191,6 +261,7 @@ class MemoryRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     session_id: str
+    conversation_id: Optional[str] = None
     title: str = ""
     location_count: int = 0
     message_count: int = 0
@@ -209,6 +280,25 @@ class ScanUrlRequest(BaseModel):
 class YouTubeParseRequest(BaseModel):
     url: str
     request_id: Optional[str] = None
+
+
+class TikTokParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class InstagramReelParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class FacebookReelParseRequest(BaseModel):
+    url: str
+    request_id: Optional[str] = None
+
+
+class LinkPreviewRequest(BaseModel):
+    url: str
 
 
 class ErrorResponse(BaseModel):
@@ -296,7 +386,11 @@ async def scrape_url(req: ScrapeUrlRequest):
 @app.post("/scan_url", response_model=ParseResponse,
           responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def scan_url(req: ScanUrlRequest):
-    """Use Gemini computer-use screenshots, OCR them with GLM, then reuse image-scan parsing."""
+    """Legacy Any Links endpoint, now backed by the Universal Web Agent.
+
+    Kept for installed clients; new clients call /parse_link directly. Both
+    routes use the same HTTP reader -> Playwright -> place extraction pipeline.
+    """
     url = req.url.strip()
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
@@ -306,17 +400,17 @@ async def scan_url(req: ScanUrlRequest):
 
     try:
         progress.start(req.request_id, "Opening page.") if req.request_id else None
-        progress.stream_note(req.request_id, "Reading screenshots", {"detail": "Opening screenshots and preparing OCR."})
+        progress.stream_note(req.request_id, "Fetching source", {"detail": "Reading the webpage and its travel details."})
         state = await atlas_graph_app.ainvoke(
             {
-                "task_type": "scan_url",
+                "task_type": "parse_link",
                 "url": url,
                 "request_id": req.request_id,
                 "session": session,
             },
             config={
                 "configurable": {"thread_id": req.request_id or session.session_id},
-                "run_name": "AtlasApp:scan_url",
+                "run_name": "AtlasApp:universal_web",
             },
         )
         result = state.get("result", {})
@@ -325,8 +419,6 @@ async def scan_url(req: ScanUrlRequest):
             "resolved_count": len(result.get("locations", [])),
         })
         progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
-        # Keep Gemini/scan-derived responses on the same photo contract as
-        # parse_link even though this endpoint does not use the URL parse cache.
         await enrich_response_with_photos(result)
         return ParseResponse(**result)
     except ValueError as e:
@@ -334,7 +426,7 @@ async def scan_url(req: ScanUrlRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         progress.fail(req.request_id, str(e))
-        raise HTTPException(status_code=500, detail=f"Any Links scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Any Links import failed: {e}")
 
 
 @app.post("/parse_youtube", response_model=ParseResponse,
@@ -390,6 +482,129 @@ async def parse_youtube(req: YouTubeParseRequest):
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"YouTube parse failed: {e}")
+
+
+@app.post("/parse_tiktok", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_tiktok(req: TikTokParseRequest):
+    """Identify places from a public TikTok video's caption and metadata."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No TikTok URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening TikTok video.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_tiktok",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_tiktok",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "tiktok_links"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"TikTok parse failed: {e}")
+
+
+@app.post("/parse_instagram_reel", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_instagram_reel(req: InstagramReelParseRequest):
+    """Identify places from a public Instagram Reel and optional transcript."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No Instagram Reel URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening Instagram Reel.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_instagram_reel",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_instagram_reel",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "instagram_reels"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Instagram Reel parse failed: {e}")
+
+
+@app.post("/parse_facebook_reel", response_model=ParseResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def parse_facebook_reel(req: FacebookReelParseRequest):
+    """Identify places from a public Facebook Reel or share video."""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No Facebook Reel URL provided.")
+
+    session = conversation_manager.create_session()
+    session.source_url = url
+    try:
+        progress.start(req.request_id, "Opening Facebook Reel.") if req.request_id else None
+        state = await atlas_graph_app.ainvoke(
+            {
+                "task_type": "parse_facebook_reel",
+                "url": url,
+                "request_id": req.request_id,
+                "session": session,
+            },
+            config={
+                "configurable": {"thread_id": req.request_id or session.session_id},
+                "run_name": "AtlasApp:parse_facebook_reel",
+            },
+        )
+        result = state.get("result", {})
+        result["source_type"] = "facebook_reels"
+        progress.mark(req.request_id, "geocode_done", "Coordinates resolved.", {
+            "query_count": len(result.get("locations", [])),
+            "resolved_count": len(result.get("locations", [])),
+        })
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
+        await enrich_response_with_photos(result)
+        return ParseResponse(**result)
+    except ValueError as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        progress.fail(req.request_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Facebook Reel parse failed: {e}")
 
 
 @app.post("/parse_link", response_model=ParseResponse,
@@ -468,6 +683,15 @@ async def parse_link(req: ParseRequest) -> ParseResponse:
     except Exception as e:
         progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+
+@app.post("/link_preview")
+async def link_preview(req: LinkPreviewRequest) -> dict:
+    """Return lightweight display metadata before a user imports a link."""
+    try:
+        return await build_link_preview(req.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # --- Chat & Conversation Endpoints ---
@@ -584,6 +808,8 @@ async def chat(req: ChatRequest) -> dict:
         session = await _recover_session(req.session_id, req.conversation_id)
         if session:
             req_session_id = session.session_id
+            if req.user_location:
+                session.user_location = req.user_location
         else:
             raise ValueError(f"Session {req.session_id} not found")
 
@@ -605,6 +831,81 @@ async def chat(req: ChatRequest) -> dict:
         raise HTTPException(status_code=500, detail=f"Chat error: {e}")
 
 
+@app.post("/chat/stream")
+async def stream_chat(req: ChatRequest) -> StreamingResponse:
+    """Stream display-safe chat deltas as newline-delimited JSON."""
+    try:
+        from backend.langgraph.chat_agent import stream_chat as run_stream_chat
+
+        async def _recover_session(session_key: str, conversation_key: str | None = None):
+            session = conversation_manager.get_session(session_key)
+            if session:
+                return session
+            session = await conversation_manager.load_conversation(session_key)
+            if session:
+                return session
+            if conversation_key:
+                return await conversation_manager.load_conversation(conversation_key)
+            return None
+
+        session = await _recover_session(req.session_id, req.conversation_id)
+        if not session:
+            raise ValueError(f"Session {req.session_id} not found")
+        if req.user_location:
+            session.user_location = req.user_location
+
+        async def event_stream():
+            try:
+                async for event in run_stream_chat(session.session_id, req.message):
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            except ValueError as error:
+                yield json.dumps({"type": "error", "message": str(error)}) + "\n"
+            except Exception:
+                yield json.dumps({"type": "error", "message": "Chat streaming failed. Please try again."}) + "\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/chat/actions/confirm")
+async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
+    """Record a client-confirmed Atlas proposal without performing a write.
+
+    Atlas and place writes stay in the authenticated mobile domain layer. This
+    endpoint only gives the next agent turn an auditable fact about the user's
+    decision, preventing a proposal from being treated as already applied.
+    """
+    session = conversation_manager.get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+    action = session.pending_chat_action
+    # This endpoint only records an audit event; the client has already used
+    # authenticated domain services for the actual write. Accept a replay
+    # after a backend restart instead of reporting a false user-facing error.
+    if action and action.get("action_id") != req.action_id:
+        raise HTTPException(status_code=409, detail="This chat action is no longer pending")
+
+    outcome = req.outcome or {}
+    event = {
+        "action_id": req.action_id,
+        "kind": action.get("kind") if action else "unknown",
+        "accepted": req.accepted,
+        "outcome": outcome,
+    }
+    session.add_message("tool", "chat_action_confirmation", tool_results=event)
+    session.pending_chat_action = None
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception:
+        pass
+    return {"status": "recorded", "event": event}
+
+
 @app.post("/atlas_ai/discover", response_model=ParseResponse,
           responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
@@ -622,6 +923,11 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
             "characters": len(query),
             "source_type": "atlas_ai",
         })
+        original_query = query
+        query += atlas_discovery_context(req.session_id)
+        excluded_names = [name.strip() for name in req.exclude_place_names if name and name.strip()]
+        if excluded_names:
+            query += "\n\nThis is a follow-up in the same Atlas editing conversation. Do not repeat any of these places already recommended in this session: " + "; ".join(excluded_names[:120]) + ". Return different real places only."
         result_state = await atlas_graph_app.ainvoke(
             {
                 "task_type": "atlas_ai_discover",
@@ -629,11 +935,12 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
                 "request_id": req.request_id,
             },
             config={
-                "configurable": {"thread_id": req.request_id or query[:32]},
+                "configurable": {"thread_id": req.session_id or req.request_id or query[:32]},
                 "run_name": "AtlasApp:atlas_ai_discover",
             },
         )
         result = result_state.get("result", {})
+        remember_atlas_discovery(req.session_id, original_query, result.get("locations", []))
         progress.mark(req.request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(result.get("locations", [])),
             "inferred_region": result.get("inferred_region"),
@@ -663,11 +970,90 @@ def _place_search_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail=f"Place search upstream failed: {exc}")
 
 
+@app.post("/atlas/route")
+async def atlas_route(req: AtlasRouteRequest) -> dict:
+    """Return a walking-network route for Atlas points, without exposing the key."""
+    if len(req.coordinates) < 2:
+        raise HTTPException(status_code=422, detail="At least two coordinates are required")
+    if len(req.coordinates) > 25:
+        raise HTTPException(status_code=422, detail="An Atlas route supports up to 25 places")
+    token = os.getenv("MAPBOX_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=503, detail="Map routing is not configured")
+    coordinate_string = ";".join(f"{longitude},{latitude}" for longitude, latitude in req.coordinates)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                f"https://api.mapbox.com/directions/v5/mapbox/walking/{coordinate_string}",
+                params={"access_token": token, "geometries": "geojson", "overview": "full"},
+            )
+            response.raise_for_status()
+        route = (response.json().get("routes") or [None])[0]
+        if not route or not route.get("geometry"):
+            raise ValueError("No route returned")
+        return {
+            "route": {"type": "Feature", "properties": {}, "geometry": route["geometry"]},
+            "distance_km": round(float(route.get("distance", 0)) / 1000, 2),
+            "duration_minutes": round(float(route.get("duration", 0)) / 60),
+        }
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Map routing failed: {exc}")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/speech/transcribe")
+async def speech_transcribe(file: UploadFile = File(...)) -> dict:
+    """Transcribe a short voice note with Groq Whisper Large V3 Turbo."""
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Speech recognition is not configured")
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=422, detail="No audio received")
+    if len(audio) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Voice note is too large")
+
+    # Groq accepts m4a and the other audio types emitted by supported clients.
+    filename = file.filename or "atlas-note.m4a"
+    content_type = file.content_type or "audio/m4a"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                data={
+                    "model": "whisper-large-v3-turbo",
+                    "response_format": "json",
+                },
+                files={"file": (filename, audio, content_type)},
+            )
+        if response.status_code == 429:
+            retry_after = response.headers.get("retry-after")
+            headers = {"Retry-After": retry_after} if retry_after else None
+            raise HTTPException(status_code=429, detail="Speech recognition is rate limited", headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        text = payload.get("text", "") if isinstance(payload, dict) else ""
+        return {"text": text if isinstance(text, str) else ""}
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as exc:
+        logging.getLogger("atlas").warning(
+            "Groq speech recognition failed with status %s", exc.response.status_code
+        )
+        raise HTTPException(status_code=502, detail="Speech recognition failed") from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        logging.getLogger("atlas").exception("Groq speech recognition failed")
+        raise HTTPException(status_code=502, detail="Speech recognition failed") from exc
+
+
 @app.get("/places/search", response_model=PlaceSuggestResponse,
          responses={422: {"model": ErrorResponse}, 429: {"model": ErrorResponse},
                     502: {"model": ErrorResponse}})
 async def places_search(
-    q: str = Query(..., min_length=2, description="Search text, as typed"),
+    q: str = Query(..., min_length=1, description="Search text, as typed"),
     session_token: str = Query(
         ...,
         min_length=1,
@@ -683,12 +1069,14 @@ async def places_search(
     limit: int = Query(10, ge=1, le=10),
     language: str = Query("en"),
     country: Optional[str] = Query(None, description="ISO 3166-1 alpha-2 filter"),
+    types: Optional[str] = Query(None, description="Comma-separated Mapbox feature types"),
 ) -> PlaceSuggestResponse:
     """Suggest places for a partial query. Results carry no coordinates."""
     try:
         suggestions = await place_search_service.suggest(
             q, session_token,
             proximity=proximity, limit=limit, language=language, country=country,
+            types=types,
         )
     except Exception as e:
         raise _place_search_http_error(e)
@@ -752,12 +1140,14 @@ async def create_session(req: CreateSessionRequest) -> SessionResponse:
     session.source_url = req.source_url
     session.source_type = req.source_type
     session.locations = req.locations or []
+    session.user_location = req.user_location
     try:
         await conversation_manager.save_conversation(session.session_id)
     except Exception:
         pass
     return SessionResponse(
         session_id=session.session_id,
+        conversation_id=session.conversation_id,
         title=session.title,
         location_count=len(session.locations),
         message_count=len(session.messages),
@@ -772,6 +1162,42 @@ async def save_session(session_id: str) -> dict:
         return {"conversation_id": conv_id, "status": "saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{session_id}/import-welcome")
+async def create_import_welcome(session_id: str, req: ImportWelcomeRequest) -> dict:
+    """Create the assistant-first opening message for a saved import chat."""
+    try:
+        session = conversation_manager.get_session(session_id)
+        if not session:
+            session = await conversation_manager.load_conversation(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        from backend.langgraph.chat_agent import generate_import_welcome
+        return await generate_import_welcome(session.session_id, req.deselected_locations)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Import welcome error: {error}") from error
+
+
+@app.post("/sessions/{session_id}/atlas-welcome")
+async def create_atlas_welcome(session_id: str, req: AtlasWelcomeRequest) -> dict:
+    """Create the assistant-first opening message for a saved Atlas edit."""
+    try:
+        session = conversation_manager.get_session(session_id)
+        if not session:
+            session = await conversation_manager.load_conversation(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        if req.locations:
+            session.locations = req.locations
+        from backend.langgraph.chat_agent import generate_atlas_welcome
+        return await generate_atlas_welcome(session.session_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Atlas welcome error: {error}") from error
 
 
 @app.get("/conversations")
@@ -838,10 +1264,46 @@ async def parse_progress(request_id: str) -> dict:
     return progress.get(request_id)
 
 
+@app.post("/parse_progress/{request_id}/cancel")
+async def cancel_parse_progress(request_id: str) -> dict:
+    """Cancel an active parse, or reserve a just-created request ID as cancelled."""
+    return {"cancelled": progress.cancel(request_id)}
+
+
+@app.get("/region_photo")
+async def region_photo(query: str = Query(..., min_length=1, max_length=160)) -> dict:
+    """Return several representative Wikipedia images for an inferred region."""
+    region = query.strip()
+    photos = await fetch_photos_for_places([
+        f"{region} skyline",
+        f"{region} waterfront",
+        f"{region} landmark",
+        region,
+    ])
+    unique_photos: list[str] = []
+    for photo in photos:
+        if photo and photo not in unique_photos:
+            unique_photos.append(photo)
+    return {
+        "region": region,
+        "photo_url": unique_photos[0] if unique_photos else None,
+        "photo_urls": unique_photos[:3],
+    }
+
+
+@app.get("/place_photo")
+async def place_photo(name: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """Return one cached, best-effort thumbnail for a saved place."""
+    place_name = name.strip()
+    photo_url = (await fetch_photos_for_places([place_name]))[0]
+    return {"name": place_name, "photo_url": photo_url}
+
+
 # ---- Find Image Places ----
 
 class FindImagePlaceRequest(BaseModel):
     image: str  # base64-encoded image data
+    request_id: Optional[str] = None
 
 
 @app.post("/find_image_places", response_model=ParseResponse,
@@ -856,10 +1318,12 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
         raise HTTPException(status_code=400, detail="No image provided.")
 
     try:
+        progress.start(req.request_id, "Inspecting image.") if req.request_id else None
         result_state = await atlas_graph_app.ainvoke(
             {
                 "task_type": "find_image_places",
                 "image": req.image,
+                "request_id": req.request_id,
             },
             config={
                 "configurable": {"thread_id": f"find_image_{id(req)}"},
@@ -878,10 +1342,13 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
         # Landmark/image identification returns the same ParseResponse shape,
         # so enrich it before Pydantic serializes LocationItem.
         await enrich_response_with_photos(result)
+        progress.finish(req.request_id, {"location_count": len(result.get("locations", []))})
         return ParseResponse(**result)
     except ValueError as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Find image place failed: {e}")
 
 
@@ -890,6 +1357,7 @@ async def find_image_place_endpoint(req: FindImagePlaceRequest):
 
 class ScanImagesBase64Request(BaseModel):
     images: list[str]  # base64-encoded image data
+    request_id: Optional[str] = None
 
 
 @app.post("/scan_images_base64", response_model=ParseResponse,
@@ -915,7 +1383,8 @@ async def scan_images_base64_endpoint(req: ScanImagesBase64Request):
 
     from backend.services.image_scanner import scan_images as run_scan
     try:
-        result = await run_scan(image_bytes)
+        progress.start(req.request_id, "Inspecting image text.") if req.request_id else None
+        result = await run_scan(image_bytes, request_id=req.request_id)
         response_data = {
             "title": result.get("title", "Scanned places from image"),
             "locations": result.get("locations", []),
@@ -938,10 +1407,13 @@ async def scan_images_base64_endpoint(req: ScanImagesBase64Request):
         # Image scans bypass atlas_graph parse_link caching; enrich the
         # normalized response payload directly.
         await enrich_response_with_photos(response_data)
+        progress.finish(req.request_id, {"location_count": len(response_data["locations"])})
         return ParseResponse(**response_data)
     except ValueError as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        progress.fail(req.request_id, str(e))
         raise HTTPException(status_code=500, detail=f"Image scan failed: {e}")
 
 

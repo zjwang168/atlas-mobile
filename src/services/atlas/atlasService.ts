@@ -14,6 +14,7 @@ import { removeAtlasPlacesForAtlas } from './atlasPlacesService';
 export type SavedAtlas = Atlas;
 
 const DEFAULT_ATLAS_EMOJI = '🗺️';
+const ATLAS_FORMAT_VERSION = 2;
 
 type AtlasListener = (atlases: Atlas[]) => void;
 
@@ -50,6 +51,7 @@ export async function fetchAtlases(): Promise<Atlas[]> {
     const { data, error } = await supabase
       .from('atlas')
       .select(ATLAS_SELECT_COLUMNS)
+      .eq('format_version', ATLAS_FORMAT_VERSION)
       .order('created_at', { ascending: false });
     if (error) throw new Error(`Failed to fetch atlases: ${error.message}`);
     const fresh = (data ?? []) as Atlas[];
@@ -88,6 +90,9 @@ export async function createAtlas(title: string): Promise<Atlas> {
     visibility: 'private',
     created_at: now,
     updated_at: now,
+    format_version: ATLAS_FORMAT_VERSION,
+    route_geojson: null,
+    route_visible: false,
   };
 
   await updateAtlasesCache(userId, (current) => [localRow, ...current]);
@@ -96,7 +101,7 @@ export async function createAtlas(title: string): Promise<Atlas> {
     const { data, error } = await withTimeout(
       supabase
         .from('atlas')
-        .insert({ title: trimmed, emoji: DEFAULT_ATLAS_EMOJI })
+        .insert({ title: trimmed, emoji: DEFAULT_ATLAS_EMOJI, format_version: ATLAS_FORMAT_VERSION, route_visible: false })
         .select(ATLAS_SELECT_COLUMNS)
         .single(),
       'Creating atlas timed out',
@@ -119,6 +124,27 @@ export async function createAtlas(title: string): Promise<Atlas> {
     });
     return localRow;
   }
+}
+
+/** Persist the presentation state of an Atlas without touching its place rows. */
+export async function updateAtlas(
+  id: string,
+  patch: Partial<Pick<Atlas, 'title' | 'route_geojson' | 'route_visible'>>,
+): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error('Cannot update an atlas before auth is ready');
+
+  const updatedAt = new Date().toISOString();
+  await updateAtlasesCache(userId, (current) => current.map((atlas) => (
+    atlas.id === id ? { ...atlas, ...patch, updated_at: updatedAt } : atlas
+  )));
+
+  if (id.startsWith('local-')) return;
+  const { error } = await withTimeout(
+    supabase.from('atlas').update({ ...patch, updated_at: updatedAt }).eq('id', id),
+    'Updating atlas timed out',
+  );
+  if (error) throw new Error(`Failed to update atlas: ${error.message}`);
 }
 
 /**

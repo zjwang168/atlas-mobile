@@ -2,7 +2,7 @@
 
 ## Overview
 
-Full-screen animated overlay shown while `parseLink()` is running. Displays an animated SVG mesh-gradient background, a swaying link-preview pill, a cancel button, and the live parse timeline streamed from the backend progress endpoint. Does not drive the parse itself — the parent calls `onCancel` if the user wants to abort.
+Full-screen overlay shown while an import is running. It presents a live, user-facing analysis record derived from the backend progress endpoint. It does not expose raw model output, extraction JSON, token counts, or internal pipeline labels.
 
 ## File Structure
 
@@ -17,20 +17,23 @@ src/features/import-places/analyzing-screen/
 ```ts
 type AnalyzingScreenProps = {
   url: string;                 // raw text/URL shown in the preview pill
-  thumbnailUri?: string;       // optional thumbnail image for the pill
+  mode?: AnalyzingMode;        // link, text, OCR, video, or image-location flow
   progressEvents?: ParseProgressEvent[]; // live timeline entries from the backend
-  notice?: string;             // optional status banner text
-  onCancel: () => void;        // user tapped Cancel or the close button
+  onDismiss: () => void;       // user tapped the top-right close button
+  onCancel: () => void;        // user tapped the bottom Cancel control
 };
 ```
 
 ## Behaviour
 
 - Renders as `position: absolute` covering the full screen (not inside `ContentPanel`).
-- Background is a soft mint mesh gradient built from three SVG radial-gradient blobs whose centres drift continuously via Reanimated's `withRepeat`/`withTiming`.
-- The link pill sways ±4° to signal active work.
-- Progress rows now reflect backend streaming notes rather than only fixed labels.
-- A close button (top-right) and a "Cancel" capsule (bottom) both call `onCancel`.
+- Converts real backend events into concise, natural-language steps such as reading a transcript, recognizing image text, finding place references, and verifying map matches. The newest step is always first and expanded; the previous eleven events remain as compact history beneath it.
+- Filters raw LLM tokens and structured extraction content. The screen communicates observable work, not hidden reasoning.
+- OCR and image-location requests use the same progress polling contract as link, text, Reddit, and YouTube imports.
+- The extraction pipeline emits its inferred region immediately after entity extraction, before map matching. The screen then requests up to three representative Wikipedia images for that city or area; they cross-fade without blocking the import and show the region name over the photo.
+- Fetches progress once after the parse response returns so the final "Preparing your results" stage is visible.
+- The top-right close button hides the analysis and lets it continue in the background. The bottom Cancel control cancels the associated backend request.
+- When the user hides analysis, an activity island remains at the top of the app and can reopen the same live analysis screen. If it finishes without being reopened, a success island displays for ten seconds, then offers Chat History. A backgrounded app uses a local system notification that reopens `SaveScreen`.
 - The component does not know when parsing finishes — the parent transitions to `SaveScreen` when `parseLink()` resolves.
 
 ## Integration

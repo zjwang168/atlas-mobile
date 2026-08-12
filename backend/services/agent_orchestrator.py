@@ -13,6 +13,7 @@ Uses a tool-calling loop pattern:
 
 import asyncio
 import json
+import re
 import time
 from typing import Optional
 
@@ -26,15 +27,38 @@ from backend.services.tool_definitions import TOOLS, registry
 from backend.services.translation import translate_to_english
 
 
+def _matches_inferred_region(geocoded: dict, inferred_region: str | None) -> bool:
+    """Reject a globally valid geocoder result that conflicts with one-region content."""
+    if not inferred_region:
+        return True
+    address = re.sub(r"[^a-z0-9]+", " ", (geocoded.get("full_address") or "").lower())
+    if not address.strip():
+        return False
+    ignored_parts = {"us", "usa", "united states", "uk", "united kingdom", "france", "italy", "japan", "china"}
+    candidates = [
+        re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+        for part in inferred_region.split(",")
+    ]
+    candidates = [part for part in candidates if len(part) > 2 and part not in ignored_parts]
+    return any(re.search(rf"\b{re.escape(candidate)}\b", address) for candidate in candidates)
+
+
+def _stream_identified_places(request_id: str | None, locations: list[dict], limit: int = 12) -> None:
+    """Publish actual extracted names for the UI without adding analysis work."""
+    from backend.services import progress
+    progress.stream_identified_places(request_id, locations, limit=limit)
+
+
 class AgentOrchestrator:
     """
-    Supervisor Agent that coordinates all sub-agents.
+    Coordinates the structured location-extraction pipeline.
 
     For the initial parse_link pipeline:
         Runs a deterministic sequence (no LLM agent loop needed for speed).
 
-    For follow-up chat:
-        Runs the full agent loop with tool calling.
+    Follow-up chat is handled by ``backend.langgraph.chat_agent`` as a plain
+    model conversation. This class only remains the owner of extraction,
+    geocoding, and route-planning orchestration.
     """
 
     MAX_STEPS = 10
@@ -45,6 +69,7 @@ class AgentOrchestrator:
         from backend.services.tool_definitions import init_registry
         init_registry()  # Ensure all tools are registered
         self._parse_graph = self._build_parse_graph()
+        self._background_tasks: set[asyncio.Task] = set()
 
     @property
     def parse_graph(self):
@@ -80,9 +105,12 @@ class AgentOrchestrator:
                     # Persist when the cached response gained or explicitly
                     # recorded photo_url fields before it is bundled.
                     set_cached_result(url, cached)
-            metrics.t_parse_done = time.time()
-            metrics.t_geocode_done = time.time()
-            metrics.t_response = time.time()
+            now = time.time()
+            metrics.t_fetch_done = now
+            metrics.t_parse_done = now
+            metrics.t_geocode_done = now
+            metrics.t_photo_done = now
+            metrics.t_response = now
             record_metrics(metrics)
 
             # Restore session fields from cached result
@@ -121,6 +149,7 @@ class AgentOrchestrator:
         # for /parse_link, so that wrapper should treat already-present
         # photo_url fields as complete.
         await enrich_response_with_photos(result)
+        metrics.t_photo_done = time.time()
 
         # Store successful result in cache
         set_cached_result(url, result)
@@ -167,6 +196,7 @@ class AgentOrchestrator:
                 "inferred_region": discovery.get("inferred_region"),
                 "mode": mode,
             })
+            _stream_identified_places(request_id, locations)
             progress.stream_note(request_id, "Routing", {"detail": "Address-heavy content detected; geocoding directly."})
             progress.mark(request_id, "geocode_done", "Coordinates resolved.", {
                 "query_count": len(locations),
@@ -250,9 +280,12 @@ class AgentOrchestrator:
 
             raise ValueError("No geographic locations could be extracted from this content.")
 
-        # 2.5 Entity Linking — disambiguate ambiguous location names
-        location_names = await self._entity_linking(location_names, extraction.get("inferred_region"), request_id=request_id)
+        # 2.5 Entity linking is only needed for aliases, abbreviations, and
+        # generic labels. Extraction already supplies context for normal POIs.
+        if self._needs_entity_linking(location_names, extraction.get("inferred_region")):
+            location_names = await self._entity_linking(location_names, extraction.get("inferred_region"), request_id=request_id)
         from backend.services import progress
+        _stream_identified_places(request_id, location_names)
         progress.mark(request_id, "entity_linking_done", "Places identified.", {
             "location_count": len(location_names),
             "inferred_region": extraction.get("inferred_region"),
@@ -446,10 +479,10 @@ class AgentOrchestrator:
         # 5. Save session
         session.add_message("system", f"Extracted {len(locations)} locations from the provided URL.")
 
-        # 6. Auto-save to Supabase + update memory
+        # 6. Persist the extracted conversation and locations. Extracted
+        # places are product data, not user long-term memory.
         try:
             await conversation_manager.save_conversation(session.session_id)
-            await self._update_memory(session, metrics=metrics)
         except Exception:
             pass
 
@@ -565,6 +598,9 @@ class AgentOrchestrator:
         title = await translate_to_english(title or url, request_id=state["request_id"])
         session.title = title
         content = await translate_to_english(content, request_id=state["request_id"])
+        metrics: Optional[PipelineMetrics] = state.get("metrics")
+        if metrics:
+            metrics.t_fetch_done = time.time()
         progress.mark(state["request_id"], "source_fetched", "Source prepared.", {
             "title": title,
             "characters": len(content),
@@ -574,11 +610,16 @@ class AgentOrchestrator:
         progress.stream_note(state["request_id"], "Analyzing", {"detail": "Source is in hand; extracting and resolving places now."})
         state["content"] = content
         state["source_type"] = scrape_result.get("source_type", "generic")
+        state["ranked_items"] = scrape_result.get("ranked_items")
+        state["ranked_region"] = scrape_result.get("inferred_region")
         state["title"] = title
         return state
 
     async def _graph_classify(self, state: dict) -> dict:
         if state["mode"] == "url":
+            if state.get("ranked_items"):
+                state["source_type"] = "ranked_list"
+                return state
             state["source_type"] = await classify_location_content(state["content"], source_type=state["source_type"])
         return state
 
@@ -589,7 +630,13 @@ class AgentOrchestrator:
 
     async def _graph_extract(self, state: dict) -> dict:
         from backend.services.extraction_pipeline import ExtractionPipeline
-        extraction = await ExtractionPipeline.extract(state["content"], state["source_type"], request_id=state["request_id"])
+        extraction = await ExtractionPipeline.extract(
+            state["content"],
+            state["source_type"],
+            request_id=state["request_id"],
+            ranked_items=state.get("ranked_items"),
+            inferred_region=state.get("ranked_region"),
+        )
         state["extraction"] = extraction
         return state
 
@@ -599,7 +646,14 @@ class AgentOrchestrator:
         if not locations:
             state["locations"] = []
             return state
-        state["locations"] = await self._entity_linking(locations, extraction.get("inferred_region"), request_id=state["request_id"])
+        if self._needs_entity_linking(locations, extraction.get("inferred_region")):
+            state["locations"] = await self._entity_linking(locations, extraction.get("inferred_region"), request_id=state["request_id"])
+        else:
+            state["locations"] = locations
+        _stream_identified_places(state["request_id"], state["locations"])
+        metrics: Optional[PipelineMetrics] = state.get("metrics")
+        if metrics:
+            metrics.t_parse_done = time.time()
         return state
 
     async def _graph_geocode(self, state: dict) -> dict:
@@ -621,20 +675,28 @@ class AgentOrchestrator:
                 "inferred_region": discovery.get("inferred_region"),
                 "mode": state.get("source_type"),
             })
+            _stream_identified_places(state["request_id"], discovery.get("locations", []))
             progress.mark(state["request_id"], "geocode_done", "Coordinates resolved.", {
                 "query_count": len(discovery.get("locations", [])),
                 "resolved_count": len(discovery.get("locations", [])),
             })
+            metrics: Optional[PipelineMetrics] = state.get("metrics")
+            if metrics:
+                now = time.time()
+                metrics.t_parse_done = now
+                metrics.t_geocode_done = now
             return state
 
         locations = state.get("locations", [])
         state["final_result"] = await self._process_geocode_only(locations, extraction, session, state["request_id"])
+        metrics: Optional[PipelineMetrics] = state.get("metrics")
+        if metrics:
+            metrics.t_geocode_done = time.time()
         return state
 
     async def _process_geocode_only(self, location_names: list[dict], extraction: dict, session: Session, request_id: str | None) -> dict:
         from backend.services import progress
         from backend.services.geocoder import batch_geocode
-        from backend.services.geocoder import geocode as _geocode_region
 
         session.removed_noise = extraction.get("removed_noise", [])
         session.removed_hierarchy = extraction.get("removed_hierarchy", [])
@@ -642,17 +704,44 @@ class AgentOrchestrator:
         session.is_multi_region = extraction.get("is_multi_region", False)
         if not location_names:
             raise ValueError("No geographic locations could be extracted from this content.")
-        if extraction.get("inferred_region"):
-            try:
-                await _geocode_region(extraction.get("inferred_region"))
-            except Exception:
-                pass
-        geocoded = await batch_geocode([loc["name"] for loc in location_names], city_name=extraction.get("inferred_region"))
-        progress.mark(request_id, "geocode_done", "Coordinates resolved.", {"query_count": len(location_names), "resolved_count": len([i for i in geocoded if i])})
+
+        # Comments often repeat the same venue. Preserve distinct same-named
+        # places in different contexts, but do not spend limited geocoding
+        # capacity resolving an identical entity more than once.
+        unique_locations: list[dict] = []
+        seen_queries: set[tuple[str, str]] = set()
+        for location in location_names:
+            name = (location.get("name") or "").strip()
+            context = (location.get("context") or extraction.get("inferred_region") or "").strip()
+            key = (name.lower(), context.lower())
+            if name and key not in seen_queries:
+                seen_queries.add(key)
+                unique_locations.append(location)
+
+        geocode_queries: list[dict] = []
+        for location in unique_locations:
+            name = (location.get("name") or "").strip()
+            context = (location.get("context") or extraction.get("inferred_region") or "").strip()
+            address = (location.get("address") or "").strip()
+            contextual_name = f"{name}, {context}" if context and context.lower() not in name.lower() else name
+            geocode_queries.append({
+                "query": address or contextual_name,
+                "fallback_query": contextual_name if address and contextual_name != address else None,
+            })
+
+        geocoded = await batch_geocode(geocode_queries, city_name=extraction.get("inferred_region"))
+        progress.mark(request_id, "geocode_done", "Coordinates resolved.", {"query_count": len(geocode_queries), "resolved_count": len([i for i in geocoded if i])})
         progress.stream_note(request_id, "Routing", {"detail": "Coordinates resolved; planning the route."})
         locations = []
-        for loc, geo in zip(location_names, geocoded):
+        enforce_region = bool(extraction.get("inferred_region")) and not extraction.get("is_multi_region", False)
+        for loc, geo in zip(unique_locations, geocoded):
             if geo:
+                if enforce_region and not _matches_inferred_region(geo, extraction.get("inferred_region")):
+                    session.removed_noise.append({
+                        "name": loc.get("name", ""),
+                        "reason": f"Geocoding result is outside the inferred region: {extraction.get('inferred_region')}",
+                    })
+                    continue
                 geo["name"] = loc["name"]
                 geo["context"] = loc.get("context", "")
                 geo["hierarchy_level"] = loc.get("hierarchy_level", 2)
@@ -667,6 +756,7 @@ class AgentOrchestrator:
             "removed_hierarchy": session.removed_hierarchy,
             "inferred_region": session.inferred_region,
         }
+
 
     async def _graph_route(self, state: dict) -> dict:
         from backend.services.route_planner import plan_route
@@ -683,15 +773,41 @@ class AgentOrchestrator:
         session: Session = state["session"]
         final_result = state.get("final_result", {})
         session.add_message("system", f"Extracted {len(final_result.get('locations', []))} locations from the provided URL.")
-        try:
-            await conversation_manager.save_conversation(session.session_id)
-            await self._update_memory(session, metrics=state.get("metrics"))
-        except Exception:
-            pass
+        self._schedule_background_persistence(session, state.get("metrics"))
         final_result["title"] = final_result.get("title", session.title)
         final_result["session_id"] = session.session_id
         final_result["source_type"] = final_result.get("source_type", state.get("source_type"))
         return final_result
+
+    @staticmethod
+    def _needs_entity_linking(location_names: list[dict], inferred_region: str | None) -> bool:
+        """Avoid a second LLM pass when extraction already made POIs unambiguous."""
+        generic_names = {
+            "the tower", "tower", "the bridge", "bridge", "the mall", "mall",
+            "the palace", "palace", "the park", "park", "the museum", "museum",
+            "monument", "monuments", "the beach", "beach", "the square", "square",
+        }
+        for location in location_names:
+            name = (location.get("name") or "").strip()
+            context = (location.get("context") or "").strip()
+            if not name or name.lower() in generic_names:
+                return True
+            if len(name) <= 3 and name.isupper():
+                return True
+            if not context and not inferred_region:
+                return True
+        return False
+
+    def _schedule_background_persistence(self, session: Session, metrics: Optional[PipelineMetrics]) -> None:
+        async def persist() -> None:
+            try:
+                await conversation_manager.save_conversation(session.session_id)
+            except Exception as exc:
+                print(f"[AgentOrchestrator] Background session persistence failed: {exc}")
+
+        task = asyncio.create_task(persist())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _validate_coordinates(
         self,
@@ -879,46 +995,10 @@ Output ONLY a JSON object with this exact structure:
             return location_names
 
     async def chat(self, session_id: str, user_message: str) -> dict:
-        """
-        Continue conversation with the agent.
-        Uses a tool-calling agent loop for follow-up interactions.
-        """
-        session = conversation_manager.get_session(session_id)
-        if not session:
-            raise ValueError(f"Session {session_id} not found")
+        """Compatibility entry point for the plain conversation chat."""
+        from backend.langgraph.chat_agent import run_chat
 
-        # Add user message
-        session.add_message("user", user_message)
-        if not session.user_memory_summary:
-            try:
-                memories = await conversation_manager.get_all_memories()
-                if memories:
-                    summary_lines = []
-                    for memory in memories[:20]:
-                        key = memory.get("key", "memory")
-                        value = memory.get("value", "")
-                        category = memory.get("category", "preference")
-                        summary_lines.append(f"- {key} ({category}): {value}")
-                    session.user_memory_summary = "\n".join(summary_lines)
-            except Exception:
-                pass
-
-        # Run agent loop
-        result = await self._agent_loop(session)
-        try:
-            asyncio.create_task(self._post_chat_maintenance(session))
-        except Exception:
-            pass
-
-        return {
-            "session_id": session_id,
-            "response": result.get("answer", ""),
-            "locations": session.locations,
-            "route": session.route,
-            "tool_calls_used": result.get("tool_calls_used", []),
-            "status": result.get("status", "success"),
-            "partial": result.get("partial", False),
-        }
+        return await run_chat(session_id, user_message)
 
     async def _agent_loop(self, session: Session) -> dict:
         """
@@ -1046,62 +1126,11 @@ Output ONLY a JSON object with this exact structure:
         }
 
     async def _post_chat_maintenance(self, session: Session) -> None:
-        """Run summary, memory, and persistence after the response is returned."""
+        """Persist a chat transcript without creating summaries or memory."""
         try:
-            await self._maybe_roll_conversation_summary(session)
-            await self._update_memory(session)
             await conversation_manager.save_conversation(session.session_id)
         except Exception:
             pass
-
-    async def _maybe_roll_conversation_summary(self, session: Session) -> None:
-        """Compress every ~10 new chat messages into a persisted summary."""
-        from backend.services.llm_client import call_llm
-
-        if len(session.messages) < 10:
-            return
-        if len(session.messages) - session.summary_message_count < 10:
-            return
-
-        start_index = session.summary_message_count
-        end_index = len(session.messages)
-        chunk = session.messages[start_index:end_index][-10:]
-
-        summary_prompt = """You are summarizing a travel chat for future follow-up.
-Return a concise English summary (max 120 words) capturing:
-1. The user's current goal
-2. Places or regions discussed
-3. Preferences, constraints, dislikes, and decisions
-4. Open questions / next actions
-
-Keep names and facts precise. Do not invent anything.
-"""
-        messages = [{"role": "system", "content": summary_prompt}]
-        for msg in chunk:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": str(msg.get("content", "")),
-            })
-
-        result = await asyncio.to_thread(
-            call_llm,
-            messages=messages,
-            temperature=0.1,
-            max_tokens=256,
-        )
-        summary = (result.get("content") or "").strip()
-        if not summary:
-            return
-
-        session.conversation_summary = summary
-        session.summary_message_count = end_index
-        session.last_summary_at = time.time()
-        await conversation_manager.save_conversation_summary(
-            session.session_id,
-            summary,
-            start_message_index=start_index,
-            end_message_index=end_index,
-        )
 
     def _build_agent_context(self, session: Session) -> list[dict]:
         """Build the full context for the agent LLM call."""
@@ -1113,8 +1142,6 @@ Current session state:
 - Route planned: {'Yes' if session.route else 'No'}
 - Total distance: {session.route.get('total_distance_km', 'N/A') if session.route else 'N/A'} km
 - Source: {session.source_type or 'N/A'}
-{f'- Rolling summary: {session.conversation_summary}' if session.conversation_summary else ''}
-{f'- Long-term memory: {session.user_memory_summary}' if session.user_memory_summary else ''}
 
 You have access to tools. Use them when the user asks to:
 - Add/remove locations: use map_operation
@@ -1139,111 +1166,6 @@ Always explain what you're doing before calling a tool."""
             })
 
         return context
-
-    async def _update_memory(self, session: Session, metrics: Optional[PipelineMetrics] = None):
-        """Auto-update long-term user memory from the current session."""
-        import asyncio
-        import json
-        import re
-
-        from backend.services.llm_client import call_llm, get_last_llm_usage
-
-        recent_messages = session.get_recent_context(20)
-        if not recent_messages:
-            return
-
-        memory_prompt = f"""You are extracting durable user memory from a travel app conversation.
-
-Return valid JSON with this exact shape:
-{{
-  "profile_summary": "2-4 concise English sentences about the user",
-  "memories": [
-    {{"key": "short_key", "value": "durable memory sentence", "category": "preference|interest|visited_place|disliked|constraint|plan"}}
-  ]
-}}
-
-Rules:
-1. Extract only durable, reusable facts about the user.
-2. Prefer preferences, constraints, visited places, and recurring interests.
-3. Do not store transient task details unless they are important for future chats.
-4. Keep everything in English.
-5. If nothing useful is present, return an empty memories array and a brief neutral profile summary.
-
-Conversation summary:
-{session.conversation_summary or "N/A"}
-"""
-        messages = [{"role": "system", "content": memory_prompt}]
-        for msg in recent_messages:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": str(msg.get("content", "")),
-            })
-
-        raw_content = "[]"
-        try:
-            result = await asyncio.to_thread(
-                call_llm,
-                messages=messages,
-                temperature=0.2,
-                max_tokens=1024,
-            )
-            raw_content = result.get("content", "[]")
-
-            if metrics:
-                mem_usage = get_last_llm_usage()
-                metrics.llm_calls.append({
-                    "call_name": "memory_update",
-                    "input_tokens": mem_usage.get("input_tokens", 0),
-                    "output_tokens": mem_usage.get("output_tokens", 0),
-                    "duration_s": mem_usage.get("duration_s", 0.0),
-                })
-
-            cleaned = raw_content.strip()
-            if cleaned.startswith("```"):
-                cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
-                cleaned = re.sub(r'\n?```\s*$', '', cleaned)
-                cleaned = cleaned.strip()
-
-            parsed = json.loads(cleaned)
-            if not isinstance(parsed, dict):
-                return
-
-            profile_summary = str(parsed.get("profile_summary", "")).strip()
-            if profile_summary:
-                await conversation_manager.add_memory(
-                    session.session_id,
-                    "user.profile_summary",
-                    profile_summary,
-                    "profile",
-                )
-
-            memories = parsed.get("memories", [])
-            if not isinstance(memories, list):
-                memories = []
-
-            saved_count = 0
-            for mem in memories[:12]:
-                key = str(mem.get("key", "")).strip()
-                value = str(mem.get("value", "")).strip()
-                category = str(mem.get("category", "preference")).strip() or "preference"
-                if not key or not value:
-                    continue
-                success = await conversation_manager.add_memory(
-                    session.session_id,
-                    f"user.{key}",
-                    value,
-                    category,
-                )
-                if success:
-                    saved_count += 1
-
-            if profile_summary or saved_count:
-                print(f"[Memory] Updated profile + {saved_count} durable memory item(s) for session {session.session_id[:8]}")
-        except json.JSONDecodeError as e:
-            print(f"[Memory] JSON parse error: {e}")
-            print(f"[Memory] Raw LLM content (first 500 chars): {raw_content[:500]}")
-        except Exception as e:
-            print(f"[Memory] Update failed: {e}")
 
     def _apply_tool_result(self, session: Session, tool_name: str, args: dict, result: dict):
         """Apply tool results back to session state."""

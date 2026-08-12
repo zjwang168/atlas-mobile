@@ -798,7 +798,7 @@ npm install
 cp .env.example .env
 ```
 
-> **Required API keys**: `MAPBOX_ACCESS_TOKEN`, `DEEPSEEK_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`. Optional: `GLM_API_KEY` (OCR), `GEMINI_API_KEY` (vision), `QWEN_API_KEY` (web search), and at least one geocoding key.
+> **Required API keys**: `MAPBOX_ACCESS_TOKEN`, `DEEPSEEK_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`. Optional: `GROQ_API_KEY` (voice transcription), `GLM_API_KEY` (OCR), `GEMINI_API_KEY` (vision), `QWEN_API_KEY` (web search), and at least one geocoding key.
 
 ### Start the App
 
@@ -816,6 +816,10 @@ For subsequent runs:
 ```bash
 npx expo start --dev-client
 ```
+
+Keep this terminal open while developing. Expo's development server stays
+running and streams bundler errors and logs as the app reloads. Press `Ctrl+C`
+in that terminal when you want to stop it.
 
 If you encounter errors when running `npx expo run:ios`, try:
 ```bash
@@ -958,3 +962,55 @@ Ensure the backend is reachable and CORS is configured (allowed for `*` in devel
 ## License
 
 MIT
+
+
+
+
+我接下来要refine plan这个模组
+
+在这个模组里：用户可以点击create plan，但是不再是进入现在日历里面选日期范围，也不需要“where are you going”输入框。直接进入地图选点。主页三大板块：
+搜索框
+地图atlas页面。
+
+主页大部分地方都是地图，类似“my places”主页的地图和页面占比，地图中已有的定点（存在my places的点）正常显示。如果是刚进来还没有选择任何点，atlas页面上显示类似：“选中地图中的点以开始添加”的灰色按钮，不一定要灰色，反正就是你懂的。
+
+上方要有一个搜索栏，这个搜索栏可以搜索地点，如果搜索的地点并非我们的my places定点，就连接mapbox api搜索（告诉我是否需要新的api或者需要新的设置），注意搜索框要有联想功能，输入之后要弹出1个层级的联想结果，联想结果条目右边有个添加button，搜索框右边有个望远镜button：
+  点望远镜button，地图定到那个点。用户点击这个定点会有个小小弹窗（不影响atlas页面，也不覆盖整个地图）配合动画从点衍生出来，这个弹窗会显示这个地点的名字，和一个“+”的按钮。用户点击“+”，则地点被添加进atlas页面。
+  点联想结果条目右边的添加button，地点直接被添加进atlas页面，一开始的“选中地图中的点以开始添加”的灰色按钮变成选中的点的地址条目。
+  用户如果直接点击联想结果，地图聚焦在那个联想结果的定点上。
+
+  如果搜索的地点是已经储存在我们my places的地点，则直接在那个点上操作。联想框要有一点浅浅的蓝色highlight表示这是我们my places的地点。注意有个问题，因为目前我整个project的实现，地图上的定点是geocoding的坐标，只有文本信息是这个地点的地点名字，有可能出现用户搜索某个名字，其实它就在my places里，但是无法识别，去掉用了mapbox api，这个问题你要解决下，看看是不是先搜索my places中地点的地名，没搜到再去调用mapbox api或是怎么样的
+
+  地图上my places的点都是蓝色点，目前正在focus的点是绿色，被添加进atlas的点是暖橙色。
+
+如果用户直接点屏幕上的蓝色my places点，依然是会有个小小弹窗（不影响atlas页面，也不覆盖整个地图）配合动画从点衍生出来，这个弹窗会显示这个地点的名字，和一个“+”的按钮。用户点击“+”，则地点被添加进atlas页面。然后这个点变成暖橙色。
+
+atlas页面的地点条目都不需要有description，但是要有图片，并且和my places的delete逻辑一样，可以正常delete。
+点击地图中的已经加入atlas的橙色定点，会有个小小弹窗（不影响atlas页面，也不覆盖整个地图）配合动画从点衍生出来，这个弹窗会显示这个地点的名字，和一个“-”的按钮。用户点击“-”，则地点从atlas页面删除（要有个iphone删除照片的动画，不要生硬的直接没有），定点从地图上消除。
+
+atlas页面的地点条目要有类似“三”的一个button，点按它可以拖拽移动这个地点在整个地点条目列表的排序。也要有“备注”的button，用户可以给地点添加备注，比如“早点去”“门票14欧”“看大家有没有兴趣”。用户点击“备注”按钮，可以进行输入，但是用户长按备注按钮，直接进入语音识别，然后调用腾讯hy asr 16k_zh_en_2.0中英混合大模型，用户可以靠说话添加备注进去。识别好之后直接将备注以小字添加到地址名字下面。
+
+用户如果想要修改，再点击“备注”的button，即可修改。
+
+atlas页面每个地点条目之间有个小的“+”号，很小，不要影响atlas页面布局，点它就可以在两个地点条目之间加分割，比如“第二天”，或者“下午”，或者时间。这个选择页面类似iphone闹钟，左边的滚轮调节时间单位（天），右边的滚轮对应每个时间单位，比如天就是“12pm 1pm" 等等。注意判别时间隔断不能矛盾，比如添加“第三天 10am”但是在它上面某处居然有“第五天 4pm”。
+
+真个atlas页面的右上角新增一个“生成”路线按钮，点击之后用算法计算出这几个点的大致路线并连在一起（注意不是直线路线，而是地图中可走的可导航的路线，就像地图导航一样），目的不是真的得到最短，而是看看这个atlas的路线大概是怎么样的。再点一下则表示取消。总之生成的atlas可以有“连线版本”和“不连线版本”。
+
+如果有连线版本的话，如果atlas的点有多个时间单位，那么atlas页面上方可以显示多个tag，这些tag显示不同的时间单位，比如有“第一天10am”“第二天10am”，点击就高亮对应时间段的地点条目的生成的路线。
+
+整个atlas页面下方2个按钮，“Save Atlas”，“Save and Ask AI”.
+
+然后save好之后回到atlas模块主界面，长按每个已经生成好的atlas即可分享。点击分享按钮会生成一个漂亮精致的图片（这个atlas地图所有定点的overview缩略图），和一个二维码。外部人员扫这个二维码，即可进来查看这个已经生成的atlas。
+
+现有的saved atlas全部删除（我不知道你能不能操作数据库），但反正就是不要让就数据影响新功能新交互的实现或者导致app报bug。
+
+点击进入某个已经生成的atlas，右上角有个编辑按钮，点了才能编辑，没点的话，就是一个很漂亮精致的行程atlas地图，搭配地图的交互。
+
+
+全部做好之后，告诉我怎么去接入腾讯的这个模型，以及是否有免费额度。然后同步把这个语音识别的功能加入atlas ai（导航栏的ai页），以及add places的paste text模块。语音识别的前端图标改成那种扬声器的感觉的图标，不要麦克风图标。点击这个图标，输入框变成“按住说话”（英文）
+
+-------
+
+非常好，实现了80%。
+
+gai

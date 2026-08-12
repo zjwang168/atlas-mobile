@@ -23,7 +23,7 @@ import { type ParseResult } from '../../../services/import/importService';
 import { isSamePlace } from '../../../services/place/placeService';
 import { typography } from '../../../theme/typography';
 import { useHome } from '../../home/HomeContext';
-import MapboxMap, { type MapMarker } from '../../map/MapboxMap';
+import MapboxMap, { type MapboxMapHandle, type MapMarker } from '../../map/MapboxMap';
 import PlaceDetail from '../../place-detail/PlaceDetail';
 
 const COLOR = {
@@ -41,10 +41,22 @@ const COLOR = {
 
 type SaveScreenProps = {
   result: ParseResult;
+  sessionTheme: string;
   onClose: () => void;
   onSave: (selectedIds: string[]) => void;
-  onAddToPlan: (selectedIds: string[]) => void;
+  onSaveAndAskAI: (selectedIds: string[]) => void;
 };
+
+function PlaceThumbnail({ uri }: { uri?: string }) {
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  if (!uri || failedUri === uri) return null;
+
+  return (
+    <View style={styles.rowThumb}>
+      <Image source={{ uri }} style={styles.fill} onError={() => setFailedUri(uri)} />
+    </View>
+  );
+}
 
 /**
  * Results screen — *replaces* the home screen (not an overlay). Extracted places
@@ -56,7 +68,7 @@ type SaveScreenProps = {
  *
  * Bottom actions are native iOS 26 Expo UI buttons (glass + prominent-glass).
  */
-export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: SaveScreenProps) {
+export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSaveAndAskAI }: SaveScreenProps) {
   const insets = useSafeAreaInsets();
   const { height: screenH } = useWindowDimensions();
   const { savedPlaces } = useHome();
@@ -123,8 +135,11 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
   const minPanelHeight = screenH * 0.34;
   const maxPanelHeight = screenH * 0.82;
   const animatedPanelHeight = useRef(new Animated.Value(panelHeight)).current;
+  const screenTransition = useRef(new Animated.Value(0)).current;
   const currentPanelHeight = useRef(panelHeight);
   const startPanelHeight = useRef(panelHeight);
+  const mapRef = useRef<MapboxMapHandle>(null);
+  const [mapPaddingBottom, setMapPaddingBottom] = useState(panelHeight);
   const selectedPlace = result.places.find((place) => place.id === selectedPlaceId);
   const mapCenter = selectedPlace
     ? [selectedPlace.longitude, selectedPlace.latitude] as [number, number]
@@ -143,6 +158,26 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
 
   const mapZoom = selectedPlaceId ? 15 : 12;
 
+  useEffect(() => {
+    Animated.spring(screenTransition, {
+      toValue: 1,
+      damping: 20,
+      stiffness: 190,
+      mass: 0.74,
+      useNativeDriver: true,
+    }).start();
+  }, [screenTransition]);
+
+  const runExitAction = useCallback((action: (ids: string[]) => void) => {
+    Animated.timing(screenTransition, {
+      toValue: 0,
+      duration: 260,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) action(selectedIds);
+    });
+  }, [screenTransition, selectedIds]);
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -158,8 +193,10 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
           );
           currentPanelHeight.current = nextHeight;
           animatedPanelHeight.setValue(nextHeight);
+          mapRef.current?.setPaddingBottom(nextHeight);
         },
-        onPanResponderRelease: () => {},
+        onPanResponderRelease: () => setMapPaddingBottom(currentPanelHeight.current),
+        onPanResponderTerminate: () => setMapPaddingBottom(currentPanelHeight.current),
       }),
     [animatedPanelHeight, maxPanelHeight, minPanelHeight],
   );
@@ -171,14 +208,17 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
   };
 
   return (
-    <View style={styles.container}>
+    <Animated.View style={[styles.container, { opacity: screenTransition }]}>
       {/* Live map background */}
       <MapboxMap
+        ref={mapRef}
         style={StyleSheet.absoluteFill}
         markers={markers}
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
+        cameraAnimationDurationMs={360}
         selectedMarkerId={selectedPlaceId}
+        padding={{ paddingTop: 0, paddingBottom: mapPaddingBottom, paddingLeft: 0, paddingRight: 0 }}
         onMarkerPress={(marker) => {
           setSelectedPlaceId(marker.id);
         }}
@@ -187,162 +227,166 @@ export default function SaveScreen({ result, onClose, onSave, onAddToPlan }: Sav
       {/* Top map blur fade — same as the home screen. */}
       <TopBlurFade height={insets.top + 64} />
 
-      {/* Source link pill */}
+      {/* Keep the completed session identifiable without falling back to a raw URL. */}
       <View style={[styles.pillWrap, { top: insets.top + 8 }]}>
         <View style={styles.pill}>
           <View style={styles.thumb}>
-            {result.sourceThumbnail ? (
-              <>
-                <Image source={{ uri: result.sourceThumbnail }} style={styles.fill} />
-                <View style={styles.thumbOverlay} />
-              </>
-            ) : null}
-            <Ionicons name="link" size={24} color="#FFFFFF" />
+            <Ionicons name="compass-outline" size={17} color="#FFFFFF" />
           </View>
-          <Text style={styles.pillText} numberOfLines={2}>
-            {result.sourceTitle}
+          <Text style={styles.pillText} numberOfLines={1}>
+            {sessionTheme}
           </Text>
-          <View style={styles.pillButton}>
-            <Ionicons name="arrow-up" size={16} color={COLOR.textPrimary} style={styles.arrowRotate} />
-          </View>
         </View>
       </View>
 
       {/* Floating results panel — matches home ContentPanel. */}
-      <Animated.View style={[styles.panel, { height: animatedPanelHeight }]}>
-        <View style={styles.dragHandleWrap} {...panResponder.panHandlers}>
-          <View style={styles.dragHandle} />
-        </View>
-        <View style={styles.header}>
-          <Text style={styles.title}>Save places</Text>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.7}>
-            <Ionicons name="close" size={20} color={COLOR.textPrimary} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.metaRow}>
-          <View style={styles.countBadge}>
-            <Text style={styles.countText}>{result.places.length} places</Text>
+      <Animated.View
+        style={[
+          styles.panel,
+          {
+            transform: [{ translateY: screenTransition.interpolate({ inputRange: [0, 1], outputRange: [screenH * 0.42, 0] }) }],
+          },
+        ]}
+      >
+        <Animated.View style={[styles.panelContent, { height: animatedPanelHeight }]}>
+          <View style={styles.dragHandleWrap} {...panResponder.panHandlers}>
+            <View style={styles.dragHandle} />
           </View>
-          <TouchableOpacity onPress={toggleAll} activeOpacity={0.6} hitSlop={8}>
-            <Text style={styles.deselectText}>{allSelected ? 'Deselect all' : 'Select all'}</Text>
-          </TouchableOpacity>
-        </View>
+          <View style={styles.header}>
+            <Text style={styles.title}>Save places</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.7}>
+              <Ionicons name="close" size={20} color={COLOR.textPrimary} />
+            </TouchableOpacity>
+          </View>
 
-        <ScrollView
-          ref={scrollRef}
-          style={styles.list}
-          contentContainerStyle={{ paddingBottom: 150 }}
-          showsVerticalScrollIndicator={false}
-        >
-          {result.places.map((place, i) => (
-            <Pressable
-              key={place.id}
-              style={[
-                styles.row,
-                i > 0 && styles.rowDivider,
-                selectedPlaceId === place.id && styles.rowActive,
-              ]}
-              onPress={() => setSelectedPlaceId(place.id)}
-            >
-              <View style={styles.rowThumb}>
-                <View style={styles.rowThumbClip}>
-                  {place.imageUri ? (
-                    <Image source={{ uri: place.imageUri }} style={styles.fill} />
+          <View style={styles.metaRow}>
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{result.places.length} places</Text>
+            </View>
+            <TouchableOpacity onPress={toggleAll} activeOpacity={0.6} hitSlop={8}>
+              <Text style={styles.deselectText}>{allSelected ? 'Deselect all' : 'Select all'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            ref={scrollRef}
+            style={styles.list}
+            contentContainerStyle={{ paddingBottom: 150 }}
+            showsVerticalScrollIndicator={false}
+          >
+            {result.places.map((place, i) => (
+              <Pressable
+                key={place.id}
+                style={[
+                  styles.row,
+                  i > 0 && styles.rowDivider,
+                  selectedPlaceId === place.id && styles.rowActive,
+                ]}
+                onPress={() => setSelectedPlaceId(place.id)}
+              >
+                <PlaceThumbnail uri={place.imageUri} />
+                <View style={styles.rowText}>
+                  <Text style={styles.rowName} numberOfLines={1}>
+                    {place.name}
+                  </Text>
+                  <Text style={styles.rowSubtitle} numberOfLines={2}>
+                    {place.subtitle}
+                  </Text>
+                  <View style={[
+                    styles.sentimentChip,
+                    place.sentiment === 'positive' && styles.sentimentPositive,
+                    place.sentiment === 'negative' && styles.sentimentNegative,
+                  ]}>
+                    <Text style={styles.sentimentText}>{sentimentLabel(place.sentiment)}</Text>
+                  </View>
+                </View>
+                <View style={styles.checkWrap}>
+                  {isPlaceAlreadySaved(place) ? (
+                    <View style={styles.savedBadge}>
+                      <Text style={styles.savedBadgeText}>Saved</Text>
+                    </View>
                   ) : (
-                    <Ionicons name="image-outline" size={22} color="#B0B0B0" />
+                    <TouchableOpacity
+                      onPress={() => toggleOne(place.id)}
+                      hitSlop={10}
+                      activeOpacity={0.7}
+                      style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
+                    >
+                      {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+                    </TouchableOpacity>
                   )}
                 </View>
-              </View>
-              <View style={styles.rowText}>
-                <Text style={styles.rowName} numberOfLines={1}>
-                  {place.name}
-                </Text>
-                <Text style={styles.rowSubtitle} numberOfLines={2}>
-                  {place.subtitle}
-                </Text>
-                <View style={[
-                  styles.sentimentChip,
-                  place.sentiment === 'positive' && styles.sentimentPositive,
-                  place.sentiment === 'negative' && styles.sentimentNegative,
-                ]}>
-                  <Text style={styles.sentimentText}>{sentimentLabel(place.sentiment)}</Text>
-                </View>
-              </View>
-              <View style={styles.checkWrap}>
-                {isPlaceAlreadySaved(place) ? (
-                  <View style={styles.savedBadge}>
-                    <Text style={styles.savedBadgeText}>Saved</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity
-                    onPress={() => toggleOne(place.id)}
-                    hitSlop={10}
-                    activeOpacity={0.7}
-                    style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
-                  >
-                    {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
-                  </TouchableOpacity>
-                )}
-              </View>
-            </Pressable>
-          ))}
-        </ScrollView>
+              </Pressable>
+            ))}
+          </ScrollView>
 
-        {/* Bottom gradient-blur fade behind the buttons. */}
-        <MaskedView
-          style={styles.fade}
-          pointerEvents="none"
-          maskElement={
+          {/* Bottom gradient-blur fade behind the buttons. */}
+          <MaskedView
+            style={styles.fade}
+            pointerEvents="none"
+            maskElement={
+              <LinearGradient
+                colors={['transparent', 'black']}
+                locations={[0, 0.55]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+            }
+          >
+            <BlurView intensity={32} tint="light" style={StyleSheet.absoluteFill} />
             <LinearGradient
-              colors={['transparent', 'black']}
-              locations={[0, 0.55]}
+              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.95)']}
+              locations={[0, 0.7]}
               start={{ x: 0, y: 0 }}
               end={{ x: 0, y: 1 }}
               style={StyleSheet.absoluteFill}
             />
-          }
-        >
-          <BlurView intensity={32} tint="light" style={StyleSheet.absoluteFill} />
-          <LinearGradient
-            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.95)']}
-            locations={[0, 0.7]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-        </MaskedView>
+          </MaskedView>
+        </Animated.View>
       </Animated.View>
 
       {/* Action bar — custom buttons (exact 52h, equal halves). The frosted
           material is the native iOS 26 Liquid Glass via GlassView; the green CTA
           is a solid prominent capsule. */}
-      <View style={[styles.actionBar, { bottom: Math.max(insets.bottom, 20) }]} pointerEvents="box-none">
-        {/* Add to plan — liquid-glass capsule */}
+      <Animated.View
+        style={[
+          styles.actionBar,
+          {
+            bottom: Math.max(insets.bottom, 20),
+            transform: [{ translateY: screenTransition.interpolate({ inputRange: [0, 1], outputRange: [screenH * 0.18, 0] }) }],
+          },
+        ]}
+        pointerEvents="box-none"
+      >
+        {/* Save places — liquid-glass capsule */}
         <View style={styles.btnShadow}>
           <Pressable
             style={styles.btnGlassClip}
-            onPress={() => onAddToPlan(selectedIds)}
+            onPress={() => runExitAction(onSave)}
             disabled={selectedIds.length === 0}
           >
             <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" isInteractive />
-            <Text style={styles.btnLabelDark}>Add to plan</Text>
+            <Text style={styles.btnLabelDark}>Save places</Text>
           </Pressable>
         </View>
 
-        {/* Save places — prominent green capsule */}
+        {/* Save and Ask AI — prominent green capsule */}
         <Pressable
           style={[styles.btnShadow, styles.btnGreen, selectedIds.length === 0 && styles.btnDisabled]}
-          onPress={() => onSave(selectedIds)}
+          onPress={() => runExitAction(onSaveAndAskAI)}
           disabled={selectedIds.length === 0}
         >
-          <Text style={styles.btnLabelLight}>Save places</Text>
+          <View style={styles.askAIContent}>
+            <Ionicons name="sparkles" size={16} color="#FFFFFF" />
+            <Text style={styles.btnLabelLight}>Save and Ask AI</Text>
+          </View>
         </Pressable>
-      </View>
+      </Animated.View>
 
       {/* Teammate's place detail — opened by tapping a row. */}
       <PlaceDetail placeId={detailPlaceId} onDismiss={() => setDetailPlaceId(null)} onEdit={() => {}} />
-    </View>
+    </Animated.View>
   );
 }
 
@@ -350,19 +394,20 @@ const styles = StyleSheet.create({
   container: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: COLOR.bg },
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
 
-  // Source pill (bg-secondary, 0.5 border, radius 24; thumb 56/18; arrow btn 32)
-  pillWrap: { position: 'absolute', left: 12, right: 12 },
+  // Completed import theme — matches the compact source pill in the waiting view.
+  pillWrap: { position: 'absolute', left: 20, right: 20, alignItems: 'center' },
   pill: {
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: COLOR.bgSecondary,
-    borderWidth: 0.5,
-    borderColor: COLOR.borderStrong,
-    borderRadius: 24,
-    paddingVertical: 8,
-    paddingLeft: 8,
-    paddingRight: 12,
+    gap: 9,
+    backgroundColor: COLOR.bg,
+    borderWidth: 1,
+    borderColor: '#E5ECE8',
+    borderRadius: 22,
+    paddingVertical: 7,
+    paddingLeft: 7,
+    paddingRight: 15,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.1,
@@ -370,25 +415,14 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   thumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: '#9AA0A6',
-    overflow: 'hidden',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: COLOR.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  thumbOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },
-  pillText: { flex: 1, ...typography.bodySmallEmphasis, color: COLOR.textPrimary, letterSpacing: -0.14 },
-  pillButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  arrowRotate: { transform: [{ rotate: '45deg' }] },
+  pillText: { flexShrink: 1, ...typography.bodyEmphasis, color: COLOR.textPrimary, letterSpacing: 0 },
 
   // Floating panel — matches home ContentPanel default snap.
   panel: {
@@ -401,13 +435,20 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 36,
     borderBottomLeftRadius: 48,
     borderBottomRightRadius: 48,
-    overflow: 'hidden',
     paddingTop: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 12,
+  },
+  panelContent: {
+    backgroundColor: COLOR.bg,
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
+    borderBottomLeftRadius: 48,
+    borderBottomRightRadius: 48,
+    overflow: 'hidden',
   },
   dragHandleWrap: {
     height: 24,
@@ -448,7 +489,7 @@ const styles = StyleSheet.create({
   countText: { ...typography.subheader, color: COLOR.primaryStrong },
   deselectText: { ...typography.h3, fontWeight: '400', color: COLOR.textSecondary },
 
-  // List — rows top-aligned; image 56/16 with soft shadow
+  // List — photo-less places become intentional text-first rows.
   list: { flex: 1, paddingHorizontal: 16 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 },
   rowActive: { backgroundColor: '#F2FBF6', borderRadius: 18, paddingHorizontal: 8 },
@@ -457,20 +498,12 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 16,
-    backgroundColor: COLOR.bgSecondary,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.12,
     shadowRadius: 8,
     elevation: 3,
-  },
-  rowThumbClip: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   rowText: { flex: 1, gap: 4 },
   rowName: { ...typography.h3, color: COLOR.textPrimary, letterSpacing: -0.17 },
@@ -546,5 +579,6 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   btnLabelDark: { fontSize: 16, fontWeight: '600', color: COLOR.textPrimary },
-  btnLabelLight: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  askAIContent: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  btnLabelLight: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
 });

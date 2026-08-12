@@ -116,7 +116,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       setIsAnonymous(false);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setError('We couldn\'t sign you in just now. Please check your details and try again.');
     } finally {
       setBusy(false);
     }
@@ -143,7 +143,7 @@ export default function AccountModal({ visible, onClose }: Props) {
         setInfo('Account created. Check your email to confirm the account, then sign in.');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setError('We couldn\'t create your account just now. Please try again in a moment.');
     } finally {
       setBusy(false);
     }
@@ -166,7 +166,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       setInfo('We sent a verification code to your inbox.');
       setResendCooldown(60);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to send verification code.');
+      setError('We couldn\'t send that code just now. Please try again in a moment.');
     } finally {
       setBusy(false);
     }
@@ -187,7 +187,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       setGmailStep('password');
       setInfo('Code verified. Create your password.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Invalid verification code.');
+      setError('That code did not work. Check it and try again.');
     } finally {
       setBusy(false);
     }
@@ -211,7 +211,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       setInfo('Password saved. You are now signed in.');
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save password.');
+      setError('We couldn\'t save your password just now. Please try again in a moment.');
     } finally {
       setBusy(false);
     }
@@ -242,7 +242,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       setInfo('We sent a recovery code to your inbox.');
       setResendCooldown(60);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to send recovery code.');
+      setError('We couldn\'t send that recovery code just now. Please try again in a moment.');
     } finally {
       setBusy(false);
     }
@@ -263,7 +263,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       setGmailRecoveryStep('password');
       setInfo('Code verified. Create a new password.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Invalid recovery code.');
+      setError('That recovery code did not work. Check it and try again.');
     } finally {
       setBusy(false);
     }
@@ -276,7 +276,7 @@ export default function AccountModal({ visible, onClose }: Props) {
       await signOut();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sign out failed.');
+      setError('We couldn\'t sign you out just now. Please try again in a moment.');
     } finally {
       setBusy(false);
     }
@@ -685,8 +685,9 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    borderCurve: 'continuous',
     padding: 24,
     paddingBottom: 40,
     gap: 12,

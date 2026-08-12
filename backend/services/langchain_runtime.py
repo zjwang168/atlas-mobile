@@ -102,36 +102,19 @@ def get_chat_model(provider: ProviderName, model: str, temperature: float = 0.2)
 
 
 class ProgressStreamHandler(AsyncCallbackHandler):
-    """LangChain callback handler that mirrors model progress into `progress`."""
+    """Report model activity without streaming raw model output to clients."""
 
     def __init__(self, request_id: str | None, stage_label: str):
         self.request_id = request_id
         self.stage_label = stage_label
-        self.buffer = ""
 
     async def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
-        if not self.request_id or not token.strip():
-            return
-        self.buffer += token
-        if len(self.buffer) < 80 and token not in "\n。.!?":
-            return
-        from backend.services import progress
-
-        progress.stream_note(
-            self.request_id,
-            self.stage_label,
-            {"chunk": self.buffer[-180:]},
-        )
+        # Model output is usually structured extraction data, not a safe or
+        # comprehensible description of work in progress.
+        return
 
     async def on_llm_end(self, response, **kwargs: Any) -> None:
-        if self.request_id and self.buffer.strip():
-            from backend.services import progress
-
-            progress.stream_note(
-                self.request_id,
-                self.stage_label,
-                {"chunk": self.buffer[-240:], "final": True},
-            )
+        return
 
 
 def add_thought(request_id: str | None, label: str, detail: str | None = None) -> None:

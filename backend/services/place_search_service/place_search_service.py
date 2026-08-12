@@ -28,7 +28,7 @@ ATTRIBUTION = "© Mapbox © OpenStreetMap"
 # Kept short because this backs a typeahead: a keystroke that is going to fail
 # should fail while the user is still typing, not eight seconds later. The next
 # keystroke retries anyway.
-REQUEST_TIMEOUT_S = 3.5
+REQUEST_TIMEOUT_S = 2.5
 
 # Suggestions churn as the user types, so they are held only long enough to
 # absorb repeated keystrokes. A retrieved place is stable POI data and is kept
@@ -65,6 +65,17 @@ def _round_proximity(proximity: Optional[str]) -> str:
     except (TypeError, ValueError):
         return "-"
     return f"{lng:.2f},{lat:.2f}"
+
+
+def _round_bbox(bbox: Optional[str]) -> str:
+    """Bucket a bounding box for the short-lived suggestion cache."""
+    if not bbox:
+        return "-"
+    try:
+        west, south, east, north = (float(part) for part in bbox.split(","))
+    except (TypeError, ValueError):
+        return "-"
+    return f"{west:.2f},{south:.2f},{east:.2f},{north:.2f}"
 
 
 def _first(values: Any) -> Optional[str]:
@@ -180,14 +191,16 @@ async def suggest(
     limit: int = MAX_LIMIT,
     language: str = "en",
     country: Optional[str] = None,
+    types: Optional[str] = None,
+    bbox: Optional[str] = None,
 ) -> list[dict]:
     """Return search candidates for `query`. None of them carry coordinates."""
     normalized = " ".join(query.split()).lower()
     limit = max(1, min(limit, MAX_LIMIT))
 
     cache_key = (
-        f"search:suggest:{language}:{country or '-'}:{limit}:"
-        f"{_round_proximity(proximity)}:{normalized}"
+        f"search:suggest:{language}:{country or '-'}:{types or '-'}:{limit}:"
+        f"{_round_proximity(proximity)}:{_round_bbox(bbox)}:{normalized}"
     )
     cached = search_cache.get(cache_key)
     if cached is not None:
@@ -203,6 +216,10 @@ async def suggest(
         params["proximity"] = proximity
     if country:
         params["country"] = country
+    if types:
+        params["types"] = types
+    if bbox:
+        params["bbox"] = bbox
 
     payload = await _get_json(SUGGEST_URL, params)
     suggestions = [
