@@ -1,5 +1,5 @@
-import { memo, useCallback, type ReactNode } from 'react';
-import { Platform, View } from 'react-native';
+import { memo, useCallback, useState, type ReactNode } from 'react';
+import { Animated, Platform, View } from 'react-native';
 import type { TopMode } from '../../components/top-nav/TopNav';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place, PlaceDetail } from '../../types/place';
@@ -47,6 +47,10 @@ function HomePanel({
   isActive = true,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
+  const [panelHeight, setPanelHeight] = useState<Animated.Value>();
+  const handlePanelHeightAnimatedValue = useCallback((value: Animated.Value) => {
+    setPanelHeight((current) => current === value ? current : value);
+  }, []);
   const handlePlacePress = useCallback((place: Place) => {
     setSelectedPlaceCoordinate([place.longitude, place.latitude]);
     setSelectedPlaceId(place.id);
@@ -100,6 +104,7 @@ function HomePanel({
       defaultSnapHeight={defaultSnapHeight}
       maxHeight={maxHeight}
       onHeightChange={onHeightChange}
+      onPanelHeightAnimatedValue={handlePanelHeightAnimatedValue}
       compactContent={activeTab === TAB_PLAN ? () => <MyPlan compact /> : undefined}
     >
       {({ reportScrollY, snapTo }) => (
@@ -111,6 +116,7 @@ function HomePanel({
             snapTo={snapTo}
             active={isActive}
             onExit={onExitPlan}
+            panelHeight={panelHeight}
           />
         </View>
       )}

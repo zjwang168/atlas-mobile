@@ -58,6 +58,8 @@ type ContentPanelProps = {
   maxHeight?: number;
   /** Reports the live panel height during animations and drags. */
   onHeightChange?: (height: number) => void;
+  /** Exposes the stable panel animation for overlays that must track it without React renders. */
+  onPanelHeightAnimatedValue?: (height: Animated.Value) => void;
   /** Use the translucent white material from the Places home composition. */
   frosted?: boolean;
   /** Keeps the drag hotspot while optionally hiding the visible handle. */
@@ -133,6 +135,7 @@ export default function ContentPanel({
   defaultSnapHeight,
   maxHeight,
   onHeightChange,
+  onPanelHeightAnimatedValue,
   frosted = false,
   showHandle = true,
   allowedSnaps,
@@ -172,6 +175,10 @@ export default function ContentPanel({
   const snapStateRef = useRef<SnapState>(initialResolvedSnap);
 
   const panelHeight = useRef(new Animated.Value(snapHeights.current[initialResolvedSnap])).current;
+
+  useEffect(() => {
+    onPanelHeightAnimatedValue?.(panelHeight);
+  }, [onPanelHeightAnimatedValue, panelHeight]);
 
   // Tracks the actual current panel height (updated via listener) so gesture start
   // height is always correct even when in free-height mode between snap points.

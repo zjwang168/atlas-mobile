@@ -94,6 +94,7 @@ type AtlasBuilderProps = {
   initialBounds?: { ne: [number, number]; sw: [number, number] };
   initialLocation?: string;
   started?: boolean;
+  panelHeight?: Animated.Value;
   autoFocusCreateSearch?: boolean;
   onItemsChange?: (items: DraftPlace[]) => void;
   onFirstPlaceAdded?: () => void;
@@ -339,9 +340,9 @@ function buildAtlasTitle(items: DraftPlace[]) {
   return `${place}: ${slogan}`;
 }
 
-export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
+export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, panelHeight, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
-  const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
+  const { savedPlaces, savedPlacesLoaded, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
   const searchSession = useRef(createSearchSession()).current;
   const queryAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<TextInput>(null);
@@ -882,7 +883,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
 
-    handoffToPlan(city, nearbySaved, deviceLocation, localBounds);
+    const gpsAnchor: DraftPlace = {
+      id: `gps-anchor-${deviceLocation[0].toFixed(5)}-${deviceLocation[1].toFixed(5)}`,
+      name: city,
+      subtitle: 'Current location',
+      longitude: deviceLocation[0],
+      latitude: deviceLocation[1],
+      photo_url: null,
+      city,
+      region: null,
+      country: null,
+      category: 'Current location',
+      source: 'search',
+    };
+    handoffToPlan(city, nearbySaved.length ? nearbySaved : [gpsAnchor], deviceLocation, localBounds);
     await waitForFirstAtlasPaint();
 
     try {
@@ -909,24 +923,27 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [popupOpacity, popupScale]);
 
   useEffect(() => {
-    if ((!started && !atlasId) || initialPlaceSelected.current) return;
+    if ((!started && !atlasId) || initialPlaceSelected.current || !savedPlacesLoaded) return;
     const selectedIds = new Set([
       ...items.map((item) => item.id),
       ...atlasPlaces
         .filter((row) => row.atlas_id === atlasId)
         .map((row) => row.place_id ?? row.external_place_id ?? row.id),
     ]);
-    const candidateSource = started && initialCandidates !== undefined
-      ? initialCandidates
-      : savedPlaces.map((place) => toDraft(place));
-    const candidates = candidateSource.filter((place) => (
+    const areaBounds = mapBounds ?? initialBounds ?? (initialCenter ? boundsFromRadius(initialCenter, FOCUS_SAVED_PLACES_RADIUS_KM) : undefined);
+    const savedCandidates = savedPlaces.map((place) => toDraft(place)).filter((place) => (
       !selectedIds.has(place.id)
-      && isWithinBounds(place, mapBounds ?? initialBounds)
+      && isWithinBounds(place, areaBounds)
     ));
+    const fallbackCandidates = (initialCandidates ?? []).filter((place) => (
+      !selectedIds.has(place.id)
+      && isWithinBounds(place, areaBounds)
+    ));
+    const candidates = savedCandidates.length ? savedCandidates : fallbackCandidates;
     const place = candidates[Math.floor(Math.random() * candidates.length)];
     if (!place) return;
     revealInitialCandidate(place);
-  }, [atlasId, atlasPlaces, initialBounds, initialCandidates, items, mapBounds, revealInitialCandidate, savedPlaces, started]);
+  }, [atlasId, atlasPlaces, initialBounds, initialCandidates, initialCenter, items, mapBounds, revealInitialCandidate, savedPlaces, savedPlacesLoaded, started]);
 
   const resolveResult = useCallback(async (result: SearchResult): Promise<DraftPlace | null> => {
     if (result.kind === 'saved') return toDraft(result.place);
@@ -1455,13 +1472,17 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setPopupBottom(Math.max(0, height + 12));
   }, []);
 
+  const panelTranslateY = useMemo(() => panelHeight
+    ? Animated.multiply(panelHeight, -1)
+    : undefined, [panelHeight]);
+
   const atlasMapOverlay = useMemo(() => <>
     {!savingKind ? mapSearchOverlay : null}
-    {!savingKind && (popupVisible && focused || started || Boolean(atlasId)) ? <View pointerEvents="box-none" style={[styles.mapCandidateLayer, { bottom: popupBottom }]}>
+    {!savingKind && (popupVisible && focused || started || Boolean(atlasId)) ? <Animated.View pointerEvents="box-none" style={[styles.mapCandidateLayer, panelTranslateY ? { bottom: 12, transform: [{ translateY: panelTranslateY }] } : { bottom: popupBottom }]}>
       {popupVisible && focused ? <Animated.View style={{ opacity: popupOpacity, transform: [{ scale: popupScale }] }}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View> : null}
       <View pointerEvents="none" style={styles.mapCandidateGuide}><Text numberOfLines={1} style={styles.mapCandidateGuideText}>Search or tap saved pins to add</Text></View>
-    </View> : null}
-  </>, [addPlace, atlasId, focused, items, mapSearchOverlay, popupBottom, popupOpacity, popupScale, popupVisible, recommendedPlaces.length, savingKind, started]);
+    </Animated.View> : null}
+  </>, [addPlace, atlasId, focused, items, mapSearchOverlay, panelTranslateY, popupBottom, popupOpacity, popupScale, popupVisible, recommendedPlaces.length, savingKind, started]);
 
   useLayoutEffect(() => {
     setAtlasMapState({
@@ -1495,11 +1516,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         scheduleNearbyPrompt(center);
       },
       overlay: atlasMapOverlay,
-      onPanelHeightChange: handlePanelHeightChange,
+      onPanelHeightChange: panelHeight ? undefined : handlePanelHeightChange,
       hideTopSearchButton: true,
       markerPopup: null,
     });
-  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
+  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, panelHeight, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
 
   useEffect(() => () => {
     if (!preserveMapOnUnmountRef.current) setAtlasMapState(null);
