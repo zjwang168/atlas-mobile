@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 
 from backend.services.geocoder import batch_geocode
 from backend.services.llm_client import call_llm, parse_llm_response
 from backend.services.route_planner import plan_route
+
+logger = logging.getLogger("atlas.atlas_ai_discovery")
+
+
+class AtlasDiscoveryUnavailable(ValueError):
+    """The model or geocoder could not produce usable Atlas locations."""
+
+    def __init__(self, reason: str, *, candidate_count: int = 0, provisional_count: int = 0, geocoded_count: int = 0) -> None:
+        super().__init__(reason)
+        self.candidate_count = candidate_count
+        self.provisional_count = provisional_count
+        self.geocoded_count = geocoded_count
 
 # NOTE: All JSON curly braces in this prompt are doubled to avoid Python
 # str.format() treating them as placeholders. The single {query} is the only
@@ -79,7 +92,12 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
 
     content = llm_result.get("content", "{}")
     normalized = parse_llm_response(content)
-    parsed = json.loads(normalized.get("content", "{}"))
+    try:
+        parsed = json.loads(normalized.get("content", "{}"))
+    except json.JSONDecodeError as exc:
+        raise AtlasDiscoveryUnavailable("Atlas AI returned an unreadable place response.") from exc
+    if not isinstance(parsed, dict):
+        raise AtlasDiscoveryUnavailable("Atlas AI returned an invalid place response.")
 
     title = parsed.get("title") or query[:80]
     inferred_region = parsed.get("inferred_region")
@@ -87,6 +105,11 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
     if inferred_region:
         progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     places = parsed.get("places", [])
+    if not isinstance(places, list):
+        raise AtlasDiscoveryUnavailable("Atlas AI returned an invalid place list.")
+    places = [place for place in places if isinstance(place, dict)]
+    if not places:
+        raise AtlasDiscoveryUnavailable("Atlas AI did not find any places for this request.")
 
     def provisional_location(place: dict) -> dict | None:
         try:
@@ -136,7 +159,8 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
         geocode_queries.append(", ".join(part for part in [name, context] if part))
 
     geocoded = await batch_geocode(geocode_queries, city_name=inferred_region)
-    progress.stream_note(request_id, "atlas_ai:geocode", {"detail": f"Resolved {len([g for g in geocoded if g])} candidate places."})
+    geocoded_count = len([geo for geo in geocoded if geo])
+    progress.stream_note(request_id, "atlas_ai:geocode", {"detail": f"Resolved {geocoded_count} candidate places."})
 
     resolved_locations: list[dict] = []
     for place, geo in zip(places, geocoded):
@@ -169,8 +193,16 @@ async def discover_places_from_query(query: str, request_id: str | None = None) 
         })
 
     if not resolved_locations:
-        print(f"[AtlasAIDiscovery] no resolved locations | query={query!r} | candidates={len(places)}")
-        raise ValueError("No valid places with precise addresses could be resolved from this request.")
+        logger.warning(
+            "Atlas discovery produced no usable locations | candidates=%s provisional=%s geocoded=%s",
+            len(places), len(provisional), geocoded_count,
+        )
+        raise AtlasDiscoveryUnavailable(
+            "Atlas AI found places but could not resolve their locations.",
+            candidate_count=len(places),
+            provisional_count=len(provisional),
+            geocoded_count=geocoded_count,
+        )
 
     verified_locations = [location for location in resolved_locations if location.get("geocode_verified")]
     route = plan_route(verified_locations) if verified_locations else {

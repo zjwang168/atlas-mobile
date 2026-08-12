@@ -924,7 +924,7 @@ async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
 
 
 @app.post("/atlas_ai/discover", response_model=ParseResponse,
-          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+          responses={400: {"model": ErrorResponse}, 502: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
     """Use DeepSeek to research exact addresses, then geocode those addresses."""
     query = (req.query or "").strip()
@@ -971,12 +971,24 @@ async def atlas_ai_discover(req: AtlasDiscoverRequest) -> ParseResponse:
         # still share the name-keyed photo cache inside the enrichment service.
         await enrich_response_with_photos(result)
         return ParseResponse(**result)
-    except ValueError as e:
-        progress.fail(req.request_id, str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        from backend.services.atlas_ai_discovery import AtlasDiscoveryUnavailable
+        if isinstance(e, AtlasDiscoveryUnavailable):
+            logging.getLogger("atlas.atlas_ai_discovery").warning(
+                "Atlas discovery unavailable | candidates=%s provisional=%s geocoded=%s reason=%s",
+                e.candidate_count, e.provisional_count, e.geocoded_count, e,
+            )
+            progress.fail(req.request_id, str(e))
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        if isinstance(e, ValueError):
+            # This endpoint's only client-input validation is above. Any
+            # ValueError here comes from model/output processing, not a bad
+            # request payload, so it must not be reported as HTTP 400.
+            logging.getLogger("atlas.atlas_ai_discovery").exception("Atlas discovery processing failed")
+            progress.fail(req.request_id, str(e))
+            raise HTTPException(status_code=502, detail="Atlas AI could not process the place response.") from e
         progress.fail(req.request_id, str(e))
-        raise HTTPException(status_code=500, detail=f"Atlas AI discovery failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Atlas AI discovery failed: {e}") from e
 
 
 def _place_search_http_error(exc: Exception) -> HTTPException:

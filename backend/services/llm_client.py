@@ -10,7 +10,7 @@ Uses the DeepSeek Chat API (compatible with OpenAI SDK format).
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import json
 import re
@@ -372,7 +372,8 @@ def call_llm(
                 normalize_messages(enriched_messages),
                 config={"callbacks": [stream_handler]},
             )
-            content = response.content if isinstance(response, AIMessage) else str(response)
+            raw_content = response.content if isinstance(response, AIMessage) else response
+            content = _extract_message_text(raw_content)
             duration_s = time.time() - call_start
             usage_metadata = getattr(response, "usage_metadata", {}) or {}
             usage_info = {
@@ -426,6 +427,31 @@ def _extract_responses_output_text(data: dict) -> str:
     if parts:
         return "".join(parts)
     return data.get("output_text", "") or data.get("text", "") or ""
+
+
+def _extract_message_text(content: Any) -> str:
+    """Extract visible text from LangChain's string or Responses API blocks.
+
+    With the Responses API enabled, ``AIMessage.content`` is a list that can
+    contain reasoning and web-search blocks before the final ``text`` block.
+    Parsing ``str(content)`` turns valid JSON into a Python representation.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        content = [content]
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") in {"text", "output_text"}:
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        if parts:
+            return "".join(parts)
+    return str(content)
 
 
 def extract_locations(
