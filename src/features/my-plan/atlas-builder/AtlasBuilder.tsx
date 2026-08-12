@@ -94,7 +94,6 @@ type AtlasBuilderProps = {
   initialBounds?: { ne: [number, number]; sw: [number, number] };
   initialLocation?: string;
   started?: boolean;
-  panelHeight?: Animated.Value;
   autoFocusCreateSearch?: boolean;
   onItemsChange?: (items: DraftPlace[]) => void;
   onFirstPlaceAdded?: () => void;
@@ -346,7 +345,7 @@ function buildAtlasTitle(items: DraftPlace[]) {
   return `${place}: ${slogan}`;
 }
 
-export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, panelHeight, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
+export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces, savedPlacesLoaded, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
   const searchSession = useRef(createSearchSession()).current;
@@ -359,7 +358,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [fullResults, setFullResults] = useState<SearchResult[] | null>(null);
   const [items, setItems] = useState<DraftPlace[]>(initialItems ?? []);
   const [focused, setFocused] = useState<DraftPlace | null>(null);
-  const [popupVisible, setPopupVisible] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>(initialCenter ?? CONTINENTAL_US_CENTER);
   const [mapZoom, setMapZoom] = useState(initialBounds ? zoomForBounds(initialBounds, 1.2) : CONTINENTAL_US_ZOOM);
   const [mapBounds, setMapBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>(initialBounds);
@@ -383,9 +381,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [nearbyPromptVisible, setNearbyPromptVisible] = useState(false);
   const [nearbyRecommending, setNearbyRecommending] = useState(false);
   const isCreateAtlasLanding = !atlasId && !started && !handoffStarted;
-  const popupScale = useRef(new Animated.Value(0.92)).current;
-  const popupOpacity = useRef(new Animated.Value(0)).current;
-  const [popupBottom, setPopupBottom] = useState(0);
   const searchAppear = useRef(new Animated.Value(0)).current;
   const localMustSeesOpacity = useRef(new Animated.Value(0)).current;
   const nearbyPromptOpacity = useRef(new Animated.Value(0)).current;
@@ -659,7 +654,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     inputRef.current?.blur();
     setResults([]);
     setFocused(null);
-    setPopupVisible(false);
   }, []);
 
   const handleQueryChange = useCallback((nextQuery: string) => {
@@ -678,21 +672,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
   }, []);
 
-  const focus = useCallback((place: DraftPlace, showPopup = false, bounds?: { ne: [number, number]; sw: [number, number] }) => {
+  const focus = useCallback((place: DraftPlace, bounds?: { ne: [number, number]; sw: [number, number] }) => {
     setFocused(place);
     setMapCenter([place.longitude, place.latitude]);
     setMapBounds(bounds);
     setMapZoom(bounds ? zoomForBounds(bounds) : 15);
-    setPopupVisible(showPopup);
-    if (showPopup) {
-      popupScale.setValue(0.92);
-      popupOpacity.setValue(0);
-      Animated.parallel([
-        Animated.spring(popupScale, { toValue: 1, damping: 15, stiffness: 220, useNativeDriver: true }),
-        Animated.timing(popupOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
-      ]).start();
-    }
-  }, [popupOpacity, popupScale]);
+  }, []);
 
   const openFocusSearch = useCallback(() => {
     setFocusSearchActive(true);
@@ -919,14 +904,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     if (initialPlaceSelected.current) return;
     initialPlaceSelected.current = true;
     setFocused(place);
-    setPopupVisible(true);
-    popupScale.setValue(0.92);
-    popupOpacity.setValue(0);
-    Animated.parallel([
-      Animated.spring(popupScale, { toValue: 1, damping: 15, stiffness: 220, useNativeDriver: true }),
-      Animated.timing(popupOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
-    ]).start();
-  }, [popupOpacity, popupScale]);
+  }, []);
 
   useEffect(() => {
     if ((!started && !atlasId) || initialPlaceSelected.current || !savedPlacesLoaded) return;
@@ -1009,7 +987,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       setMapBounds(bounds);
       setMapZoom(zoomForBounds(bounds, isCountrySearch ? 1.2 : 1.9));
       setFocused(null);
-      setPopupVisible(false);
       setFocusLabel(place.city ?? place.region ?? place.name);
       closeFocusSearch();
     } catch (error) {
@@ -1043,14 +1020,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
   }, [atlasId, savedPlaces]);
 
-  const dismissMapPopup = useCallback(() => {
-    if (!popupVisible) return;
-    Animated.parallel([
-      Animated.timing(popupOpacity, { toValue: 0, duration: 170, useNativeDriver: true }),
-      Animated.timing(popupScale, { toValue: 0.96, duration: 170, useNativeDriver: true }),
-    ]).start(() => setPopupVisible(false));
-  }, [popupOpacity, popupScale, popupVisible]);
-
   const addPlace = useCallback((place: DraftPlace) => {
     if (place.provisional) {
       showDialog({ title: 'Location is still being verified', message: 'This AI recommendation will be available to add when its map position is confirmed.', tone: 'warning' });
@@ -1080,10 +1049,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       });
     }
     setFocused(place);
-    dismissMapPopup();
     setQuery('');
     setResults([]);
-  }, [dismissMapPopup, items, onFirstPlaceAdded, onItemsChange, persistAddedPlace, showDialog]);
+  }, [items, onFirstPlaceAdded, onItemsChange, persistAddedPlace, showDialog]);
 
   const commitItems = useCallback((next: DraftPlace[]) => {
     setItems(next);
@@ -1093,7 +1061,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const handleResultFocus = useCallback(async (result: SearchResult) => {
     try {
       const place = await resolveResult(result);
-      if (place) focus(place, true);
+      if (place) focus(place);
       inputRef.current?.blur();
       setResults([]);
     } catch (error) {
@@ -1216,12 +1184,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     const nextItems = items.filter((item) => item.id !== place.id);
     commitItems(nextItems);
     setFocused((current) => current?.id === place.id ? null : current);
-    dismissMapPopup();
     const persistedRowId = place.joinId
       ?? atlasPlaces.find((row) => row.atlas_id === atlasId && (row.place_id === place.id || row.external_place_id === place.id))?.id;
     if (persistedRowId) removePlaceFromAtlas(persistedRowId).catch((error) => console.warn('[AtlasBuilder] remove failed', error));
     setTimeout(() => setRemovingPlace((current) => current?.id === place.id ? null : current), 520);
-  }, [atlasId, atlasPlaces, commitItems, dismissMapPopup, items]);
+  }, [atlasId, atlasPlaces, commitItems, items]);
 
   const movePlace = useCallback((from: number, delta: number) => {
     const to = Math.max(0, Math.min(items.length - 1, from + delta));
@@ -1476,22 +1443,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     })}</ScrollView></View> : null}
   </Animated.View>, [addingResult, beginAtlasFromSearchResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleQueryChange, handleResultAdd, handleResultFocus, hideLocalMustSees, isCreateAtlasLanding, localMustSeesOpacity, localMustSeesVisible, nearbyPromptOpacity, nearbyPromptVisible, nearbyRecommending, openFullSearch, query, recommendNearby, recommendedPlaces.length, results, searchAppear, searching]);
 
-  const handlePanelHeightChange = useCallback((height: number) => {
-    // Keep layout-position state outside the native animation. Native Animated
-    // only supports opacity and transforms, not `bottom`.
-    setPopupBottom(Math.max(0, height + 12));
-  }, []);
-
-  const panelTranslateY = useMemo(() => panelHeight
-    ? Animated.multiply(panelHeight, -1)
-    : undefined, [panelHeight]);
-
-  const atlasMapOverlay = useMemo(() => <>
-    {!savingKind ? mapSearchOverlay : null}
-    {!savingKind && (popupVisible && focused || started || Boolean(atlasId)) ? <Animated.View pointerEvents="box-none" style={[styles.mapCandidateLayer, panelTranslateY ? { bottom: 12, transform: [{ translateY: panelTranslateY }] } : { bottom: popupBottom }]}>
-      {popupVisible && focused ? <Animated.View style={{ opacity: popupOpacity, transform: [{ scale: popupScale }] }}><View pointerEvents="auto"><MapPinPopup key={focused.id} place={focused} added={items.some((item) => item.id === focused.id)} showTutorial={started || Boolean(atlasId)} onAdd={() => addPlace(focused)} /></View></Animated.View> : null}
-    </Animated.View> : null}
-  </>, [addPlace, atlasId, focused, items, mapSearchOverlay, panelTranslateY, popupBottom, popupOpacity, popupScale, popupVisible, recommendedPlaces.length, savingKind, started]);
+  const atlasMapOverlay = useMemo(() => (
+    !savingKind ? mapSearchOverlay : null
+  ), [mapSearchOverlay, savingKind]);
 
   useLayoutEffect(() => {
     setAtlasMapState({
@@ -1511,11 +1465,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       onMarkerPress: (marker) => {
         const atlasItem = items.find((item) => item.id === marker.id);
         const recommended = recommendedPlaces.find((item) => item.id === marker.id);
-        if (atlasItem) focus(atlasItem, true);
-        else if (recommended) focus(recommended, true);
+        if (atlasItem) focus(atlasItem);
+        else if (recommended) focus(recommended);
         else {
           const saved = savedPlaces.find((item) => item.id === marker.id);
-          if (saved) focus(toDraft(saved), true);
+          if (saved) focus(toDraft(saved));
         }
       },
       onMapPress: hideTransientUI,
@@ -1525,11 +1479,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         scheduleNearbyPrompt(center);
       },
       overlay: atlasMapOverlay,
-      onPanelHeightChange: panelHeight ? undefined : handlePanelHeightChange,
       hideTopSearchButton: true,
       markerPopup: null,
     });
-  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, panelHeight, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
+  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, hideTransientUI, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
 
   useEffect(() => () => {
     if (!preserveMapOnUnmountRef.current) setAtlasMapState(null);
@@ -1543,7 +1496,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text style={styles.heading}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
-          {atlasId || started || handoffStarted ? <Text style={styles.editGuide}>Search or tap saved pins to add</Text> : null}
+          
           {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
         <View style={styles.headerRight}>
@@ -1551,6 +1504,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={closeEditor} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
         </View>
       </View>
+
+      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} onAdd={() => { if (focused) addPlace(focused); }} /> : null}
 
       {!atlasId && items.length === 0 && !started && !handoffStarted ? <View style={styles.createLanding}>
         <View style={styles.simpleStartHero}><TouchableOpacity onPress={simpleStart} style={styles.simpleStartHeroButton}><View style={styles.simpleStartHeroTop}><View style={styles.simpleStartHeroIcon}><Ionicons name="map-outline" size={26} color="#0F766E" /></View><Ionicons name="arrow-forward" size={21} color="#0F766E" /></View><View style={styles.simpleStartHeroCopy}><Text style={styles.simpleStartHeroTitle}>Simple Start</Text><Text style={styles.simpleStartHeroSubtitle}>Build an atlas from scratch</Text></View></TouchableOpacity></View>
@@ -1676,30 +1631,23 @@ function TypewriterCharacter({ character, index, progress }: { character: string
   return <Reanimated.View style={animatedStyle}><Text style={styles.emptyAtlasHint}>{character}</Text></Reanimated.View>;
 }
 
-function AddHintTap({ visible }: { visible: boolean }) {
-  const progress = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (!visible) return;
-    progress.setValue(0);
-    const tap = () => Animated.sequence([
-      Animated.timing(progress, { toValue: 1, duration: 1500, useNativeDriver: true }),
-      Animated.delay(180),
-      Animated.timing(progress, { toValue: 0, duration: 460, useNativeDriver: true }),
-      Animated.delay(220),
-    ]);
-    const animation = Animated.sequence([tap(), tap()]);
-    animation.start();
-    return () => animation.stop();
-  }, [progress, visible]);
-
-  const scale = progress.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] });
-  const opacity = progress.interpolate({ inputRange: [0, 0.35, 0.68, 1], outputRange: [0, 0.58, 0.58, 0] });
-  return <Animated.View pointerEvents="none" style={[styles.addHintTap, { opacity, transform: [{ scale }] }]} />;
-}
-
-function MapPinPopup({ place, added, showTutorial, onAdd }: { place: DraftPlace; added: boolean; showTutorial: boolean; onAdd: () => void }) {
-  return <View style={styles.mapPopup}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.pinName}>{place.name}</Text><Text numberOfLines={1} style={styles.pinAddress}>{place.provisional ? 'Verifying map position...' : place.subtitle}</Text></View>{added ? <View style={styles.addedPill}><Ionicons name="checkmark" size={13} color="#A44D1A" /><Text style={styles.addedPillText}>Added</Text></View> : place.provisional ? <View style={styles.verifyingPill}><ActivityIndicator size="small" color="#7C5CE0" /><Text style={styles.verifyingPillText}>Verifying</Text></View> : <View style={styles.mapPinActionWrap}><AddHintTap visible={showTutorial} /><TouchableOpacity accessibilityLabel="Add to Atlas" onPress={onAdd} style={styles.mapPinAction}><Ionicons name="add" size={19} color="#FFF" /></TouchableOpacity></View>}</View>;
+function AtlasCandidateCard({ place, added, onAdd }: { place: DraftPlace | null; added: boolean; onAdd: () => void }) {
+  const unavailable = Boolean(place?.provisional);
+  return <View style={styles.candidateSlot}>
+    <View style={[styles.candidateCard, !place && styles.candidateCardEmpty]}>
+      {place ? <>
+        <View style={styles.candidateMarker}><Ionicons name="location" size={16} color="#FFFFFF" /></View>
+        <View style={styles.candidateCopy}>
+          <Text numberOfLines={1} style={styles.candidateName}>{place.name}</Text>
+          <Text numberOfLines={1} style={styles.candidateAddress}>{unavailable ? 'Verifying map position...' : place.subtitle || 'Selected location'}</Text>
+        </View>
+        {added ? <View style={styles.candidateAdded}><Ionicons name="checkmark" size={13} color="#167A58" /><Text style={styles.candidateAddedText}>Added</Text></View> : unavailable ? <View style={styles.candidateVerifying}><ActivityIndicator size="small" color="#6D4CC4" /></View> : <TouchableOpacity accessibilityLabel={`Add ${place.name} to Atlas`} onPress={onAdd} style={styles.candidateAdd}><Ionicons name="add" size={21} color="#FFFFFF" /></TouchableOpacity>}
+      </> : <>
+        <View style={styles.candidateMarkerEmpty}><Ionicons name="location-outline" size={16} color="#8A9695" /></View>
+        <View style={styles.candidateCopy}><Text style={styles.candidateEmptyTitle}>Choose a place on the map</Text><Text style={styles.candidateEmptySubtitle}>Its details will appear here</Text></View>
+      </>}
+    </View>
+  </View>;
 }
 
 function TimeInsert({ onPress }: { onPress: () => void }) {
@@ -1822,14 +1770,20 @@ const styles = StyleSheet.create({
   searchSubmit: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   addResultButtonPending: { backgroundColor: '#94A3B8' },
   focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F766E' },
-  mapCandidateLayer: { position: 'absolute', left: 16, right: 16, bottom: '60%', alignItems: 'center', zIndex: 30 },
-  mapPopup: { width: 312, minHeight: 76, borderRadius: 14, backgroundColor: '#FFFFFF', paddingHorizontal: 15, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', shadowColor: '#111827', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
-  mapPopupArrow: { position: 'absolute', top: -7, left: '50%', marginLeft: -7, width: 14, height: 14, backgroundColor: '#FFFFFF', transform: [{ rotate: '45deg' }] },
-  mapPinActionWrap: { width: 34, height: 34, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },
-  mapPinAction: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
-  verifyingPill: { minHeight: 30, paddingHorizontal: 8, borderRadius: 15, backgroundColor: '#F2EEFF', flexDirection: 'row', alignItems: 'center', gap: 5 },
-  verifyingPillText: { color: '#6D4CC4', fontSize: 10, fontWeight: '700' },
-  addHintTap: { position: 'absolute', width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(100, 116, 139, 0.28)' },
+  candidateSlot: { minHeight: 82, paddingHorizontal: 15, paddingTop: 10, paddingBottom: 5 },
+  candidateCard: { minHeight: 67, borderRadius: 8, backgroundColor: '#F1F7F5', borderWidth: StyleSheet.hairlineWidth, borderColor: '#CDE2DB', paddingHorizontal: 11, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  candidateCardEmpty: { backgroundColor: '#F6F8F8', borderColor: '#E2E8E7' },
+  candidateMarker: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  candidateMarkerEmpty: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#E8EFED', alignItems: 'center', justifyContent: 'center' },
+  candidateCopy: { flex: 1, minWidth: 0 },
+  candidateName: { color: '#173A34', fontSize: 14, lineHeight: 18, fontWeight: '700' },
+  candidateAddress: { color: '#638078', fontSize: 11, lineHeight: 15, marginTop: 1 },
+  candidateAdd: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center', shadowColor: '#166534', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  candidateAdded: { minHeight: 30, paddingHorizontal: 9, borderRadius: 15, backgroundColor: '#E2F5E8', flexDirection: 'row', alignItems: 'center', gap: 4 },
+  candidateAddedText: { color: '#167A58', fontSize: 11, fontWeight: '700' },
+  candidateVerifying: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F2EEFF', alignItems: 'center', justifyContent: 'center' },
+  candidateEmptyTitle: { color: '#697A76', fontSize: 13, lineHeight: 17, fontWeight: '700' },
+  candidateEmptySubtitle: { color: '#96A39F', fontSize: 11, lineHeight: 15, marginTop: 1 },
   itemNoteModern: { color: '#475569', fontSize: 12, lineHeight: 17, marginTop: 5, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: '#CBD5E1', fontWeight: '500' },
   fullSearch: { flex: 1, backgroundColor: '#FFFFFF', paddingTop: 54 },
   fullSearchHeader: { minHeight: 56, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E7EB' },

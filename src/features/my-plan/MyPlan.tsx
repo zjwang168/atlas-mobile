@@ -8,7 +8,7 @@ import type { SnapState } from '../../components/content-panel/ContentPanel';
 import AtlasBuilder from './atlas-builder/AtlasBuilder';
 import type { AtlasSavedMapView, DraftPlace } from './atlas-builder/AtlasBuilder';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, TouchableOpacity, View } from 'react-native';
+import { TouchableOpacity, View } from 'react-native';
 
 type MyPlanProps = {
   onAvatarPress?: () => void;
@@ -16,10 +16,9 @@ type MyPlanProps = {
   snapTo?: (state: SnapState, animated?: boolean) => void;
   active?: boolean;
   onExit?: () => void;
-  panelHeight?: Animated.Value;
 };
 
-function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit, panelHeight }: MyPlanProps) {
+function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit }: MyPlanProps) {
   const { atlases, setAtlasMapState, setOverlay, setActiveSidekick, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, userLocation } = useHome();
   const [builderVisible, setBuilderVisible] = useState(false);
   const [buildSeed, setBuildSeed] = useState<DraftPlace[] | null>(null);
@@ -134,7 +133,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   }
 
   if (builderVisible) {
-    return <AtlasBuilder key={builderKey} panelHeight={panelHeight} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} autoFocusCreateSearch={autoFocusCreateSearch} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onReturnToCreateSearch={returnToCreateSearch} onSaved={(atlasId, askAI, mapView) => {
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} autoFocusCreateSearch={autoFocusCreateSearch} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onReturnToCreateSearch={returnToCreateSearch} onSaved={(atlasId, askAI, mapView) => {
       // Saving transitions directly into the completed Atlas. Do not use
       // closeBuilder here: it calls onExit and visibly returns to My Places.
       const completedCamera = mapView ? atlasCameraFromStops(mapView.markers.map((marker) => ({
