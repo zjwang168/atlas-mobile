@@ -14,10 +14,13 @@ import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, withTimeout } from '../local/syncQueue';
 import { supabase } from '../supabase/supabaseClient';
+import { getPlacePhoto } from '../api/apiService';
+import { staticMapThumbnail } from '../place/staticMapThumbnail';
 
 type AtlasPlacesListener = (rows: AtlasPlace[]) => void;
 
 const atlasPlacesListeners = new Set<AtlasPlacesListener>();
+let atlasPhotoBackfillTail: Promise<void> = Promise.resolve();
 
 export function subscribeAtlasPlaces(listener: AtlasPlacesListener): () => void {
   atlasPlacesListeners.add(listener);
@@ -151,6 +154,9 @@ export type AtlasOwnedPlaceInput = {
   city?: string | null;
   region?: string | null;
   country?: string | null;
+  note?: string | null;
+  timeline_day?: number | null;
+  timeline_time?: string | null;
 };
 
 /** Adds a searched place to one Atlas without saving it to My Places. */
@@ -168,16 +174,17 @@ export async function addAtlasOwnedPlaces(atlasId: string, places: AtlasOwnedPla
   const now = new Date().toISOString();
   let sortOrder = existingForAtlas.length;
   const localRows: AtlasPlace[] = toAdd.map((place) => ({
-    id: createLocalId(), atlas_id: atlasId, place_id: null, added_by: null, note: null,
+    id: createLocalId(), atlas_id: atlasId, place_id: null, added_by: null, note: place.note ?? null,
     sort_order: sortOrder++, created_at: now, place_name: place.name, place_subtitle: place.subtitle,
     latitude: place.latitude, longitude: place.longitude, photo_url: place.photo_url ?? null,
     external_place_id: place.external_place_id ?? place.id, city: place.city ?? null,
     region: place.region ?? null, country: place.country ?? null,
+    timeline_day: place.timeline_day ?? null, timeline_time: place.timeline_time ?? null,
   }));
   await updateAtlasPlacesCache(userId, (current) => [...current, ...localRows]);
 
   try {
-    const rows = localRows.map(({ id, added_by, note, created_at, timeline_day, timeline_time, ...row }) => row);
+    const rows = localRows.map(({ id, added_by, created_at, ...row }) => row);
     const { data, error } = await withTimeout(
       supabase.from('atlas_places').insert(rows).select(ATLAS_PLACES_SELECT_COLUMNS),
       'Adding places to atlas timed out',
@@ -197,6 +204,35 @@ export async function addAtlasOwnedPlaces(atlasId: string, places: AtlasOwnedPla
     await enqueueWrite(userId, { kind: 'addAtlasPlaces', atlasId, localRows });
     return localRows;
   }
+}
+
+async function backfillAtlasPlacePhoto(place: AtlasPlace): Promise<void> {
+  if (place.photo_url || !place.place_name || place.latitude == null || place.longitude == null) return;
+
+  const response = await getPlacePhoto(place.place_name);
+  const photoUrl = response.photo_url || staticMapThumbnail(place.latitude, place.longitude);
+  if (!photoUrl) return;
+
+  const userId = await getCurrentUserId();
+  if (!userId) return;
+  await updateAtlasPlacesCache(userId, (current) => current.map((row) => (
+    row.id === place.id ? { ...row, photo_url: photoUrl } : row
+  )));
+
+  if (place.id.startsWith('local-')) return;
+  const { error } = await withTimeout(
+    supabase.from('atlas_places').update({ photo_url: photoUrl }).eq('id', place.id),
+    'Saving Atlas place photo timed out',
+  );
+  if (error) throw new Error(`Failed to save Atlas place photo: ${error.message}`);
+}
+
+/** Enrich an Atlas place after it is saved, one lookup at a time. */
+export function queueAtlasPlacePhotoBackfill(place: AtlasPlace): void {
+  atlasPhotoBackfillTail = atlasPhotoBackfillTail
+    .catch(() => undefined)
+    .then(() => backfillAtlasPlacePhoto(place))
+    .catch((error) => console.warn('[atlasPlacesService] photo backfill failed:', error));
 }
 
 export type AtlasPlacePatch = Pick<AtlasPlace, 'note' | 'sort_order' | 'timeline_day' | 'timeline_time'> & AtlasPlaceSnapshot;

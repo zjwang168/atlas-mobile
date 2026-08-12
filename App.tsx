@@ -18,7 +18,7 @@ import AtlasAIHome from './src/features/atlas-ai/chat-history/AtlasAIHome';
 import AnalyzingScreen from './src/features/import-places/analyzing-screen/AnalyzingScreen';
 import ImportScreen from './src/features/import-places/import-screen/ImportScreen';
 import SaveScreen from './src/features/import-places/save-screen/SaveScreen';
-import { cancelParseRequest, type ParseProgressEvent } from './src/services/api/apiService';
+import { cancelParseRequest, createChatSession, type ParseProgressEvent } from './src/services/api/apiService';
 import {
   discoverFromAtlasQuery,
   formatParsedPlaceSubtitle,
@@ -35,7 +35,6 @@ import {
   type ParseRequestHandler,
   type ParseResult,
 } from './src/services/import/importService';
-import { saveChatHistory } from './src/services/supabase/supabaseClient';
 
 LogBox.ignoreLogs([
   'RCTScrollViewComponentView implements focusItemsInRect',
@@ -76,6 +75,20 @@ type BackgroundImport = {
 const COMPLETED_IMPORT_STORAGE_KEY = 'atlas.completed-import';
 const ANALYSIS_HERO_HOLD_MS = 1000;
 const ANALYSIS_HERO_FALLBACK_MS = 4500;
+
+function chatSourceTypeForImport(meta: ImportMeta | null, input: string): string {
+  if (meta?.mode === 'smart_text' || meta?.mode === 'atlas_discover') return 'smart_text';
+  if (meta?.mode === 'youtube_links') return 'youtube_links';
+  if (meta?.mode === 'tiktok_links') return 'tiktok_links';
+  if (meta?.mode === 'instagram_reels') return 'instagram_reels';
+  if (meta?.mode === 'facebook_reels') return 'facebook_reels';
+  if (meta?.mode === 'web_scrape') return 'any_links';
+  if (meta?.mode === 'image_scan' || meta?.mode === 'find_image_places') return meta.mode;
+  if (/^(https?:\/\/|www\.)\S+$/i.test(input.trim())) {
+    return input.includes('reddit.com') ? 'reddit_links' : 'link';
+  }
+  return 'text';
+}
 
 function importTheme(
   meta: ImportMeta | null,
@@ -337,7 +350,6 @@ function AppContent() {
   const advanceAfterHeroRef = useRef<(() => void) | null>(null);
   const { show: showDialog } = useAppDialog();
   const {
-    chatHistory,
     setParsedPlaces,
     setOverlay: setHomeOverlay,
     addChatHistoryItem,
@@ -540,13 +552,6 @@ function AppContent() {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'any_links',
-          });
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -577,34 +582,6 @@ function AppContent() {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'youtube_links',
-          });
-
-            saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'youtube_links',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'youtube_links',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
-
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -632,32 +609,6 @@ function AppContent() {
           }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'tiktok_links',
-          });
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'tiktok_links',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'tiktok_links',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -685,32 +636,6 @@ function AppContent() {
           }
           const effectiveTitle = importMeta?.title || result.sourceTitle || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'instagram_reels',
-          });
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'instagram_reels',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'instagram_reels',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -738,32 +663,6 @@ function AppContent() {
           }
           const effectiveTitle = result.sourceTitle || importMeta?.title || sourceUrl;
           const adaptedResult: ParseResult = { ...result, sourceTitle: effectiveTitle };
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'facebook_reels',
-          });
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: 'facebook_reels',
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: 'facebook_reels',
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
           completeImport(adaptedResult);
         })
         .catch((err) => {
@@ -791,14 +690,6 @@ function AppContent() {
             completeImport(result);
             return;
           }
-          const effectiveTitle = result.sourceTitle || 'Scanned places from image';
-          addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl: 'image_scan',
-            locationCount: result.places.length,
-            places: result.places,
-            sourceType: 'image_scan',
-          });
           completeImport(result);
         })
         .catch((err) => {
@@ -846,14 +737,6 @@ function AppContent() {
             setOverlay('import');
             return;
           }
-          const effectiveTitle = result.sourceTitle || 'Identified location from image';
-          addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl: 'find_image_places',
-            locationCount: result.places.length,
-            places: result.places,
-            sourceType: 'find_image_places',
-          });
           completeImport(result);
         })
         .catch((err) => {
@@ -877,58 +760,14 @@ function AppContent() {
         : importMeta?.mode === 'atlas_discover'
         ? discoverFromAtlasQuery
         : parseInput;
-    // Which flow produced this chat — stored to conversations.source_type
-    // and shown as a chip in Chat History.
-    const historySourceType =
-      importMeta?.mode === 'smart_text' || importMeta?.mode === 'atlas_discover'
-        ? 'smart_text'
-        : /^(https?:\/\/|www\.)\S+$/i.test(importText.trim())
-        ? importText.includes('reddit.com')
-          ? 'reddit_links'
-          : 'link'
-        : 'text';
-
     runner(importText, handleProgress, handleRequestId)
       .then((result) => {
         if (!cancelled) {
           const effectiveTitle = importMeta?.title || result.sourceTitle || importText;
-          const sourceUrl = importMeta?.sourceUrl || importText;
           const adaptedResult: ParseResult = {
             ...result,
             sourceTitle: effectiveTitle,
           };
-          // 保存解析结果到 ref 和 HomeContext
-
-          // 添加到 Chat History（前端缓存）
-          const tempHistoryId = addChatHistoryItem({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: historySourceType,
-          });
-
-          // 同步到 Supabase（异步，不阻塞 UI）
-          saveChatHistory({
-            title: effectiveTitle,
-            sourceUrl,
-            locationCount: adaptedResult.places.length,
-            places: adaptedResult.places,
-            sourceType: historySourceType,
-          })
-            .then(({ id, createdAt }) => {
-              replaceChatHistoryItem(tempHistoryId, {
-                id,
-                title: effectiveTitle,
-                sourceUrl,
-                locationCount: adaptedResult.places.length,
-                places: adaptedResult.places,
-                createdAt,
-                sourceType: historySourceType,
-              });
-            })
-            .catch((err) => console.warn('[App] saveChatHistory error:', err));
-
           completeImport(adaptedResult);
         }
       })
@@ -957,7 +796,7 @@ function AppContent() {
         resumeActiveImportRef.current = null;
       }
     };
-  }, [overlay, importText, importMeta, setParsedPlaces, addChatHistoryItem, replaceChatHistoryItem, setActiveSidekick]);
+  }, [overlay, importText, importMeta, setParsedPlaces, setActiveSidekick]);
 
   const parseResult = parseResultRef.current;
 
@@ -1010,30 +849,86 @@ function AppContent() {
           }}
 
           onSaveAndAskAI={async (ids) => {
-            try {
-              const selected = parseResult.places.filter((p) => ids.includes(p.id));
-              const { inserted, duplicates } = await savePlaces(selected, {
-                region: parseResult.region,
-                url: importMeta?.sourceUrl || importText,
-              });
+            const selected = parseResult.places.filter((p) => ids.includes(p.id));
+            const deselected = parseResult.places.filter((p) => !ids.includes(p.id));
+            const sourceUrl = importMeta?.sourceUrl || importText;
+            const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
+            const sourceType = chatSourceTypeForImport(importMeta, importText);
 
-              const sourceUrl = importMeta?.sourceUrl || importText;
-              const effectiveTitle = parseResult.sourceTitle || importMeta?.title || sourceUrl;
-              const nextHistoryItem = chatHistory.find(
-                (item) =>
-                  item.sourceUrl === sourceUrl &&
-                  item.title === effectiveTitle &&
-                  item.locationCount === parseResult.places.length,
-              ) ?? null;
+            // The cache is updated optimistically by savePlaces. Let its remote
+            // write continue while the chat session is created so this action
+            // does not hold the results screen open on a slow connection.
+            const savePromise = savePlaces(selected, {
+              region: parseResult.region,
+              url: sourceUrl,
+            });
+            void savePromise.catch((error) => {
+              console.error('Background place save failed:', error);
+              showDialog({
+                title: 'Chat started, but places were not saved',
+                message: 'Please retry saving these places from the chat map or My Places.',
+                tone: 'warning',
+              });
+            });
+            try {
+              const created = await createChatSession({
+                title: effectiveTitle,
+                source_url: sourceUrl,
+                source_type: sourceType,
+                locations: selected.map((place) => ({
+                  name: place.name,
+                  latitude: place.latitude,
+                  longitude: place.longitude,
+                  full_address: place.subtitle,
+                  sentiment: place.sentiment ?? null,
+                  description: place.subtitle,
+                  category: place.type || 'Place',
+                })),
+              });
+              const conversationId = created.conversation_id || created.session_id;
+              const createdAt = new Date().toISOString();
+              const temporaryId = addChatHistoryItem({
+                title: effectiveTitle,
+                sourceUrl,
+                sourceType,
+                locationCount: selected.length,
+                messageCount: 0,
+                places: selected,
+                updatedAt: createdAt,
+              });
+              replaceChatHistoryItem(temporaryId, {
+                id: conversationId,
+                title: effectiveTitle,
+                sourceUrl,
+                sourceType,
+                locationCount: selected.length,
+                messageCount: 0,
+                places: selected,
+                createdAt,
+                updatedAt: createdAt,
+                importWelcome: { deselectedPlaces: deselected },
+              });
               setParsedPlaces(selected);
-              setActiveHistoryItem(nextHistoryItem);
-              if (__DEV__) {
-                console.log(
-                  `Saved ${inserted.length} places before opening AI chat (${duplicates.length} already existed)`,
-                );
-              }
+              setActiveHistoryItem({
+                id: conversationId,
+                title: effectiveTitle,
+                sourceUrl,
+                sourceType,
+                locationCount: selected.length,
+                messageCount: 0,
+                places: selected,
+                createdAt,
+                updatedAt: createdAt,
+                importWelcome: { deselectedPlaces: deselected },
+              });
             } catch (e) {
               console.error('Save before AI chat failed:', e);
+              showDialog({
+                title: 'We couldn\'t start this chat',
+                message: 'Your places were not changed. Please try Save and Ask AI again.',
+                tone: 'warning',
+              });
+              return;
             }
             setSelectedPlaceId(null);
             setSelectedPlaceCoordinate(null);

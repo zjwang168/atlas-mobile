@@ -16,6 +16,7 @@ import { buildPlaceStableKey } from '../import/importService';
 import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, type SavedPlacesIndexEntry, withTimeout } from '../local/syncQueue';
+import { getPlacePhoto } from '../api/apiService';
 import { supabase } from '../supabase/supabaseClient';
 import { staticMapThumbnail } from './staticMapThumbnail';
 
@@ -49,6 +50,7 @@ const PLACE_COLUMNS =
 type SavedPlacesListener = (places: SavedPlace[]) => void;
 
 const savedPlacesListeners = new Set<SavedPlacesListener>();
+let photoBackfillTail: Promise<void> = Promise.resolve();
 
 export function subscribeSavedPlaces(listener: SavedPlacesListener): () => void {
   savedPlacesListeners.add(listener);
@@ -226,6 +228,35 @@ export type SavePlacesResult = {
   duplicates: SavedPlace[];
 };
 
+async function backfillSavedPlacePhoto(place: SavedPlace): Promise<void> {
+  if (place.photo_url) return;
+
+  const response = await getPlacePhoto(place.name);
+  const photoUrl = response.photo_url || staticMapThumbnail(place.latitude, place.longitude);
+  if (!photoUrl) return;
+
+  const userId = await getCurrentUserId();
+  if (!userId) return;
+  await updateSavedPlacesCache(userId, (current) => current.map((row) => (
+    row.id === place.id ? { ...row, photo_url: photoUrl } : row
+  )));
+
+  if (place.id.startsWith('local-')) return;
+  const { error } = await withTimeout(
+    supabase.from('places').update({ photo_url: photoUrl }).eq('id', place.id),
+    'Saving place photo timed out',
+  );
+  if (error) throw new Error(`Failed to save place photo: ${error.message}`);
+}
+
+/** Queue photo enrichment after a place save, one request at a time. */
+export function queueSavedPlacePhotoBackfill(place: SavedPlace): void {
+  photoBackfillTail = photoBackfillTail
+    .catch(() => undefined)
+    .then(() => backfillSavedPlacePhoto(place))
+    .catch((error) => console.warn('[placeService] photo backfill failed:', error));
+}
+
 /**
  * Persist the selected places from an import or a search.
  *
@@ -244,21 +275,11 @@ export async function savePlaces(
   const userId = await getCurrentUserId();
   if (!userId) throw new Error('Cannot save places before auth is ready');
 
-  await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before save failed:', error));
-
-  let existingRows = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces)) ?? [];
-  try {
-    const { data: existing, error: existingError } = await withTimeout(
-      supabase.from('places').select(PLACE_COLUMNS),
-      'Checking existing places timed out',
-    );
-    if (existingError) throw new Error(`Failed to check existing places: ${existingError.message}`);
-    existingRows = ((existing ?? []) as SavedPlace[]).map(withStableKey);
-    await setSavedPlacesCache(userId, existingRows);
-  } catch (error) {
-    if (!isRetryableError(error)) throw error;
-    console.warn('[placeService] existing-place check failed; using local cache:', error);
-  }
+  // Saving must not wait for unrelated queued writes or a full-table remote
+  // read. The local cache is already the My Places read model and gives us
+  // immediate dedupe + optimistic rendering; normal refresh reconciles it.
+  void flushQueue(userId).catch((error) => console.warn('[placeService] background queue flush failed:', error));
+  const existingRows = (await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces)) ?? [];
 
   /** The existing row each input place matched, for the callers' duplicates list. */
   const matchedExisting = () => places

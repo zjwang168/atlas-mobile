@@ -17,6 +17,7 @@ import type { Atlas } from '../../types/atlas';
 import type { AtlasPlace, PlaceDetail } from '../../types/place';
 import { DEFAULT_MAP_CENTER } from '../../utils/constants';
 import type { MapMarker } from '../map/MapboxMap';
+import type { AtlasChatPresentation } from '../../services/api/apiService';
 
 // --- Chat History ---
 
@@ -33,6 +34,13 @@ export type ChatHistoryItem = {
       'reddit_links' | 'any_links' | 'link' | 'text'. Stored in
       conversations.source_type. */
   sourceType?: string;
+  /** Present only while opening a newly saved import. The first assistant
+      message is persisted by the backend; this context is not history data. */
+  importWelcome?: {
+    deselectedPlaces: ParsedPlace[];
+  };
+  /** Present only while opening a chat directly from a saved Atlas edit. */
+  atlasWelcome?: { places: AtlasChatPresentation['places'] };
 };
 
 const MAX_CHAT_HISTORY = 50;

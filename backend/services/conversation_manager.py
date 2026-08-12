@@ -30,6 +30,12 @@ class Session:
     last_summary_at: float = 0.0
     user_memory_summary: str = ""
     pending_place_action: Optional[dict] = None
+    # Ephemeral AI-agent state. It is deliberately kept separate from saved
+    # Atlas data: a model may propose an action, but only the mobile client can
+    # confirm and persist it through the normal domain services.
+    user_location: Optional[tuple[float, float]] = None
+    chat_presentation: Optional[dict] = None
+    pending_chat_action: Optional[dict] = None
 
     # Extracted data
     locations: list = field(default_factory=list)  # GeocodedLocation dicts
@@ -72,6 +78,9 @@ class Session:
             "summary_message_count": self.summary_message_count,
             "user_memory_summary": self.user_memory_summary,
             "pending_place_action": self.pending_place_action,
+            "user_location": self.user_location,
+            "chat_presentation": self.chat_presentation,
+            "pending_chat_action": self.pending_chat_action,
             "removed_noise": self.removed_noise,
             "removed_hierarchy": self.removed_hierarchy,
             "inferred_region": self.inferred_region,

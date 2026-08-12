@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import base64
+import json
 from collections import OrderedDict
 from typing import Optional
 import httpx
@@ -50,6 +51,7 @@ logging.getLogger("atlas").setLevel(logging.INFO)
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.services import progress
@@ -158,6 +160,15 @@ class CreateSessionRequest(BaseModel):
     source_url: Optional[str] = None
     source_type: Optional[str] = None
     locations: Optional[list[dict]] = None
+    user_location: Optional[tuple[float, float]] = None
+
+
+class ImportWelcomeRequest(BaseModel):
+    deselected_locations: list[dict] = []
+
+
+class AtlasWelcomeRequest(BaseModel):
+    locations: list[dict] = []
 
 
 class AtlasDiscoverRequest(BaseModel):
@@ -229,6 +240,16 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     conversation_id: Optional[str] = None
+    # The app supplies the foreground GPS coordinate as [longitude, latitude]
+    # only for this request. It is never inferred by the model.
+    user_location: Optional[tuple[float, float]] = None
+
+
+class ChatActionConfirmationRequest(BaseModel):
+    session_id: str
+    action_id: str
+    accepted: bool
+    outcome: Optional[dict] = None
 
 
 class MemoryRequest(BaseModel):
@@ -240,6 +261,7 @@ class MemoryRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     session_id: str
+    conversation_id: Optional[str] = None
     title: str = ""
     location_count: int = 0
     message_count: int = 0
@@ -786,6 +808,8 @@ async def chat(req: ChatRequest) -> dict:
         session = await _recover_session(req.session_id, req.conversation_id)
         if session:
             req_session_id = session.session_id
+            if req.user_location:
+                session.user_location = req.user_location
         else:
             raise ValueError(f"Session {req.session_id} not found")
 
@@ -805,6 +829,81 @@ async def chat(req: ChatRequest) -> dict:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat error: {e}")
+
+
+@app.post("/chat/stream")
+async def stream_chat(req: ChatRequest) -> StreamingResponse:
+    """Stream display-safe chat deltas as newline-delimited JSON."""
+    try:
+        from backend.langgraph.chat_agent import stream_chat as run_stream_chat
+
+        async def _recover_session(session_key: str, conversation_key: str | None = None):
+            session = conversation_manager.get_session(session_key)
+            if session:
+                return session
+            session = await conversation_manager.load_conversation(session_key)
+            if session:
+                return session
+            if conversation_key:
+                return await conversation_manager.load_conversation(conversation_key)
+            return None
+
+        session = await _recover_session(req.session_id, req.conversation_id)
+        if not session:
+            raise ValueError(f"Session {req.session_id} not found")
+        if req.user_location:
+            session.user_location = req.user_location
+
+        async def event_stream():
+            try:
+                async for event in run_stream_chat(session.session_id, req.message):
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            except ValueError as error:
+                yield json.dumps({"type": "error", "message": str(error)}) + "\n"
+            except Exception:
+                yield json.dumps({"type": "error", "message": "Chat streaming failed. Please try again."}) + "\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/chat/actions/confirm")
+async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
+    """Record a client-confirmed Atlas proposal without performing a write.
+
+    Atlas and place writes stay in the authenticated mobile domain layer. This
+    endpoint only gives the next agent turn an auditable fact about the user's
+    decision, preventing a proposal from being treated as already applied.
+    """
+    session = conversation_manager.get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+    action = session.pending_chat_action
+    # This endpoint only records an audit event; the client has already used
+    # authenticated domain services for the actual write. Accept a replay
+    # after a backend restart instead of reporting a false user-facing error.
+    if action and action.get("action_id") != req.action_id:
+        raise HTTPException(status_code=409, detail="This chat action is no longer pending")
+
+    outcome = req.outcome or {}
+    event = {
+        "action_id": req.action_id,
+        "kind": action.get("kind") if action else "unknown",
+        "accepted": req.accepted,
+        "outcome": outcome,
+    }
+    session.add_message("tool", "chat_action_confirmation", tool_results=event)
+    session.pending_chat_action = None
+    try:
+        await conversation_manager.save_conversation(session.session_id)
+    except Exception:
+        pass
+    return {"status": "recorded", "event": event}
 
 
 @app.post("/atlas_ai/discover", response_model=ParseResponse,
@@ -1041,12 +1140,14 @@ async def create_session(req: CreateSessionRequest) -> SessionResponse:
     session.source_url = req.source_url
     session.source_type = req.source_type
     session.locations = req.locations or []
+    session.user_location = req.user_location
     try:
         await conversation_manager.save_conversation(session.session_id)
     except Exception:
         pass
     return SessionResponse(
         session_id=session.session_id,
+        conversation_id=session.conversation_id,
         title=session.title,
         location_count=len(session.locations),
         message_count=len(session.messages),
@@ -1061,6 +1162,42 @@ async def save_session(session_id: str) -> dict:
         return {"conversation_id": conv_id, "status": "saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{session_id}/import-welcome")
+async def create_import_welcome(session_id: str, req: ImportWelcomeRequest) -> dict:
+    """Create the assistant-first opening message for a saved import chat."""
+    try:
+        session = conversation_manager.get_session(session_id)
+        if not session:
+            session = await conversation_manager.load_conversation(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        from backend.langgraph.chat_agent import generate_import_welcome
+        return await generate_import_welcome(session.session_id, req.deselected_locations)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Import welcome error: {error}") from error
+
+
+@app.post("/sessions/{session_id}/atlas-welcome")
+async def create_atlas_welcome(session_id: str, req: AtlasWelcomeRequest) -> dict:
+    """Create the assistant-first opening message for a saved Atlas edit."""
+    try:
+        session = conversation_manager.get_session(session_id)
+        if not session:
+            session = await conversation_manager.load_conversation(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        if req.locations:
+            session.locations = req.locations
+        from backend.langgraph.chat_agent import generate_atlas_welcome
+        return await generate_atlas_welcome(session.session_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Atlas welcome error: {error}") from error
 
 
 @app.get("/conversations")
@@ -1152,6 +1289,14 @@ async def region_photo(query: str = Query(..., min_length=1, max_length=160)) ->
         "photo_url": unique_photos[0] if unique_photos else None,
         "photo_urls": unique_photos[:3],
     }
+
+
+@app.get("/place_photo")
+async def place_photo(name: str = Query(..., min_length=1, max_length=200)) -> dict:
+    """Return one cached, best-effort thumbnail for a saved place."""
+    place_name = name.strip()
+    photo_url = (await fetch_photos_for_places([place_name]))[0]
+    return {"name": place_name, "photo_url": photo_url}
 
 
 # ---- Find Image Places ----

@@ -1,6 +1,8 @@
 import { GeocodedLocation, ParseResult, PlaceSuggestion } from '@/types/route';
 import { supabase } from '../supabase/supabaseClient';
 import Constants from 'expo-constants';
+import type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
+export type { AtlasTransportMode } from '../atlas/atlasPlaceMetadata';
 
 /**
  * Base URL for the FastAPI backend.
@@ -96,6 +98,7 @@ export type LinkPreview = {
 
 export type AtlasChatResponse = {
   session_id: string;
+  conversation_id?: string | null;
   response: string;
   place_cards?: Array<{
     places: Array<{
@@ -109,7 +112,9 @@ export type AtlasChatResponse = {
     status: 'pending' | 'pin_done' | 'save_done' | 'done';
   }>;
   pending_action?: {
-    action: 'pin_in_chat' | 'save_to_my_places' | 'both';
+    action_id: string;
+    kind: 'save_places' | 'create_atlas';
+    title: string;
     places: Array<{
       name: string;
       latitude: number;
@@ -117,9 +122,20 @@ export type AtlasChatResponse = {
       subtitle?: string;
       category?: string;
       description?: string;
-      confidence?: number;
+      external_id?: string | null;
+      photo_url?: string | null;
+      city?: string | null;
+      region?: string | null;
+      country?: string | null;
+      timeline_day?: number | null;
+      timeline_time?: string | null;
+      transport?: AtlasTransportMode | null;
+      visit_duration_minutes?: number | null;
+      travel_duration_minutes?: number | null;
     }>;
+    planning_note?: string | null;
   } | null;
+  presentation?: AtlasChatPresentation | null;
   locations: Array<{
     name: string;
     latitude: number;
@@ -128,11 +144,63 @@ export type AtlasChatResponse = {
     sentiment?: 'positive' | 'neutral' | 'negative' | null;
     description?: string | null;
     category?: string | null;
+    photo_url?: string | null;
+    city?: string | null;
+    region?: string | null;
+    country?: string | null;
+    timeline_day?: number | null;
+    timeline_time?: string | null;
+    transport?: AtlasTransportMode | null;
   }>;
   route?: unknown;
   tool_calls_used: string[];
   status: string;
   partial: boolean;
+  metrics?: {
+    latency_ms: number;
+    tool_call_count: number;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+  };
+};
+
+export type AtlasChatPresentation = {
+  kind: 'nearby_map' | 'places_map' | 'atlas_draft';
+  title: string;
+  user_location?: { longitude: number; latitude: number };
+  places: Array<{
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+    description?: string | null;
+    category?: string;
+    external_id?: string | null;
+    photo_url?: string | null;
+    city?: string | null;
+    region?: string | null;
+    country?: string | null;
+    timeline_day?: number | null;
+    timeline_time?: string | null;
+    transport?: AtlasTransportMode | null;
+    visit_duration_minutes?: number | null;
+    travel_duration_minutes?: number | null;
+  }>;
+  planning_note?: string | null;
+  route?: {
+    route?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+    distance_km?: number;
+    duration_minutes?: number;
+  } | null;
+};
+
+type AtlasChatStreamEvent =
+  | { type: 'token'; delta: string }
+  | { type: 'complete' } & AtlasChatResponse
+  | { type: 'error'; message: string };
+
+type AtlasChatStreamHandlers = {
+  onToken: (delta: string) => void;
 };
 
 export type AtlasRouteResponse = {
@@ -278,11 +346,16 @@ export type ConversationDetailResponse = {
     created_at?: number;
     updated_at?: number;
   };
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{
+    role: string;
+    content: string;
+    tool_results?: unknown;
+  }>;
 };
 
 export type CreateSessionResponse = {
   session_id: string;
+  conversation_id?: string | null;
   title: string;
   location_count: number;
   message_count: number;
@@ -388,19 +461,141 @@ export async function createChatSession(payload?: {
     description?: string | null;
     category?: string | null;
   }>;
+  user_location?: [number, number];
 }): Promise<CreateSessionResponse> {
   return postJson<CreateSessionResponse>('/sessions', payload ?? {});
+}
+
+/**
+ * Creates the assistant-first opening for an import after the user has saved
+ * their selected places. The excluded places are context only; they are never
+ * attached to the chat map or persisted as active conversation locations.
+ */
+export async function createImportChatWelcome(
+  sessionId: string,
+  deselectedLocations: Array<{
+    name: string;
+    latitude: number;
+    longitude: number;
+    full_address?: string;
+    category?: string;
+  }>,
+): Promise<AtlasChatResponse> {
+  return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/import-welcome`, {
+    deselected_locations: deselectedLocations,
+  });
+}
+
+/** Creates the assistant-first opening message for a saved Atlas edit. */
+export async function createAtlasChatWelcome(
+  sessionId: string,
+  places: AtlasChatPresentation['places'],
+): Promise<AtlasChatResponse> {
+  return postJson<AtlasChatResponse>(`/sessions/${encodeURIComponent(sessionId)}/atlas-welcome`, { locations: places });
 }
 
 export async function chatWithAtlas(
   sessionId: string,
   message: string,
   conversationId?: string | null,
+  userLocation?: [number, number],
 ): Promise<AtlasChatResponse> {
   return postJson<AtlasChatResponse>('/chat', {
     session_id: sessionId,
     message,
     conversation_id: conversationId ?? undefined,
+    user_location: userLocation,
+  });
+}
+
+/**
+ * Read the chat response as NDJSON so native clients can render model output
+ * immediately instead of waiting for the final assistant message.
+ */
+export async function chatWithAtlasStream(
+  sessionId: string,
+  message: string,
+  handlers: AtlasChatStreamHandlers,
+  conversationId?: string | null,
+  userLocation?: [number, number],
+): Promise<AtlasChatResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/x-ndjson',
+        'Content-Type': 'application/json',
+        ...(await authHeaders()),
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+        conversation_id: conversationId ?? undefined,
+        user_location: userLocation,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`API error (${response.status}): ${errorBody || response.statusText}`);
+    }
+    if (!response.body) throw new Error('Streaming is not available on this device.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed: AtlasChatResponse | null = null;
+
+    const consumeLine = (line: string) => {
+      if (!line.trim()) return;
+      const event = JSON.parse(line) as AtlasChatStreamEvent;
+      if (event.type === 'token') {
+        handlers.onToken(event.delta);
+      } else if (event.type === 'complete') {
+        completed = event;
+      } else {
+        throw new Error(event.message);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      lines.forEach(consumeLine);
+      if (done) break;
+    }
+    buffer += decoder.decode();
+    consumeLine(buffer);
+
+    if (!completed) throw new Error('The chat stream ended before completing.');
+    return completed;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`请求超时：后端处理超过 ${REQUEST_TIMEOUT_MS / 1000}s，请稍后再试`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export async function confirmAtlasChatAction(
+  sessionId: string,
+  actionId: string,
+  accepted: boolean,
+  outcome?: Record<string, unknown>,
+): Promise<void> {
+  await postJson('/chat/actions/confirm', {
+    session_id: sessionId,
+    action_id: actionId,
+    accepted,
+    outcome,
   });
 }
 
@@ -495,10 +690,16 @@ export async function cancelParseRequest(requestId: string): Promise<{ cancelled
 }
 
 export type RegionPhotoResponse = { region: string; photo_url: string | null; photo_urls?: string[] };
+export type PlacePhotoResponse = { name: string; photo_url: string | null };
 
 export async function getRegionPhoto(region: string): Promise<RegionPhotoResponse> {
   const query = encodeURIComponent(region.trim());
   return getJson<RegionPhotoResponse>(`/region_photo?query=${query}`);
+}
+
+export async function getPlacePhoto(name: string): Promise<PlacePhotoResponse> {
+  const query = encodeURIComponent(name.trim());
+  return getJson<PlacePhotoResponse>(`/place_photo?name=${query}`);
 }
 
 export type PlaceSuggestResponse = {

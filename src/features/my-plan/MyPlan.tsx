@@ -2,10 +2,11 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
 import { atlasCameraFromStops } from '@/features/map/atlasCamera';
+import { createChatSession } from '@/services/api/apiService';
 import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
 import AtlasBuilder from './atlas-builder/AtlasBuilder';
-import type { DraftPlace } from './atlas-builder/AtlasBuilder';
+import type { AtlasSavedMapView, DraftPlace } from './atlas-builder/AtlasBuilder';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { TouchableOpacity, View } from 'react-native';
 
@@ -18,7 +19,7 @@ type MyPlanProps = {
 };
 
 function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit }: MyPlanProps) {
-  const { setAtlasMapState, setOverlay, setActiveSidekick } = useHome();
+  const { atlases, setAtlasMapState, setOverlay, setActiveSidekick, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, userLocation } = useHome();
   const [builderVisible, setBuilderVisible] = useState(false);
   const [buildSeed, setBuildSeed] = useState<DraftPlace[] | null>(null);
   const [draftItems, setDraftItems] = useState<DraftPlace[]>([]);
@@ -72,6 +73,54 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setBuildBounds(bounds);
     setBuilderVisible(true);
   }, []);
+  const openSavedAtlasChat = useCallback(async (atlasId: string, mapView?: AtlasSavedMapView) => {
+    if (!mapView) return;
+    const title = mapView.title || atlases.find((atlas) => atlas.id === atlasId)?.title || 'New Atlas';
+    const atlasChatPlaces = mapView.places.map((place) => ({
+      name: place.name,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      full_address: place.subtitle,
+      description: place.note || place.subtitle,
+      category: place.category || 'Place',
+      photo_url: place.photo_url || null,
+      city: place.city || null,
+      region: place.region || null,
+      country: place.country || null,
+      timeline_day: place.timeline_day ?? null,
+      timeline_time: place.timeline_time ?? null,
+      transport: place.transport ?? null,
+    }));
+    const places = mapView.places.map((place) => ({
+      id: place.id,
+      name: place.name,
+      subtitle: place.subtitle,
+      type: place.category || 'Place',
+      latitude: place.latitude,
+      longitude: place.longitude,
+      imageUri: place.photo_url || undefined,
+      city: place.city || undefined,
+      country: place.country || undefined,
+    }));
+    try {
+      const created = await createChatSession({
+        title,
+        source_url: `atlas:${atlasId}`,
+        source_type: 'atlas_edit',
+        locations: atlasChatPlaces,
+        user_location: userLocation,
+      });
+      const conversationId = created.conversation_id || created.session_id;
+      const createdAt = new Date().toISOString();
+      const temporaryId = addChatHistoryItem({ title, sourceUrl: `atlas:${atlasId}`, sourceType: 'atlas_edit', locationCount: places.length, messageCount: 0, places, updatedAt: createdAt });
+      const historyItem = { id: conversationId, title, sourceUrl: `atlas:${atlasId}`, sourceType: 'atlas_edit', locationCount: places.length, messageCount: 0, places, createdAt, updatedAt: createdAt, atlasWelcome: { places: atlasChatPlaces } };
+      replaceChatHistoryItem(temporaryId, historyItem);
+      setActiveHistoryItem(historyItem);
+      setActiveSidekick('aiChat');
+    } catch (error) {
+      console.warn('[MyPlan] could not start Atlas AI chat:', error);
+    }
+  }, [addChatHistoryItem, atlases, replaceChatHistoryItem, setActiveHistoryItem, setActiveSidekick, userLocation]);
   useEffect(() => {
     const editorEligible = !compact && active;
     const justBecameEligible = editorEligible && !editorWasEligibleRef.current;
@@ -115,7 +164,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
       setBuildBounds(undefined);
       setBuildLocation(undefined);
       setAutoFocusCreateSearch(false);
-      if (askAI) setActiveSidekick('aiChat');
+      if (askAI) void openSavedAtlasChat(atlasId, mapView);
       else setOverlay({ kind: 'atlasDetail', atlasId });
     }} />;
   }

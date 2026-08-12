@@ -1,9 +1,12 @@
 import unittest
+import os
 from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.langgraph.chat_agent import run_chat
+from backend.langgraph.chat_agent import generate_atlas_welcome, generate_import_welcome, run_chat, stream_chat
+from backend.langchain.runtime import _base_url_for_provider
+from backend.langchain.runtime import get_chat_model
 from backend.services.conversation_manager import conversation_manager
 
 
@@ -14,6 +17,16 @@ class _FakeChatModel:
     async def ainvoke(self, messages):
         self.calls.append(messages)
         return AIMessage(content="A plain answer from the model.")
+
+
+class _StreamingFakeChatModel:
+    def __init__(self):
+        self.calls = []
+
+    async def astream(self, messages):
+        self.calls.append(messages)
+        yield AIMessage(content="A streamed ")
+        yield AIMessage(content="answer.")
 
 
 class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
@@ -35,7 +48,8 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_one_plain_model_call_without_memory_or_tools(self):
         model = _FakeChatModel()
-        with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
+        with patch.dict(os.environ, {"OPENAI_MODEL_MANGO": "atlas-chat-test"}), \
+             patch("backend.langgraph.chat_agent.get_chat_model", return_value=model) as get_model, \
              patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
             result = await run_chat("baseline-test-session", "Which place is attached to this chat?")
 
@@ -50,7 +64,23 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["tool_calls_used"], [])
         self.assertEqual(result["place_cards"], [])
         self.assertIsNone(result["pending_action"])
+        get_model.assert_called_once_with("openai_mango", "atlas-chat-test", temperature=0.3)
         save.assert_awaited_once()
+
+    async def test_mango_chat_uses_its_own_openai_base_url(self):
+        with patch.dict(os.environ, {
+            "OPENAI_BASE_URL": "https://yunwu.ai/v1",
+            "OPENAI_BASE_URL_MANGO": "https://api.openai.com/v1",
+        }):
+            self.assertEqual(_base_url_for_provider("openai_mango"), "https://api.openai.com/v1")
+
+    async def test_mango_chat_enables_responses_web_search(self):
+        with patch("langchain_openai.ChatOpenAI") as chat_openai:
+            get_chat_model("openai_mango", "gpt-5.6-luna")
+
+        kwargs = chat_openai.call_args.kwargs
+        self.assertTrue(kwargs["use_responses_api"])
+        self.assertEqual(kwargs["model_kwargs"], {"tools": [{"type": "web_search"}]})
 
     async def test_chat_does_not_run_memory_maintenance(self):
         model = _FakeChatModel()
@@ -60,6 +90,62 @@ class ChatBaselineTests(unittest.IsolatedAsyncioTestCase):
             await run_chat("baseline-test-session", "Answer normally.")
 
         self.assertEqual(len(model.calls), 1)
+
+    async def test_chat_streams_deltas_and_persists_the_final_answer(self):
+        model = _StreamingFakeChatModel()
+        with patch("backend.langgraph.chat_agent.get_chat_model", return_value=model), \
+             patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
+            events = [event async for event in stream_chat("baseline-test-session", "Stream this response.")]
+
+        self.assertEqual([event["delta"] for event in events if event["type"] == "token"], ["A streamed ", "answer."])
+        self.assertEqual(events[-1]["type"], "complete")
+        self.assertEqual(events[-1]["response"], "A streamed answer.")
+        self.assertEqual(self.session.messages[-1]["content"], "A streamed answer.")
+        self.assertEqual(len(model.calls), 1)
+        save.assert_awaited_once()
+
+    async def test_import_welcome_is_assistant_first_and_maps_only_saved_selection(self):
+        self.session.messages = []
+        self.session.locations = [{
+            "name": "Pike Place Market",
+            "latitude": 47.6097,
+            "longitude": -122.3425,
+            "full_address": "Seattle, WA",
+            "category": "Market",
+        }]
+        with patch("backend.langgraph.chat_agent.get_chat_model") as get_model, \
+            patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
+            result = await generate_import_welcome("baseline-test-session", [{
+                "name": "Kerry Park",
+                "latitude": 47.6295,
+                "longitude": -122.3590,
+            }])
+
+        self.assertEqual(result["presentation"]["kind"], "places_map")
+        self.assertEqual([place["name"] for place in result["presentation"]["places"]], ["Pike Place Market"])
+        self.assertEqual([message["role"] for message in self.session.messages], ["assistant"])
+        self.assertIn("1 unselected place", result["response"])
+        get_model.assert_not_called()
+        save.assert_awaited_once()
+
+    async def test_atlas_welcome_keeps_ordered_orange_pin_presentation(self):
+        self.session.messages = []
+        self.session.title = "Seattle Saturday"
+        self.session.locations = [
+            {"name": "Pike Place Market", "latitude": 47.6097, "longitude": -122.3425, "timeline_day": 1, "timeline_time": "10am"},
+            {"name": "Seattle Art Museum", "latitude": 47.6073, "longitude": -122.3381, "transport": "walk"},
+        ]
+        with patch("backend.langgraph.chat_agent.get_chat_model") as get_model, \
+            patch.object(conversation_manager, "save_conversation", new=AsyncMock(return_value="conversation-id")) as save:
+            result = await generate_atlas_welcome("baseline-test-session")
+
+        self.assertEqual(result["presentation"]["kind"], "atlas_draft")
+        self.assertEqual(result["presentation"]["title"], "Seattle Saturday")
+        self.assertEqual([place["name"] for place in result["presentation"]["places"]], ["Pike Place Market", "Seattle Art Museum"])
+        self.assertEqual([message["role"] for message in self.session.messages], ["assistant"])
+        self.assertIn("Seattle Saturday", result["response"])
+        get_model.assert_not_called()
+        save.assert_awaited_once()
 
 
 if __name__ == "__main__":

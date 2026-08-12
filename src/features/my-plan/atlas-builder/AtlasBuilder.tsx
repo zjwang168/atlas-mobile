@@ -45,6 +45,15 @@ export type DraftPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude
   joinId?: string;
 };
 
+export type AtlasSavedMapView = {
+  title: string;
+  centerCoordinate: [number, number];
+  zoomLevel: number;
+  markers: MapMarker[];
+  routeGeoJSON?: AtlasRouteResponse['route'];
+  places: DraftPlace[];
+};
+
 type TransportMode = AtlasTransportMode;
 
 const TRANSPORT_OPTIONS: Array<{ mode: TransportMode; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
@@ -76,7 +85,7 @@ type FocusArea = {
 
 type AtlasBuilderProps = {
   onClose: () => void;
-  onSaved: (atlasId: string, askAI: boolean, mapView?: { centerCoordinate: [number, number]; zoomLevel: number; markers: MapMarker[]; routeGeoJSON?: AtlasRouteResponse['route'] }) => void;
+  onSaved: (atlasId: string, askAI: boolean, mapView?: AtlasSavedMapView) => void;
   atlasId?: string;
   initialCandidates?: DraftPlace[];
   initialItems?: DraftPlace[];
@@ -1290,6 +1299,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     });
   }, [atlasId, atlasTitle, existingAtlas, showDialog]);
 
+  const closeEditor = useCallback(() => {
+    // AtlasDetail synchronously restores the completed Atlas overview. Keep the
+    // shared map alive during that handoff so Home never installs its GPS camera.
+    preserveMapOnUnmountRef.current = Boolean(atlasId);
+    onClose();
+  }, [atlasId, onClose]);
+
   const persist = useCallback(async (askAI: boolean) => {
     if (!items.length) {
       showDialog({ title: 'Choose a place first', message: 'Select at least one point on the map.', tone: 'warning' });
@@ -1299,9 +1315,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       showDialog({ title: 'Location verification in progress', message: 'Wait for AI map positions to be verified before saving this Atlas.', tone: 'warning' });
       return;
     }
+    const title = atlasId ? (atlasTitle.trim() || existingAtlas?.title || buildAtlasTitle(items)) : buildAtlasTitle(items);
     // Saving must never move the map. The completed Atlas receives this exact
     // editor presentation and keeps it until its close button is used.
     const savedMapView = {
+      title,
       centerCoordinate: viewportCenterRef.current,
       zoomLevel: viewportZoomRef.current,
       markers: items.map((item, index) => ({
@@ -1314,16 +1332,19 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         order: index + 1,
       })),
       routeGeoJSON: route?.route,
+      places: items,
     };
     setSavingKind(askAI ? 'ai' : 'atlas');
     try {
-      const title = atlasId ? (atlasTitle.trim() || existingAtlas?.title || buildAtlasTitle(items)) : buildAtlasTitle(items);
       const atlas = atlasId ? existingAtlas : await createAtlas(title);
       if (!atlas) throw new Error('Atlas could not be created');
       // Hand the completed page its orange pins before cache/network writes.
       // Persistence is local-first, so the map transition never waits for a
       // round trip or for atlas_places subscribers to hydrate the detail.
       preserveMapOnUnmountRef.current = true;
+      // The chat receives the exact editor snapshot, so it does not need to
+      // wait for the remote Atlas writes below. Those writes have already
+      // applied their optimistic local state and continue in the background.
       onSaved(atlas.id, askAI, savedMapView);
       const hasPendingRows = Boolean(atlasId) && items.some((item) => !item.joinId);
       if (atlasId && !hasPendingRows) {
@@ -1490,7 +1511,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </View>
         <View style={styles.headerRight}>
           {atlasId ? <TouchableOpacity accessibilityLabel={`Rename ${atlasTitle || existingAtlas?.title || 'Atlas'}`} onPress={renameAtlas} style={styles.focusAreaButton}><Text numberOfLines={1} style={styles.focusAreaButtonText}>{atlasTitle || existingAtlas?.title || 'Atlas'}</Text><Ionicons name="pencil-outline" size={15} color="#6A6A70" /></TouchableOpacity> : (started && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={onReturnToCreateSearch ? returnToCreateSearch : openFocusSearch} style={styles.focusAreaButton}><Ionicons name="location-sharp" size={23} color="#303033" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null)}
-          <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={onClose} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
+          <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={closeEditor} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
         </View>
       </View>
 

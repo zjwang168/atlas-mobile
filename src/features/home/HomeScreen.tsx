@@ -122,6 +122,7 @@ function HomeScreenContent({
   const [accountOpen, setAccountOpen] = useState(false);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
   const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
+  const [chatMapOpen, setChatMapOpen] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
   const [chatPresented, setChatPresented] = useState(false);
   const [mainSheetPaused, setMainSheetPaused] = useState(false);
@@ -154,11 +155,11 @@ function HomeScreenContent({
     return 12;
   }, [atlasMapState?.zoomLevel, selectedPlaceCoordinate]);
 
-  const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
-  const historyChatRequested = activeSidekick === 'aiChat' && panelVisible;
+  const panelVisible = !chatMapOpen && (overlay.kind === 'none' || overlay.kind === 'search');
+  const historyChatRequested = activeSidekick === 'aiChat' && (panelVisible || chatMapOpen);
   const chatRequested = standaloneChatVisible || historyChatRequested;
-  const chatVisible = chatPresentationVisible;
-  const effectiveTabBarVisible = tabBarVisible && !chatVisible;
+  const chatVisible = chatPresentationVisible && !chatMapOpen;
+  const effectiveTabBarVisible = tabBarVisible && !chatVisible && !chatMapOpen;
   // On iOS the persistent native sheet owns the only visible tab bar.
   // Keeping the React Native copy hidden prevents it flashing through while
   // the sheet hands off to Add, Chat, or Account overlays.
@@ -202,6 +203,7 @@ function HomeScreenContent({
   useEffect(() => {
     if (!chatRequested) {
       setChatPresentationVisible(false);
+      setChatMapOpen(false);
       return;
     }
     // Let the selector travel from My Places to Chat before the chat surface
@@ -504,6 +506,7 @@ function HomeScreenContent({
         }
         places={standaloneChatVisible ? [] : (activeHistoryItem?.places ?? parsedPlaces)}
         onClose={() => {
+          setChatMapOpen(false);
           setStandaloneChatVisible(false);
           setActiveHistoryItem(null);
           setActiveSidekick('none');
@@ -515,6 +518,17 @@ function HomeScreenContent({
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatPresented}
         conversationId={standaloneChatVisible ? null : (activeHistoryItem?.id ?? null)}
+        importWelcome={standaloneChatVisible ? null : (activeHistoryItem?.importWelcome ?? null)}
+        atlasWelcome={standaloneChatVisible ? null : (activeHistoryItem?.atlasWelcome ?? null)}
+        onPresentationMapOpen={() => setChatMapOpen(true)}
+        onPresentationMapReturn={() => setChatMapOpen(false)}
+        onPresentationMapClose={() => {
+          setChatMapOpen(false);
+          setStandaloneChatVisible(false);
+          setActiveHistoryItem(null);
+          setActiveSidekick('none');
+          animateToTab(TAB_PLACES);
+        }}
       />
 
       {/* Native tab bar — fades out when overlay features request it */}

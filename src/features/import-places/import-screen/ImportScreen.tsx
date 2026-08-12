@@ -309,7 +309,6 @@ export default function ImportScreen({
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [clipboardAvailable, setClipboardAvailable] = useState(false);
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [linkPreview, setLinkPreview] = useState<ResolvedLinkPreview | null>(null);
@@ -512,7 +511,7 @@ export default function ImportScreen({
     onSubmit(
       trimmedText,
       selectedMode,
-      selectedMode === 'smartText' ? webSearchEnabled : undefined,
+      selectedMode === 'smartText' ? true : undefined,
     );
   }, [
     imageMode,
@@ -523,7 +522,6 @@ export default function ImportScreen({
     selectedMode,
     showDialog,
     text,
-    webSearchEnabled,
   ]);
 
   const applyPastedLink = useCallback(
@@ -715,32 +713,6 @@ export default function ImportScreen({
               <Reanimated.View entering={FadeInUp.duration(160)} exiting={FadeOutDown.duration(130)}>
                 <LinkPreviewLoading />
               </Reanimated.View>
-            ) : null}
-
-            {isText ? (
-              <Pressable
-                accessibilityRole="switch"
-                accessibilityState={{ checked: webSearchEnabled }}
-                onPress={() => setWebSearchEnabled((enabled) => !enabled)}
-                style={[
-                  styles.webSearchToggle,
-                  webSearchEnabled && styles.webSearchToggleActive,
-                ]}
-              >
-                <Ionicons
-                  name="globe-outline"
-                  size={17}
-                  color={webSearchEnabled ? '#FFFFFF' : COLOR.textPrimary}
-                />
-                <Text
-                  style={[
-                    styles.webSearchToggleText,
-                    webSearchEnabled && styles.webSearchToggleTextActive,
-                  ]}
-                >
-                  Web search {webSearchEnabled ? 'on' : 'off'}
-                </Text>
-              </Pressable>
             ) : null}
 
             {hasMatchingPreview && linkPreview ? (
@@ -1253,26 +1225,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  webSearchToggle: {
-    alignSelf: 'flex-end',
-    minHeight: 36,
-    paddingHorizontal: 13,
-    borderRadius: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: COLOR.surfaceSecondary,
-  },
-  webSearchToggleActive: {
-    backgroundColor: COLOR.primary,
-  },
-  webSearchToggleText: {
-    ...typography.bodySmallEmphasis,
-    color: COLOR.textPrimary,
-  },
-  webSearchToggleTextActive: {
     color: '#FFFFFF',
   },
   linkPreviewCard: {
