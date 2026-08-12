@@ -14,7 +14,6 @@ import { CopyIcon } from 'phosphor-react-native/src/icons/Copy';
 import { DotsThreeIcon } from 'phosphor-react-native/src/icons/DotsThree';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
 import { KeyboardIcon } from 'phosphor-react-native/src/icons/Keyboard';
-import { PencilSimpleLineIcon } from 'phosphor-react-native/src/icons/PencilSimpleLine';
 import { ShareIcon } from 'phosphor-react-native/src/icons/Share';
 import { ThumbsDownIcon } from 'phosphor-react-native/src/icons/ThumbsDown';
 import { ThumbsUpIcon } from 'phosphor-react-native/src/icons/ThumbsUp';
@@ -470,7 +469,6 @@ type AIChatBoxProps = {
   places: ParsedPlace[];
   onClose: () => void;
   onOpenHistory?: () => void;
-  onNewChat?: () => void;
   title?: string;
   visible?: boolean;
   conversationId?: string | null;
@@ -560,7 +558,6 @@ export default function AIChatBox({
   places,
   onClose,
   onOpenHistory,
-  onNewChat,
   title,
   visible = true,
   conversationId = null,
@@ -1860,7 +1857,6 @@ export default function AIChatBox({
   const imageAttachmentDisabled = pending || sessionInitializing || Boolean(attachedImageUri);
   const landingVisible =
     showLanding && !messages.some((message) => message.role === 'user');
-  const hasStartedChat = messages.some((message) => message.role === 'user');
   const headerTop = Math.max(insets.top, 56);
   const headerOverlayHeight = headerTop + 68;
   const composerHeight = attachedImageUri
@@ -2031,18 +2027,8 @@ export default function AIChatBox({
         <View style={[styles.header, { paddingTop: headerTop }]}>
           <View style={styles.headerControls}>
             <GlassIconButton icon={XIcon} label="Close chat" onPress={onClose} />
-            <View
-              style={[
-                styles.headerActionGroupShadow,
-                !hasStartedChat && styles.headerActionGroupShadowSingle,
-              ]}
-            >
-              <View
-                style={[
-                  styles.headerActionGroup,
-                  !hasStartedChat && styles.headerActionGroupSingle,
-                ]}
-              >
+            <View style={styles.headerActionGroupShadowSingle}>
+              <View style={styles.headerActionGroupSingle}>
                 {LIQUID_GLASS_AVAILABLE ? (
                   <GlassView
                     pointerEvents="none"
@@ -2053,25 +2039,6 @@ export default function AIChatBox({
                 ) : (
                   <View pointerEvents="none" style={styles.glassButtonFallback} />
                 )}
-                {hasStartedChat ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Start a new chat"
-                    onPress={onNewChat}
-                    disabled={!onNewChat}
-                    style={({ pressed }) => [
-                      styles.headerActionButton,
-                      pressed && styles.glassButtonPressed,
-                      !onNewChat && styles.glassButtonDisabled,
-                    ]}
-                  >
-                    <PencilSimpleLineIcon
-                      size={24}
-                      weight="regular"
-                      color={COLOR.foreground}
-                    />
-                  </Pressable>
-                ) : null}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Open chat history"

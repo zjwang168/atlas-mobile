@@ -367,7 +367,6 @@ function HomeScreenContent({ onOpenImport, onOpenChatHistory }: HomeScreenProps)
           setActiveSidekick('none');
           onOpenChatHistory?.();
         }}
-        onNewChat={handleNewChat}
         showLanding={standaloneChatVisible}
         title={standaloneChatVisible ? undefined : activeHistoryItem?.title}
         visible={chatVisible}
