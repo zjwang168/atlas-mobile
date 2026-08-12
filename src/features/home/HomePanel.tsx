@@ -25,6 +25,8 @@ type HomePanelProps = {
   onDeleteInitiated?: (place: PlaceDetail) => void;
   placesView?: PlacesView;
   bottomBar?: ReactNode;
+  onExitPlan?: () => void;
+  isActive?: boolean;
 };
 
 function HomePanel({
@@ -41,6 +43,8 @@ function HomePanel({
   onDeleteInitiated,
   placesView = 'all',
   bottomBar,
+  onExitPlan,
+  isActive = true,
 }: HomePanelProps) {
   const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
   const handlePlacePress = useCallback((place: Place) => {
@@ -96,10 +100,13 @@ function HomePanel({
     >
       {({ reportScrollY, snapTo }) => (
         <View style={{ flex: 1 }}>
+          {/* Places go through PlacesBottomSheet on both platforms, so this
+              ContentPanel branch is plan-only. MyPlan's props are Jay's set —
+              it hosts AtlasBuilder now and no longer scrolls a grid itself. */}
           <MyPlan
-            onScroll={reportScrollY}
-            bottomInset={BOTTOM_BAR_CLEARANCE}
             snapTo={snapTo}
+            active={isActive}
+            onExit={onExitPlan}
           />
         </View>
       )}

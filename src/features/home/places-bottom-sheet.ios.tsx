@@ -151,11 +151,7 @@ function PlacesBottomSheet({
             <View style={styles.content}>
               {activeTab === TAB_PLAN ? (
                 <MyPlan
-                  bottomInset={BOTTOM_BAR_CLEARANCE}
                   snapTo={handleSnapTo}
-                  verticalScrollEnabled={
-                    groupSnapState === 'tall' || groupSnapState === 'full'
-                  }
                 />
               ) : (
                 <>

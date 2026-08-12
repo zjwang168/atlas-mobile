@@ -10,6 +10,7 @@ import Constants from 'expo-constants';
 const API_BASE_URL: string =
   (Constants.expoConfig?.extra?.apiBaseUrl as string) ||
   'http://localhost:8000';
+const MAPBOX_ACCESS_TOKEN = (Constants.expoConfig?.extra?.mapboxAccessToken as string) || process.env.MAPBOX_ACCESS_TOKEN || '';
 
 /** Request timeout in milliseconds (180s — backend Pipeline 含 LLM + 批量地理编码需 40-110s) */
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -133,6 +134,61 @@ export type AtlasChatResponse = {
   status: string;
   partial: boolean;
 };
+
+export type AtlasRouteResponse = {
+  route: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  distance_km: number;
+  duration_minutes: number;
+};
+
+/** Road-network route for an ordered Atlas. The backend retains the token. */
+export function requestAtlasRoute(coordinates: Array<[number, number]>): Promise<AtlasRouteResponse> {
+  return postJson<AtlasRouteResponse>('/atlas/route', { coordinates });
+}
+
+type MapboxRouteResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; code?: string };
+type MapboxOptimizationResponse = { routes?: Array<{ geometry: GeoJSON.Geometry; distance: number; duration: number }>; waypoints?: Array<{ waypoint_index: number; trips_index: number; location: [number, number] }>; code?: string };
+
+async function mapboxRequest<T>(path: string): Promise<T> {
+  if (!MAPBOX_ACCESS_TOKEN) throw new Error('Mapbox access token is not configured');
+  const response = await fetch(`https://api.mapbox.com${path}${path.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(MAPBOX_ACCESS_TOKEN)}`);
+  if (!response.ok) throw new Error(`Mapbox request failed (${response.status})`);
+  return response.json() as Promise<T>;
+}
+
+/** Fast, ordered road route used immediately by the Atlas map. */
+export async function requestMapboxDirections(coordinates: Array<[number, number]>): Promise<AtlasRouteResponse> {
+  const encoded = coordinates.map(([longitude, latitude]) => `${longitude},${latitude}`).join(';');
+  const result = await mapboxRequest<MapboxRouteResponse>(`/directions/v5/mapbox/driving/${encoded}?geometries=geojson&overview=full`);
+  const route = result.routes?.[0];
+  if (!route || route.geometry.type !== 'LineString') throw new Error('Mapbox returned no driving route');
+  return { route: { type: 'Feature', properties: {}, geometry: route.geometry }, distance_km: route.distance / 1000, duration_minutes: route.duration / 60000 };
+}
+
+/** Background route-order suggestion. The returned waypoint indexes preserve the optimization result. */
+export async function requestMapboxOptimization(coordinates: Array<[number, number]>): Promise<{ route: AtlasRouteResponse; order: number[] }> {
+  const encoded = coordinates.map(([longitude, latitude]) => `${longitude},${latitude}`).join(';');
+  const result = await mapboxRequest<MapboxOptimizationResponse>(`/optimized-trips/v1/mapbox/driving/${encoded}?geometries=geojson&overview=full&source=any&destination=any&roundtrip=false`);
+  const route = result.routes?.[0];
+  const order = (result.waypoints ?? [])
+    .map((waypoint, originalIndex) => ({ originalIndex, visitIndex: waypoint.waypoint_index }))
+    .sort((a, b) => a.visitIndex - b.visitIndex)
+    .map(({ originalIndex }) => originalIndex);
+  if (!route || route.geometry.type !== 'LineString' || order.length < 2) throw new Error('Mapbox returned no optimized route');
+  return { route: { route: { type: 'Feature', properties: {}, geometry: route.geometry }, distance_km: route.distance / 1000, duration_minutes: route.duration / 60000 }, order };
+}
+
+export async function transcribeAudio(uri: string): Promise<{ text: string }> {
+  const form = new FormData();
+  form.append('file', { uri, name: 'atlas-note.m4a', type: 'audio/m4a' } as unknown as Blob);
+  const response = await fetch(`${API_BASE_URL}/speech/transcribe`, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: form,
+  });
+  if (!response.ok) throw new Error(`Speech API error (${response.status})`);
+  return response.json() as Promise<{ text: string }>;
+}
 
 export type MemoryRecord = {
   id: string;

@@ -3,9 +3,7 @@ import { Animated, Dimensions, Platform, StatusBar, StyleSheet, Text, useWindowD
 
 import TopNav, { type TopMode } from '../../components/top-nav/TopNav';
 import TopBlurFade from '../../components/ui/top-blur-fade';
-import type { ParsedPlace } from '../../services/import/importService';
 import type { SavedPlace } from '../../services/place/placeService';
-import type { PlaceDetail as PlaceDetailRecord } from '../../types/place';
 import MapboxMap, { MapboxMapHandle, MapMarker } from '../map/MapboxMap';
 import { SNAP_HEIGHTS } from '../../components/content-panel/ContentPanel';
 import { useContentPanelSnapGroup } from '../../components/content-panel/ContentPanelSnapProvider';
@@ -29,6 +27,10 @@ import SearchPanel from '../search/SearchPanel';
 import AccountModal from '../auth/AccountModal';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
+const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
+// Atlas panels already occupy a large bottom area. A small additional camera
+// clearance keeps all stops visible without lifting the map focus too high.
+const ATLAS_PANEL_CAMERA_CLEARANCE = 7;
 // Approximate settle time of ContentPanel's snap spring (damping 22 / stiffness
 // 200 / mass 0.9) — see below for why the map's padding recompute waits this long
 // after a group snap change instead of reacting immediately.
@@ -45,15 +47,6 @@ interface HomeScreenProps {
 
 // ---- Helpers ----
 
-const toMapMarkersFromParsed = (places: ParsedPlace[]): MapMarker[] =>
-  places.map((p) => ({
-    id: p.id,
-    latitude: p.latitude,
-    longitude: p.longitude,
-    title: p.name,
-    description: p.subtitle,
-  }));
-
 const toMapMarkersFromSaved = (places: SavedPlace[]): MapMarker[] =>
   places.map((p) => ({
     id: p.id,
@@ -62,17 +55,6 @@ const toMapMarkersFromSaved = (places: SavedPlace[]): MapMarker[] =>
     title: p.name,
     description: p.subtitle,
   }));
-
-// Compute median center from parsed places
-const medianCenter = (places: ParsedPlace[]): [number, number] => {
-  if (places.length === 0) return [-122.3321, 47.6062];
-  const mid = (values: number[]) => {
-    const s = [...values].sort((a, b) => a - b);
-    const m = Math.floor(s.length / 2);
-    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-  };
-  return [mid(places.map((p) => p.longitude)), mid(places.map((p) => p.latitude))];
-};
 
 // ---- Root export — HomeProvider is now in App.tsx ----
 
@@ -116,6 +98,7 @@ function HomeScreenContent({
     locationStatus,
     refreshUserLocation,
     savedPlaces,
+    atlasMapState,
   } = useHome();
   const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
   // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
@@ -146,23 +129,15 @@ function HomeScreenContent({
   const [chatPresented, setChatPresented] = useState(false);
   const [mainSheetPaused, setMainSheetPaused] = useState(false);
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
-  // Their marker-delete animation. `homePanelVisible` is deliberately not
-  // carried over — the native sheet's own visibility model (mainSheetVisible)
-  // replaced it.
-  const [deletingMarker, setDeletingMarker] = useState<MapMarker | null>(null);
   const tabOrder = useMemo(() => [TAB_PLACES, TAB_PLAN, TAB_PROFILE], []);
 
-  // Use parsedPlaces from HomeContext (set by App.tsx after parse)
-  const hasParsedPlaces = parsedPlaces.length > 0;
-
-  // 地图中心：优先使用选中地点坐标，其次使用 parsedPlaces 的中心，
-  // 再次使用用户 GPS 定位，最后用默认值（西雅图）
+  // The home map and My Places list deliberately share one source of truth.
   const mapCenter = useMemo(() => {
+    if (atlasMapState?.centerCoordinate) return atlasMapState.centerCoordinate;
     if (selectedPlaceCoordinate) return selectedPlaceCoordinate;
-    if (hasParsedPlaces) return medianCenter(parsedPlaces);
     if (userLocation) return userLocation;
     return [-122.3321, 47.6062] as [number, number];
-  }, [selectedPlaceCoordinate, hasParsedPlaces, parsedPlaces, userLocation]);
+  }, [atlasMapState?.centerCoordinate, selectedPlaceCoordinate, userLocation]);
 
   // savedPlaces 常驻标记
   const savedMarkers = useMemo(
@@ -170,26 +145,17 @@ function HomeScreenContent({
     [savedPlaces],
   );
 
-  // parsedPlaces 临时标记（有解析结果时显示）
-  const parsedMarkers = useMemo(
-    () => (hasParsedPlaces ? toMapMarkersFromParsed(parsedPlaces) : []),
-    [parsedPlaces, hasParsedPlaces],
-  );
-
-  // 合并标记：有 parsedPlaces 时优先显示解析结果，否则显示已保存地点
   const mapMarkers = useMemo(() => {
-    const markers = hasParsedPlaces ? parsedMarkers : savedMarkers;
-    return deletingMarker && !markers.some((marker) => marker.id === deletingMarker.id)
-      ? [...markers, deletingMarker]
-      : markers;
-  }, [savedMarkers, parsedMarkers, hasParsedPlaces, deletingMarker]);
+    if (atlasMapState) return atlasMapState.markers;
+    return savedMarkers;
+  }, [atlasMapState, savedMarkers]);
 
   // 动态 zoom 级别
   const mapZoom = useMemo(() => {
+    if (atlasMapState?.zoomLevel) return atlasMapState.zoomLevel;
     if (selectedPlaceCoordinate) return 15;
-    if (hasParsedPlaces) return 10;
     return 12;
-  }, [selectedPlaceCoordinate, hasParsedPlaces]);
+  }, [atlasMapState?.zoomLevel, selectedPlaceCoordinate]);
 
   const panelVisible = overlay.kind === 'none' || overlay.kind === 'search';
   const historyChatRequested = activeSidekick === 'aiChat' && panelVisible;
@@ -299,7 +265,6 @@ function HomeScreenContent({
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
   const bottomPanelHeightRef = useRef(settledBottomPanelHeight);
   const mapRef = useRef<MapboxMapHandle>(null);
-  const deletingMarkerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Recomputed whenever the active bottom panel toggles OR its resolved snap state
   // changes, so a discrete camera recenter (e.g. selecting a different marker while
   // the panel is at a non-default snap height) uses padding matching the panel's
@@ -308,10 +273,15 @@ function HomeScreenContent({
   // the map padding smoothly. Per-frame drag tracking stays on the ref-based path below.
   const mapPadding = useMemo(() => ({
     paddingTop: 0,
-    paddingBottom: bottomPanelActive ? settledBottomPanelHeight : 0,
+    // HJ's settledBottomPanelHeight (the native sheet's detents are screen
+    // fractions, not SNAP_HEIGHTS) plus Jay's atlas clearance. Taking either
+    // side alone breaks the other's camera.
+    paddingBottom: bottomPanelActive
+      ? settledBottomPanelHeight + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0)
+      : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [bottomPanelActive, settledBottomPanelHeight]);
+  }), [atlasMapState, bottomPanelActive, settledBottomPanelHeight]);
   useEffect(() => {
     bottomPanelHeightRef.current = mapPadding.paddingBottom;
   }, [mapPadding]);
@@ -319,8 +289,18 @@ function HomeScreenContent({
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
-    mapRef.current?.setPaddingBottom(bottomPanelActive ? height : 0);
-  }, [bottomPanelActive]);
+    mapRef.current?.setPaddingBottom(bottomPanelActive ? height + (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0) : 0);
+    atlasMapState?.onPanelHeightChange?.(height);
+  }, [atlasMapState, bottomPanelActive]);
+
+  // A panel may already be resting when the Atlas overlay mounts, so its
+  // height listener is not guaranteed to emit an initial frame. Seed the
+  // popup position from the current snap height immediately.
+  useEffect(() => {
+    if (!atlasMapState?.onPanelHeightChange || !bottomPanelActive) return;
+    const panelHeight = Math.max(0, mapPadding.paddingBottom - (atlasMapState ? ATLAS_PANEL_CAMERA_CLEARANCE : 0));
+    atlasMapState.onPanelHeightChange(panelHeight);
+  }, [atlasMapState?.onPanelHeightChange, bottomPanelActive, mapPadding.paddingBottom]);
 
   const handleAddPress = useCallback(() => {
     if (!onOpenImport) return;
@@ -359,6 +339,9 @@ function HomeScreenContent({
   const handleTabChange = useCallback((tab: string) => {
     animateToTab(tab);
   }, [animateToTab]);
+  const handlePlanExit = useCallback(() => {
+    animateToTab(TAB_PLACES);
+  }, [animateToTab]);
 
   useEffect(() => {
     animateToTab(activeTab);
@@ -386,20 +369,15 @@ function HomeScreenContent({
     setSelectedPlaceCoordinate([marker.longitude, marker.latitude]);
   }, [setSelectedPlaceId, setSelectedPlaceCoordinate]);
 
-  const handleDeleteInitiated = useCallback((place: PlaceDetailRecord) => {
-    if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
-    setDeletingMarker({ id: place.id, longitude: place.longitude, latitude: place.latitude, title: place.name, description: place.subtitle });
-    deletingMarkerTimerRef.current = setTimeout(() => setDeletingMarker(null), 470);
-  }, []);
-
-  useEffect(() => () => {
-    if (deletingMarkerTimerRef.current) clearTimeout(deletingMarkerTimerRef.current);
-  }, []);
+  const handleHomeMapPress = useCallback(() => {
+    setSelectedPlaceId(null);
+  }, [setSelectedPlaceId]);
 
   useEffect(() => {
-    if (hasParsedPlaces || !selectedPlaceId || savedPlaces.some((place) => place.id === selectedPlaceId)) return;
+    if (!selectedPlaceId || savedPlaces.some((place) => place.id === selectedPlaceId)) return;
     setSelectedPlaceId(null);
-  }, [hasParsedPlaces, savedPlaces, selectedPlaceId, setSelectedPlaceId]);
+    setSelectedPlaceCoordinate(null);
+  }, [savedPlaces, selectedPlaceId, setSelectedPlaceCoordinate, setSelectedPlaceId]);
 
   return (
     <View style={styles.container}>
@@ -411,21 +389,36 @@ function HomeScreenContent({
         markers={mapMarkers}
         centerCoordinate={mapCenter}
         zoomLevel={mapZoom}
+        cameraKey={atlasMapState?.cameraKey}
+        cameraAnimationDurationMs={atlasMapState?.cameraAnimationDurationMs ?? (atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200)}
+        bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
-        selectedMarkerId={selectedPlaceId}
-        deletingMarkerId={deletingMarker?.id}
-        onMarkerPress={handleMarkerPress}
+        routeGeoJSON={atlasMapState?.routeGeoJSON}
+        routeDistanceLabels={atlasMapState?.routeDistanceLabels}
+        selectedMarkerId={atlasMapState?.selectedMarkerId ?? selectedPlaceId}
+        deletingMarkerId={atlasMapState?.deletingMarkerId}
+        onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
+        onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
+        onViewportChanged={atlasMapState?.onViewportChanged}
+        // HJ turned the compass off outright; their `!atlasMapState` would
+        // bring it back on the home map.
+        compassEnabled={false}
+        markerPopup={atlasMapState?.markerPopup}
         showUserLocation={locationStatus === 'granted'}
       />
 
-      <TopBlurFade />
-      <TopNav
-        onNavigatePress={handleLocatePress}
-        topMode={topMode}
-        onTopModeChange={setTopMode}
-        showTopMode={activeTab === TAB_PLACES}
-        onAvatarPress={handleAccountPress}
-      />
+      {!atlasMapState?.hideChrome ? (
+        <>
+          <TopBlurFade />
+          <TopNav
+            onNavigatePress={handleLocatePress}
+            topMode={topMode}
+            onTopModeChange={setTopMode}
+            showTopMode={activeTab === TAB_PLACES && !atlasMapState}
+            onAvatarPress={handleAccountPress}
+          />
+        </>
+      ) : null}
 
       <View style={styles.pagerViewport} pointerEvents="box-none">
         <Animated.View
@@ -446,7 +439,6 @@ function HomeScreenContent({
                 visible={panelVisible && activeTab === TAB_PLACES}
                 onHeightChange={panelVisible && activeTab === TAB_PLACES ? handlePanelHeightChange : undefined}
                 onSearchPress={handleSearchPress}
-                onDeleteInitiated={handleDeleteInitiated}
               />
             ) : null}
           </View>
@@ -457,6 +449,8 @@ function HomeScreenContent({
                 snapGroup={HOME_PANEL_SNAP_GROUP}
                 visible={panelVisible}
                 onHeightChange={panelVisible && activeTab === TAB_PLAN ? handlePanelHeightChange : undefined}
+                onExitPlan={handlePlanExit}
+                isActive={activeTab === TAB_PLAN}
               />
             ) : null}
           </View>
@@ -479,7 +473,8 @@ function HomeScreenContent({
           onHeightChange={mainSheetVisible ? handlePanelHeightChange : undefined}
           onDismissed={handleMainSheetDismissed}
           onSearchPress={handleSearchPress}
-          onDeleteInitiated={handleDeleteInitiated}
+          onExitPlan={handlePlanExit}
+          isActive={activeTab === TAB_PLAN}
           bottomBar={effectiveTabBarVisible ? (
             <HomeTabBar
               activeTab={activeTab}
@@ -491,6 +486,10 @@ function HomeScreenContent({
           ) : undefined}
         />
       ) : null}
+
+      {/* Atlas draws its own controls above the shared map, never inside a
+          panel — see AtlasMapState.overlay. */}
+      {atlasMapState?.overlay}
 
       <AIChatBox
         key={

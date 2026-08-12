@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AppState, Image, InteractionManager } from 'react-native';
+import * as Location from 'expo-location';
 import { useAppDialog } from '../../components/feedback/AppDialog';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
 import { createAtlas as createAtlasService, deleteAtlas as deleteAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
@@ -15,6 +16,7 @@ import { loadChatHistory, supabase } from '../../services/supabase/supabaseClien
 import type { Atlas } from '../../types/atlas';
 import type { AtlasPlace, PlaceDetail } from '../../types/place';
 import { DEFAULT_MAP_CENTER } from '../../utils/constants';
+import type { MapMarker } from '../map/MapboxMap';
 
 // --- Chat History ---
 
@@ -35,6 +37,21 @@ export type ChatHistoryItem = {
 
 const MAX_CHAT_HISTORY = 50;
 
+function hasRenderableCoordinates(place: SavedPlace): boolean {
+  return Number.isFinite(place.latitude)
+    && Number.isFinite(place.longitude)
+    && place.latitude >= -90
+    && place.latitude <= 90
+    && place.longitude >= -180
+    && place.longitude <= 180;
+}
+
+function prefetchPlacePhotos(places: SavedPlace[]) {
+  const urls = [...new Set(places.map((place) => place.photo_url).filter((url): url is string => Boolean(url)))];
+  if (!urls.length) return;
+  void Promise.all(urls.map((url) => Image.prefetch(url).catch(() => false)));
+}
+
 // --- Overlay ---
 
 export type Overlay =
@@ -47,16 +64,50 @@ export type Overlay =
   | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }
   | { kind: 'createPlan' };
 
+/**
+ * Temporary map ownership for the map-first Atlas editor. It deliberately
+ * lives outside the editor panel so there is always one full-screen map.
+ */
+export type AtlasMapState = {
+  markers: MapMarker[];
+  centerCoordinate?: [number, number];
+  zoomLevel?: number;
+  bounds?: { ne: [number, number]; sw: [number, number] };
+  /** Changes when an Atlas view must re-apply identical bounds after reopening. */
+  cameraKey?: string;
+  /** Optional override for the shared map camera transition. */
+  cameraAnimationDurationMs?: number;
+  selectedMarkerId?: string | null;
+  deletingMarkerId?: string | null;
+  routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
+  routeDistanceLabels?: Array<{ id: string; coordinate: [number, number]; text: string }>;
+  onMarkerPress?: (marker: MapMarker) => void;
+  onMapPress?: () => void;
+  onViewportChanged?: (center: [number, number], zoom: number) => void;
+  /** Atlas-only controls live above the one shared map, never in its panel. */
+  overlay?: ReactNode;
+  /** Receives the live Edit atlas panel height so map overlays can follow it. */
+  onPanelHeightChange?: (height: number) => void;
+  markerPopup?: { markerId: string; content: ReactNode } | null;
+  hideTopSearchButton?: boolean;
+  /** Briefly removes app chrome while an Atlas share image is captured. */
+  hideChrome?: boolean;
+} | null;
+
 type HomeContextValue = {
   overlay: Overlay;
   setOverlay: (overlay: Overlay) => void;
   tabBarVisible: boolean;
   setTabBarVisible: (visible: boolean) => void;
+  atlasMapState: AtlasMapState;
+  setAtlasMapState: (state: AtlasMapState) => void;
   /** 最新解析出的地点（来自 import 流程），供 HomeScreen 地图显示 */
   parsedPlaces: ParsedPlace[];
   setParsedPlaces: (places: ParsedPlace[]) => void;
   /** 从 Supabase 已加载的已保存地点 */
   savedPlaces: SavedPlace[];
+  /** Whether the initial saved-place read has completed. */
+  savedPlacesLoaded: boolean;
   setSavedPlaces: (places: SavedPlace[]) => void;
   /** 从 Supabase 刷新已保存地点列表 */
   refreshSavedPlaces: () => Promise<void>;
@@ -124,9 +175,12 @@ const HomeContext = createContext<HomeContextValue>({
   setOverlay: () => {},
   tabBarVisible: true,
   setTabBarVisible: () => {},
+  atlasMapState: null,
+  setAtlasMapState: () => {},
   parsedPlaces: [],
   setParsedPlaces: () => {},
   savedPlaces: [],
+  savedPlacesLoaded: false,
   setSavedPlaces: () => {},
   refreshSavedPlaces: async () => {},
   chatHistory: [],
@@ -179,8 +233,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   const { show: showDialog } = useAppDialog();
   const [overlay, setOverlay] = useState<Overlay>({ kind: 'none' });
   const [tabBarVisible, setTabBarVisible] = useState(true);
+  const [atlasMapState, setAtlasMapState] = useState<AtlasMapState>(null);
   const [parsedPlaces, setParsedPlaces] = useState<ParsedPlace[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  const [savedPlacesLoaded, setSavedPlacesLoaded] = useState(false);
   const [atlases, setAtlases] = useState<Atlas[]>([]);
   const [atlasPlaces, setAtlasPlaces] = useState<AtlasPlace[]>([]);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
@@ -215,12 +271,37 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
 
   const currentUserIdRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!permission.granted) return;
+        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (mounted) setUserLocation([position.coords.longitude, position.coords.latitude]);
+      } catch (error) {
+        console.warn('[HomeContext] GPS location unavailable:', error);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
   const refreshSavedPlaces = useCallback(async () => {
     try {
       const places = await fetchSavedPlaces();
-      setSavedPlaces(places);
+      const validPlaces = places.filter(hasRenderableCoordinates);
+      const invalidPlaces = places.filter((place) => !hasRenderableCoordinates(place));
+      setSavedPlaces(validPlaces);
+      // An entry without legal coordinates cannot have its corresponding map pin.
+      if (invalidPlaces.length) {
+        void Promise.all(invalidPlaces.map((place) => deletePlace(place.id))).catch((error) => {
+          console.warn('[HomeContext] invalid saved-place cleanup failed:', error);
+        });
+      }
     } catch (e) {
       console.error('[HomeContext] refreshSavedPlaces failed:', e);
+    } finally {
+      setSavedPlacesLoaded(true);
     }
   }, []);
 
@@ -285,7 +366,18 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     refreshAtlasPlaces();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => subscribeSavedPlaces(setSavedPlaces), []);
+  useEffect(() => subscribeSavedPlaces((places) => {
+    setSavedPlaces(places.filter(hasRenderableCoordinates));
+    setSavedPlacesLoaded(true);
+  }), []);
+
+  // Prepare the photos used by My Places and the Create an Atlas focus cards
+  // only after the first interactive work has completed.
+  useEffect(() => {
+    if (!savedPlacesLoaded || !savedPlaces.length) return;
+    const task = InteractionManager.runAfterInteractions(() => prefetchPlacePhotos(savedPlaces));
+    return () => task.cancel();
+  }, [savedPlaces, savedPlacesLoaded]);
   useEffect(() => subscribeAtlases(setAtlases), []);
   useEffect(() => subscribeAtlasPlaces(setAtlasPlaces), []);
 
@@ -328,6 +420,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       }
 
       setSavedPlaces([]);
+      setSavedPlacesLoaded(false);
       refreshSavedPlaces();
       setAtlases([]);
       refreshAtlases();
@@ -398,13 +491,20 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteSavedPlace = useCallback(async (id: string) => {
+    // The map derives directly from savedPlaces, so optimistic removal makes
+    // the list row and marker disappear together before persistence completes.
+    setSavedPlaces((prev) => prev.filter((place) => place.id !== id));
+    if (selectedPlaceId === id) {
+      setSelectedPlaceId(null);
+      setSelectedPlaceCoordinate(null);
+    }
     try {
       await deletePlace(id);
-      setSavedPlaces((prev) => prev.filter((p) => p.id !== id));
     } catch (e) {
       console.error('[HomeContext] deleteSavedPlace failed:', e);
+      void refreshSavedPlaces();
     }
-  }, []);
+  }, [refreshSavedPlaces, selectedPlaceId]);
 
   const updateSavedPlaceNote = useCallback(async (id: string, note: string) => {
     try {
@@ -441,9 +541,12 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setOverlay,
       tabBarVisible,
       setTabBarVisible,
+      atlasMapState,
+      setAtlasMapState,
       parsedPlaces,
       setParsedPlaces,
       savedPlaces,
+      savedPlacesLoaded,
       setSavedPlaces,
       refreshSavedPlaces,
       chatHistory,
@@ -480,8 +583,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     [
       overlay,
       tabBarVisible,
+      atlasMapState,
       parsedPlaces,
       savedPlaces,
+      savedPlacesLoaded,
       refreshSavedPlaces,
       chatHistory,
       deletedChatHistory,

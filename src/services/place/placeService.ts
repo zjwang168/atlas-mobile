@@ -428,12 +428,24 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]> {
   const cached = await getCached<SavedPlace[]>(userId, LOCAL_CACHE_KEYS.savedPlaces);
   const fetchFresh = async () => {
     await flushQueue(userId).catch((error) => console.warn('[placeService] queue flush before fetch failed:', error));
-    const { data, error } = await supabase
-      .from('places')
-      .select(PLACE_COLUMNS)
-      .order('created_at', { ascending: false });
-    if (error) throw new Error(`Failed to fetch places: ${error.message}`);
-    const fresh = ((data ?? []) as SavedPlace[]).map(withStableKey);
+    // PostgREST projects commonly cap a single response at 1,000 rows. Read
+    // explicit pages so older saved places are never omitted from the map just
+    // because the user has not scrolled the list yet.
+    const pageSize = 500;
+    const rows: SavedPlace[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from('places')
+        .select(PLACE_COLUMNS)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw new Error(`Failed to fetch places: ${error.message}`);
+      const page = (data ?? []) as SavedPlace[];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+    const fresh = rows.map(withStableKey);
     await setSavedPlacesCache(userId, fresh);
     return fresh;
   };

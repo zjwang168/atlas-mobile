@@ -6,7 +6,7 @@ import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useEffect, useRef, useState } from 'react';
-import { Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
@@ -18,6 +18,7 @@ type PlaceCardProps = {
   onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
+export const PLACE_CARD_ROW_HEIGHT = 140;
 const DELETE_BUTTON_WIDTH = 72;
 const DELETE_BUTTON_SIZE = 48;
 
@@ -48,34 +49,37 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
   const swipeableRef = useRef<SwipeableMethods>(null);
   const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const [locallySelected, setLocallySelected] = useState(false);
-  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { overlay, setOverlay, selectedPlaceId } = useHome();
 
   useEffect(() => {
     if (selectedPlaceId !== item.id) setLocallySelected(false);
   }, [item.id, selectedPlaceId]);
-  useEffect(() => () => {
-    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
-  }, []);
-
   const handleDelete = () => {
     onDeleteInitiated?.(item);
-    deleteTimerRef.current = setTimeout(() => {
-      onDelete(item.id);
-    }, 450);
+    onDelete(item.id);
+  };
+
+  const handleSelect = () => {
+    setLocallySelected(true);
+    onPress?.(item);
   };
 
   const handleOpenDetail = () => {
     setLocallySelected(true);
     onPress?.(item);
-    // A detail-to-detail tap replaces the existing detail instead of nesting
-    // another return target. One close always gets back to My Places.
     const returnTo = overlay.kind === 'placeDetail' ? { kind: 'none' as const } : overlay;
     setOverlay({ kind: 'placeDetail', placeId: item.id, returnTo });
   };
 
+  const handleOpenGoogleMaps = () => {
+    const query = encodeURIComponent([item.name, item.subtitle, item.city, item.region, item.country].filter(Boolean).join(', '));
+    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`).catch((error) => {
+      console.warn('[PlaceCard] could not open Google Maps:', error);
+    });
+  };
+
   return (
-    <View style={{ paddingHorizontal: 16 }}>
+    <View style={styles.rowContainer}>
       <View style={[styles.cardShell, (selected || locallySelected) && styles.cardShellSelected]}>
       <ReanimatedSwipeable
         ref={swipeableRef}
@@ -86,16 +90,24 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
         animationOptions={{ mass: 1, damping: 14, stiffness: 90, overshootClamping: false }}
         renderRightActions={(progress) => <DeleteAction progress={progress} onDelete={handleDelete} />}
       >
-        <TouchableOpacity onPress={handleOpenDetail} activeOpacity={0.7}>
-          <View style={styles.cardContent}>
-            <View style={{ flex: 1 }}>
+        <View style={styles.cardContent}>
+          <View style={styles.cardTextAction}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open details for ${item.name}`}
+              hitSlop={6}
+              onPress={handleOpenDetail}
+              style={({ pressed }) => [styles.titleAction, pressed && styles.titleActionPressed]}
+            >
               <Text
-                className="text-text-primary"
-                style={[typography.h3, { marginBottom: 4 }]}
+                style={[typography.h3, styles.titleLink]}
                 numberOfLines={1}
               >
                 {item.name}
               </Text>
+              <Ionicons name="chevron-forward" size={15} color="#5F6368" />
+            </Pressable>
+            <TouchableOpacity onPress={handleSelect} activeOpacity={0.7} style={styles.summaryAction}>
               <Text
                 numberOfLines={3}
                 className="text-text-secondary"
@@ -103,32 +115,35 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
               >
                 {item.summary}
               </Text>
-            </View>
-            <View
-              style={{
-                width: 86,
-                height: 86,
-                borderRadius: 16,
-                overflow: 'hidden',
-                flexShrink: 0,
-              }}
-            >
-              {/* Their broken-image guard now falls through to the cover
-                  instead of leaving an empty square. */}
-              {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
-                <Image
-                  source={{ uri: item.thumbnailUrl }}
-                  style={{ width: '100%', height: '100%' }}
-                  resizeMode="cover"
-                  onError={() => setFailedImageUri(item.thumbnailUrl)}
-                />
-              ) : (
-                <PlaceCover category={item.category} iconSize={24} />
-              )}
-            </View>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+          {/* Their broken-image guard now falls through to the cover rather
+              than dropping the thumbnail slot entirely. */}
+          <View style={styles.detailImageButton}>
+            {item.thumbnailUrl && failedImageUri !== item.thumbnailUrl ? (
+              <Image
+                source={{ uri: item.thumbnailUrl }}
+                style={styles.detailImage}
+                resizeMode="cover"
+                onError={() => setFailedImageUri(item.thumbnailUrl)}
+              />
+            ) : (
+              <PlaceCover category={item.category} iconSize={24} />
+            )}
+          </View>
+        </View>
       </ReanimatedSwipeable>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${item.name} in Google Maps`}
+        onPress={handleOpenGoogleMaps}
+        activeOpacity={0.72}
+        style={styles.googleMapsButton}
+      >
+        <Ionicons name="map-outline" size={13} color="#34383A" />
+        <Text style={styles.googleMapsText}>Maps</Text>
+        <Ionicons name="open-outline" size={12} color="#34383A" />
+      </TouchableOpacity>
       {item.tags?.length ? (
         <ScrollView
           horizontal
@@ -153,6 +168,10 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
 });
 
 const styles = StyleSheet.create({
+  rowContainer: {
+    height: PLACE_CARD_ROW_HEIGHT,
+    paddingHorizontal: 16,
+  },
   deleteAction: {
     width: DELETE_BUTTON_WIDTH,
     alignItems: 'center',
@@ -171,7 +190,64 @@ const styles = StyleSheet.create({
     gap: 24,
     alignItems: 'flex-start',
   },
+  cardTextAction: {
+    flex: 1,
+  },
+  titleAction: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginBottom: 4,
+  },
+  titleActionPressed: {
+    opacity: 0.56,
+  },
+  titleLink: {
+    color: '#2F3133',
+    flexShrink: 1,
+  },
+  googleMapsButton: {
+    position: 'absolute',
+    right: 8,
+    top: 104,
+    minWidth: 82,
+    height: 27,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D4D9D8',
+    backgroundColor: '#EDF0EF',
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  googleMapsText: {
+    color: '#34383A',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  summaryAction: {
+    minHeight: 60,
+  },
+  detailImageButton: {
+    width: 86,
+    height: 86,
+    borderRadius: 16,
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  detailImage: {
+    width: '100%',
+    height: '100%',
+  },
   cardShell: {
+    position: 'relative',
+    overflow: 'visible',
     borderRadius: 8,
     padding: 8,
     marginHorizontal: -8,
@@ -184,9 +260,11 @@ const styles = StyleSheet.create({
   },
   tagsRow: {
     marginTop: 10,
+    height: 27,
   },
   tagsRowContent: {
     flexDirection: 'row',
     gap: 6,
+    paddingRight: 92,
   },
 });
