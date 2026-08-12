@@ -341,7 +341,7 @@ function buildAtlasTitle(items: DraftPlace[]) {
 
 export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
-  const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation } = useHome();
+  const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
   const searchSession = useRef(createSearchSession()).current;
   const queryAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<TextInput>(null);
@@ -867,31 +867,33 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [discoverDeepSeekPlaces, handoffToPlan, savedPlaces]);
 
   const simpleStart = useCallback(async () => {
-    const localSaved = savedPlaces.filter((place) => isNearCoordinate(place, userLocation));
+    // The context may still hold its startup fallback while the user opens the
+    // editor. Refresh here so Simple Start is anchored and labelled from the
+    // device's actual GPS fix whenever permission is available.
+    const deviceLocation = await refreshUserLocation();
+    const localSaved = savedPlaces.filter((place) => isNearCoordinate(place, deviceLocation));
     const nearbySaved = localSaved.map((place) => toDraft(place));
-    const localBounds = boundsFromRadius(userLocation, FOCUS_SAVED_PLACES_RADIUS_KM);
-    // Enter the Builder immediately. Reverse geocoding and AI discovery should
-    // improve the map after it opens, never block the transition.
-    const initialCity = nearbySaved.find((place) => place.city)?.city ?? 'San Francisco';
-    handoffToPlan(initialCity, nearbySaved, userLocation, localBounds);
-    await waitForFirstAtlasPaint();
-
-    let city = initialCity;
+    const localBounds = boundsFromRadius(deviceLocation, FOCUS_SAVED_PLACES_RADIUS_KM);
+    let city = nearbySaved.find((place) => place.city)?.city ?? 'Your area';
     try {
-      const [address] = await Location.reverseGeocodeAsync({ latitude: userLocation[1], longitude: userLocation[0] });
-      city = address?.city ?? address?.subregion ?? address?.region ?? initialCity;
+      const [address] = await Location.reverseGeocodeAsync({ latitude: deviceLocation[1], longitude: deviceLocation[0] });
+      city = address?.city ?? address?.subregion ?? address?.region ?? city;
     } catch (error) {
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
+
+    handoffToPlan(city, nearbySaved, deviceLocation, localBounds);
+    await waitForFirstAtlasPaint();
+
     try {
-      const recommendations = await discoverDeepSeekPlaces(city, 3, userLocation);
+      const recommendations = await discoverDeepSeekPlaces(city, 3, deviceLocation);
       setRecommendedPlaces(recommendations);
       setFocusLabel(city);
     } catch (error) {
       // Recommendations are optional; search and saved places remain usable.
       console.warn('[AtlasBuilder] simple start recommendations failed', error);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, savedPlaces, userLocation]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, refreshUserLocation, savedPlaces]);
 
   const revealInitialCandidate = useCallback((place: DraftPlace) => {
     if (initialPlaceSelected.current) return;
