@@ -1,10 +1,22 @@
-import type { MapMarker } from '@/features/map/MapboxMap';
-import type { AtlasRouteResponse } from '@/services/api/apiService';
-import type { SavedPlace } from '@/services/place/placeService';
-import type { TransportMode } from './constants';
+import type { MapMarker } from "@/features/map/MapboxMap";
+import type { AtlasRouteResponse } from "@/services/api/apiService";
+import type { SavedPlace } from "@/services/place/placeService";
+import type { TransportMode } from "./constants";
 
-export type DraftPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url' | 'city' | 'region' | 'country' | 'category'> & {
-  source?: 'saved' | 'recommended' | 'search';
+export type DraftPlace = Pick<
+  SavedPlace,
+  | "id"
+  | "name"
+  | "subtitle"
+  | "latitude"
+  | "longitude"
+  | "photo_url"
+  | "city"
+  | "region"
+  | "country"
+  | "category"
+> & {
+  source?: "saved" | "recommended" | "search";
   provisional?: boolean;
   confidence?: number | null;
   aiDescription?: string | null;
@@ -20,17 +32,25 @@ export type AtlasSavedMapView = {
   centerCoordinate: [number, number];
   zoomLevel: number;
   markers: MapMarker[];
-  routeGeoJSON?: AtlasRouteResponse['route'];
+  routeGeoJSON?: AtlasRouteResponse["route"];
   places: DraftPlace[];
 };
 
 export type SearchResult =
-  | { kind: 'saved'; place: SavedPlace }
-  | { kind: 'remote'; externalId: string; name: string; subtitle: string; featureType?: string; coordinate?: [number, number]; bounds?: { ne: [number, number]; sw: [number, number] } };
+  | { kind: "saved"; place: SavedPlace }
+  | {
+      kind: "remote";
+      externalId: string;
+      name: string;
+      subtitle: string;
+      featureType?: string;
+      coordinate?: [number, number];
+      bounds?: { ne: [number, number]; sw: [number, number] };
+    };
 
 export type FocusArea = {
   label: string;
-  scope: 'city' | 'region' | 'country';
+  scope: "city" | "region" | "country";
   coordinate: [number, number];
   count: number;
   photoUrl?: string | null;
@@ -40,7 +60,11 @@ export type FocusArea = {
 
 export type AtlasBuilderProps = {
   onClose: () => void;
-  onSaved: (atlasId: string, askAI: boolean, mapView?: AtlasSavedMapView) => void;
+  onSaved: (
+    atlasId: string,
+    askAI: boolean,
+    mapView?: AtlasSavedMapView,
+  ) => void;
   atlasId?: string;
   initialCandidates?: DraftPlace[];
   initialItems?: DraftPlace[];
@@ -51,6 +75,11 @@ export type AtlasBuilderProps = {
   autoFocusCreateSearch?: boolean;
   onItemsChange?: (items: DraftPlace[]) => void;
   onFirstPlaceAdded?: () => void;
-  onBuildPlan?: (location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => void;
+  onBuildPlan?: (
+    location: string,
+    candidates: DraftPlace[],
+    center?: [number, number],
+    bounds?: { ne: [number, number]; sw: [number, number] },
+  ) => void;
   onReturnToCreateSearch?: () => void;
 };
