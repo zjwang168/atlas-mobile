@@ -2,9 +2,9 @@ import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
 import type { Place, PlaceDetail } from '@/types/place';
-import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
 import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
+import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -39,7 +39,7 @@ const FILTERS: Array<{
 }> = [
   { value: 'all', label: 'All' },
   { value: 'places', label: 'Places', icon: MapPinIcon },
-  { value: 'atlas', label: 'Atlas', icon: ListDashesIcon },
+  { value: 'atlas', label: 'Atlas', icon: MapTrifoldIcon },
 ];
 
 function MyPlaces({
