@@ -371,7 +371,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     queryAbortRef.current = controller;
     // Edit Atlas always searches a fixed 70 km radius around the focus area
     // it opened with. It does not blend in saved-place matches.
-    const editSearchCenter = initialCenter ?? (initialBounds ? centerOfBounds(initialBounds) : mapCenter);
+    // The restored green seed is the authoritative Edit Atlas focus. The
+    // initial bounds can be a stale/wide handoff viewport (and may not even
+    // contain the recovered focus), so never derive POI search from it when a
+    // focused place is available.
+    const editSearchCenter = focused
+      ? [focused.longitude, focused.latitude] as [number, number]
+      : initialCenter ?? (initialBounds ? centerOfBounds(initialBounds) : mapCenter);
     const editFocusBounds = !isCreateAtlasLanding ? boundsFromRadius(editSearchCenter, 70) : undefined;
     const local: SearchResult[] = [];
     setResults([]);
@@ -448,7 +454,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       clearTimeout(timer);
       controller.abort();
     };
-  }, [initialBounds, initialCenter, isCreateAtlasLanding, mapCenter, query]);
+  }, [focused, initialBounds, initialCenter, isCreateAtlasLanding, mapCenter, query]);
 
   const hideTransientUI = useCallback(() => {
     seedUserInteractedRef.current = true;
@@ -1021,8 +1027,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       country: resolved.country ?? null,
       category: resolved.type ?? result.featureType ?? null,
     };
+    const editSearchCenter = focused
+      ? [focused.longitude, focused.latitude] as [number, number]
+      : initialCenter ?? (initialBounds ? centerOfBounds(initialBounds) : mapCenter);
     const editFocusBounds = !isCreateAtlasLanding
-      ? boundsFromRadius(initialCenter ?? (initialBounds ? centerOfBounds(initialBounds) : mapCenter), 70)
+      ? boundsFromRadius(editSearchCenter, 70)
       : undefined;
     if (editFocusBounds && !isWithinBounds(place, editFocusBounds)) {
       console.warn('[AtlasBuilder] rejected out-of-focus search result', {
@@ -1033,7 +1042,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       return null;
     }
     return place;
-  }, [initialBounds, initialCenter, isCreateAtlasLanding, mapCenter]);
+  }, [focused, initialBounds, initialCenter, isCreateAtlasLanding, mapCenter]);
 
   const focusAreaResult = useCallback(async (result: SearchResult) => {
     try {
