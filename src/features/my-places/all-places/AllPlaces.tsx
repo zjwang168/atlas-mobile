@@ -14,7 +14,6 @@ import { CaretRightIcon } from 'phosphor-react-native/src/icons/CaretRight';
 import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
-import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -209,8 +208,6 @@ function sortPlacesByDate(
 
 function CategoryChip({ category }: { category?: string }) {
   const label = category || 'Place';
-  const isRestaurant = /restaurant|food|dining|café|cafe/i.test(label);
-  const Icon = isRestaurant ? ForkKnifeIcon : MapPinIcon;
   return (
     <BlurView
       tint="light"
@@ -218,8 +215,7 @@ function CategoryChip({ category }: { category?: string }) {
       style={styles.chipOuter}
     >
       <View style={styles.chipBg} />
-      <Icon size={13} weight="fill" color="#D4940A" />
-      <Text style={styles.chipLabel}>{label}</Text>
+      <Text numberOfLines={1} style={styles.chipLabel}>{label}</Text>
     </BlurView>
   );
 }
@@ -1201,8 +1197,9 @@ const styles = StyleSheet.create({
   },
   chipOuter: {
     position: 'absolute',
-    top: 8,
+    bottom: 8,
     left: 8,
+    maxWidth: CARD_SIZE - 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
@@ -1222,6 +1219,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.8)',
   },
   chipLabel: {
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: '500',
     lineHeight: 18,
