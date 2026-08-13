@@ -68,6 +68,7 @@ from backend.services.place_image_service.place_image_service import (
 )
 from backend.services import events_service
 from backend.services import place_search_service
+from backend.services import landmark_service
 from backend.services.link_preview import build_link_preview
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
@@ -204,6 +205,22 @@ class LocationItem(BaseModel):
     city: Optional[str] = None
     region: Optional[str] = None
     country: Optional[str] = None
+
+
+class LandmarkSeedItem(BaseModel):
+    id: str
+    name: str
+    longitude: float
+    latitude: float
+    category: str
+    source: str
+    wikidata_id: str
+    distance_km: float
+    importance_score: float
+
+
+class LandmarkSeedResponse(BaseModel):
+    landmarks: list[LandmarkSeedItem]
 
 
 class RouteSegment(BaseModel):
@@ -1121,6 +1138,24 @@ async def speech_transcribe(file: UploadFile = File(...)) -> dict:
     except (httpx.HTTPError, ValueError) as exc:
         logging.getLogger("atlas").exception("Groq speech recognition failed")
         raise HTTPException(status_code=502, detail="Speech recognition failed") from exc
+
+
+@app.get("/landmarks/seed", response_model=LandmarkSeedResponse,
+         responses={422: {"model": ErrorResponse}, 502: {"model": ErrorResponse}})
+async def landmark_seed(
+    lng: float = Query(..., ge=-180, le=180),
+    lat: float = Query(..., ge=-90, le=90),
+    radius_km: float = Query(12, gt=0, le=12),
+) -> LandmarkSeedResponse:
+    """Return structured Wikidata landmarks ranked for a new Atlas seed."""
+    try:
+        landmarks = await landmark_service.landmarks_near(lng, lat, radius_km)
+    except httpx.HTTPError as exc:
+        logging.getLogger("atlas.landmarks").warning(
+            "Wikidata landmark lookup failed for %s,%s: %s", lng, lat, type(exc).__name__
+        )
+        raise HTTPException(status_code=502, detail="Landmark index is unavailable") from exc
+    return LandmarkSeedResponse(landmarks=[LandmarkSeedItem(**item) for item in landmarks])
 
 
 @app.get("/places/search", response_model=PlaceSuggestResponse,

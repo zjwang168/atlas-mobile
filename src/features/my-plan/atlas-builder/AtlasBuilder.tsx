@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { useHomeAtlases, useHomeLocation, useHomeOverlayActions, useHomePlaces } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
-import { discoverAtlasPlaces, geocodeAtlasArea, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
+import { discoverAtlasPlaces, geocodeAtlasArea, getLandmarkSeeds, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
 import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
 import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
@@ -30,7 +30,7 @@ import * as Location from 'expo-location';
 import { AtlasCandidateCard } from './AtlasCandidateCard';
 import { AtlasEmptySkeleton } from './AtlasEmptySkeleton';
 import { AtlasItem } from './AtlasItem';
-import { CONTINENTAL_US_CENTER, CONTINENTAL_US_ZOOM, EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y, FOCUS_SAVED_PLACES_RADIUS_KM, SEARCH_DEBOUNCE_MS, type TransportMode } from './constants';
+import { ATLAS_MINIMUM_BOUNDS_ZOOM, CONTINENTAL_US_CENTER, CONTINENTAL_US_ZOOM, FOCUS_SAVED_PLACES_RADIUS_KM, SEARCH_DEBOUNCE_MS, type TransportMode } from './constants';
 import { FocusAreas } from './FocusAreas';
 import { TimeInsert, TransportInsert } from './InsertControls';
 import { atlasPlaceSnapshot, toDraft, toDraftFromRow } from './mappers';
@@ -79,6 +79,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [fullResults, setFullResults] = useState<SearchResult[] | null>(null);
   const [items, setItems] = useState<DraftPlace[]>(initialItems ?? []);
   const [focused, setFocused] = useState<DraftPlace | null>(null);
+  const seedAttemptedRef = useRef(false);
+  const seedUserInteractedRef = useRef(false);
+  const seedRequestIdRef = useRef(0);
+  const seedAutoSelectedRef = useRef(false);
+  const [seedNoteVisible, setSeedNoteVisible] = useState(false);
+  const seedNoteOpacity = useRef(new Animated.Value(0)).current;
+  const seedNoteShownRef = useRef(false);
+  const seedNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>(initialCenter ?? CONTINENTAL_US_CENTER);
   const [mapZoom, setMapZoom] = useState(initialBounds ? zoomForBounds(initialBounds, 1.2) : CONTINENTAL_US_ZOOM);
   const [mapBounds, setMapBounds] = useState<{ ne: [number, number]; sw: [number, number] } | undefined>(initialBounds);
@@ -417,6 +425,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [isCreateAtlasLanding, mapCenter, query, savedPlaces, searchSession]);
 
   const hideTransientUI = useCallback(() => {
+    seedUserInteractedRef.current = true;
+    if (seedNoteTimerRef.current) clearTimeout(seedNoteTimerRef.current);
+    setSeedNoteVisible(false);
     Keyboard.dismiss();
     inputRef.current?.blur();
     setResults([]);
@@ -440,6 +451,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, []);
 
   const focus = useCallback((place: DraftPlace, bounds?: { ne: [number, number]; sw: [number, number] }) => {
+    seedUserInteractedRef.current = true;
+    if (seedNoteTimerRef.current) clearTimeout(seedNoteTimerRef.current);
+    setSeedNoteVisible(false);
     setFocused(place);
     setMapCenter([place.longitude, place.latitude]);
     setMapBounds(bounds);
@@ -469,25 +483,148 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     onReturnToCreateSearch?.();
   }, [onReturnToCreateSearch]);
 
-  const resolveFirstMapboxPoi = useCallback(async (query: string, proximity: [number, number]): Promise<DraftPlace | null> => {
-    const [first] = await suggestPlaces(query, searchSession, { proximity });
-    if (!first) return null;
-    const resolved = await resolvePlace(first, searchSession);
-    if (!resolved) return null;
-    return {
-      id: first.external_id,
-      name: resolved.name,
-      subtitle: resolved.subtitle,
-      latitude: resolved.latitude,
-      longitude: resolved.longitude,
-      photo_url: resolved.imageUri ?? null,
-      city: resolved.city ?? null,
-      region: null,
-      country: resolved.country ?? null,
-      category: resolved.type ?? first.feature_type ?? null,
-      source: 'search',
+  // Pick one real, saveable POI for an otherwise empty focus area. This is a
+  // fast Mapbox path; AI recommendations can arrive later without blocking the
+  // first Add action.
+  const resolveFocusSeed = useCallback(async (center: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }, areaLabel?: string) => {
+    const startedAt = Date.now();
+    const log = (message: string, data?: Record<string, unknown>) => console.info('[AtlasSeed]', message, { ...data, elapsedMs: Date.now() - startedAt });
+    log('start', { center, bounds });
+    try {
+      const landmarks = await getLandmarkSeeds(center);
+      log('landmark-index', { count: landmarks.length, names: landmarks.slice(0, 5).map((landmark) => landmark.name) });
+      for (const landmark of landmarks) {
+        const candidate: DraftPlace = {
+          id: landmark.id,
+          name: landmark.name,
+          subtitle: areaLabel?.trim() || 'Landmark',
+          longitude: landmark.longitude,
+          latitude: landmark.latitude,
+          photo_url: null,
+          city: areaLabel?.trim() || null,
+          region: null,
+          country: null,
+          category: landmark.category,
+          source: 'search',
+        };
+        const duplicateSaved = savedPlaces.some((saved) => isMarkerOverlap(saved, candidate));
+        const insideBounds = !bounds || isWithinBounds(candidate, bounds);
+        log('landmark-candidate', { name: candidate.name, insideBounds, duplicateSaved, source: landmark.source });
+        if (insideBounds && !duplicateSaved) {
+          log('landmark-selected', { name: candidate.name, source: landmark.source });
+          return candidate;
+        }
+      }
+    } catch (error) {
+      console.warn('[AtlasSeed] landmark-index-failed', { error });
+    }
+    const area = areaLabel?.trim();
+    const queries = [
+      ...(area ? [`${area} attractions`, `${area} landmarks`, `${area} parks`] : []),
+      'attractions',
+      'landmark',
+      'park',
+    ];
+    for (const query of queries) {
+      const suggestions = await suggestPlaces(query, searchSession, { proximity: center, includeNonPoi: true, types: 'poi' });
+      log('suggestions', { query, count: suggestions.length, names: suggestions.slice(0, 5).map((item) => item.name) });
+      for (const suggestion of suggestions) {
+        const resolved = await resolvePlace(suggestion, searchSession);
+        if (!resolved) {
+          log('retrieve-empty', { query, id: suggestion.external_id, name: suggestion.name });
+          continue;
+        }
+        const candidate: DraftPlace = {
+        id: suggestion.external_id,
+        name: resolved.name,
+        subtitle: resolved.subtitle,
+        latitude: resolved.latitude,
+        longitude: resolved.longitude,
+        photo_url: resolved.imageUri ?? null,
+        city: resolved.city ?? null,
+        region: null,
+        country: resolved.country ?? null,
+        category: resolved.type ?? suggestion.feature_type ?? null,
+        source: 'search',
+        };
+        const duplicateSaved = savedPlaces.some((saved) => isMarkerOverlap(saved, candidate));
+        const insideBounds = !bounds || isWithinBounds(candidate, bounds);
+        log('candidate', { query, name: candidate.name, coordinate: [candidate.longitude, candidate.latitude], insideBounds, duplicateSaved });
+        if (insideBounds && !duplicateSaved) {
+          log('selected', { name: candidate.name });
+          return candidate;
+        }
+        log('rejected', { name: candidate.name, reason: !insideBounds ? 'outside-focus-bounds' : 'saved-place-overlap' });
+      }
+    }
+    log('no-candidate');
+    return null;
+  }, [savedPlaces, searchSession]);
+
+  useEffect(() => {
+    // This is only for a newly opened focus area with no saved-pin candidate.
+    // An existing Atlas hydrates its persisted items asynchronously and must
+    // never receive an unsolicited seed point.
+    if (!started || atlasId || seedAttemptedRef.current || initialCandidates?.length || items.length > 0 || focused) return;
+    const center = initialCenter ?? mapCenter;
+    const bounds = mapBounds ?? initialBounds;
+    seedAttemptedRef.current = true;
+    const requestId = ++seedRequestIdRef.current;
+    console.info('[AtlasSeed] effect-start', { requestId, center, bounds, savedPlaces: savedPlaces.length });
+    void resolveFocusSeed(center, bounds, initialLocation).then((place) => {
+      const stale = requestId !== seedRequestIdRef.current;
+      console.info('[AtlasSeed] result', { requestId, place: place?.name ?? null, stale, userInteracted: seedUserInteractedRef.current });
+      if (!stale && !seedUserInteractedRef.current && place) {
+        seedAutoSelectedRef.current = true;
+        setFocused(place);
+      }
+    }).catch((error) => {
+      console.warn('[AtlasSeed] failed', { requestId, error });
+    });
+    return () => {
+      // Do not cancel an in-flight request when savedPlaces finishes hydrating;
+      // that context update recreates resolveFocusSeed and used to strand the
+      // one-shot seed before Mapbox retrieve could run.
     };
-  }, [searchSession]);
+  }, [atlasId, focused, initialBounds, initialCandidates?.length, initialCenter, initialLocation, items.length, mapBounds, mapCenter, resolveFocusSeed, savedPlaces.length, started]);
+
+  useEffect(() => {
+    // Mapbox Search Box can return generic POIs from another region for broad
+    // queries. Once Atlas AI has already supplied visible, verified purple
+    // pins, one of those is a better guaranteed default than leaving the Add
+    // bar empty while Mapbox exhausts its fallback terms.
+    if (!started || atlasId || focused || items.length > 0 || seedUserInteractedRef.current) return;
+    const fallback = recommendedPlaces.find((place) => (
+      place.source === 'recommended'
+      && !place.provisional
+      && !savedPlaces.some((saved) => isMarkerOverlap(saved, place))
+    ));
+    if (!fallback) return;
+    console.info('[AtlasSeed] ai-fallback-selected', {
+      name: fallback.name,
+      coordinate: [fallback.longitude, fallback.latitude],
+    });
+    seedAutoSelectedRef.current = true;
+    setFocused(fallback);
+  }, [atlasId, focused, items.length, recommendedPlaces, savedPlaces, started]);
+
+  useEffect(() => {
+    if (!focused || !seedAutoSelectedRef.current || seedNoteShownRef.current || items.length > 0) return;
+    seedNoteShownRef.current = true;
+    seedNoteTimerRef.current = setTimeout(() => {
+      if (seedUserInteractedRef.current) return;
+      setSeedNoteVisible(true);
+      seedNoteOpacity.setValue(0);
+      Animated.timing(seedNoteOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+      seedNoteTimerRef.current = setTimeout(() => {
+        Animated.timing(seedNoteOpacity, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => setSeedNoteVisible(false));
+        seedNoteTimerRef.current = null;
+      }, 3000);
+    }, 2000);
+    return () => {
+      if (seedNoteTimerRef.current) clearTimeout(seedNoteTimerRef.current);
+    };
+  }, [focused, items.length, seedNoteOpacity]);
 
   const discoverDeepSeekPlaces = useCallback(async (city: string, count: number, proximity?: [number, number], administrativeBounds?: { ne: [number, number]; sw: [number, number] }): Promise<DraftPlace[]> => {
     const toDraftRecommendation = (place: GeocodedLocation, index: number): DraftPlace => ({
@@ -659,28 +796,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       console.warn('[AtlasBuilder] reverse geocoding failed', error);
     }
 
-    const gpsAnchor: DraftPlace = {
-      id: `gps-anchor-${deviceLocation[0].toFixed(5)}-${deviceLocation[1].toFixed(5)}`,
-      name: city,
-      subtitle: 'Current location',
-      longitude: deviceLocation[0],
-      latitude: deviceLocation[1],
-      photo_url: null,
-      city,
-      region: null,
-      country: null,
-      category: 'Current location',
-      source: 'search',
-    };
-    let firstPoi = gpsAnchor;
-    try {
-      // Mapbox Search Box requires a text query. "attractions" with the GPS
-      // proximity gives us its first nearby POI, rather than a saved place.
-      firstPoi = await resolveFirstMapboxPoi('attractions', deviceLocation) ?? gpsAnchor;
-    } catch (error) {
-      console.warn('[AtlasBuilder] nearby Mapbox POI unavailable', error);
-    }
-    handoffToPlan(city, [firstPoi], deviceLocation, localBounds);
+    // Enter the editor immediately. Its focus-seed effect resolves a real POI
+    // in the background, rather than making this transition wait on Mapbox or
+    // offering the device coordinate itself as a fake Atlas place.
+    handoffToPlan(city, [], deviceLocation, localBounds);
     await waitForFirstAtlasPaint();
 
     try {
@@ -691,7 +810,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       // Recommendations are optional; search and saved places remain usable.
       console.warn('[AtlasBuilder] simple start recommendations failed', error);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, refreshUserLocation, resolveFirstMapboxPoi]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, refreshUserLocation]);
 
   const revealInitialCandidate = useCallback((place: DraftPlace) => {
     if (initialPlaceSelected.current) return;
@@ -809,6 +928,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [atlasId, savedPlaces]);
 
   const addPlace = useCallback((place: DraftPlace) => {
+    seedUserInteractedRef.current = true;
+    if (seedNoteTimerRef.current) clearTimeout(seedNoteTimerRef.current);
+    setSeedNoteVisible(false);
     if (place.provisional) {
       showDialog({ title: 'Location is still being verified', message: 'This AI recommendation will be available to add when its map position is confirmed.', tone: 'warning' });
       return;
@@ -866,15 +988,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     try {
       const selectedPlace = result.kind === 'saved' ? toDraft(result.place) : await resolveResult(result);
       if (!selectedPlace) return;
-      const firstPoi = await resolveFirstMapboxPoi(
-        query.trim() || selectedPlace.name,
-        [selectedPlace.longitude, selectedPlace.latitude],
-      ).catch((error) => {
-        console.warn('[AtlasBuilder] first Mapbox search POI unavailable', error);
-        return null;
-      });
-      const place = firstPoi ?? selectedPlace;
-      if (!place) return;
+      // Administrative search results define the focus area, not the first
+      // Atlas item. The mounted editor resolves a nearby `attractions` POI
+      // inside this area through the same fast seed path as Simple Start.
+      const place = selectedPlace;
       const coordinate: [number, number] = [place.longitude, place.latitude];
       const areaSaved = result.kind === 'remote' && result.featureType === 'country'
         ? savedPlaces.filter((savedPlace) => normalize(savedPlace.country ?? '') === normalize(place.name))
@@ -898,9 +1015,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         ? focusBoundsForSavedPlaces(coordinate, localSaved)
         : boundsFromRadius(coordinate, 18);
       const location = place.city ?? place.region ?? place.name;
-      // The selected search result is the fastest and most predictable first
-      // green + candidate. It also avoids waiting for another POI retrieval.
-      const candidates = [{ ...place, source: 'search' as const }];
+      const candidates: DraftPlace[] = result.kind === 'remote' && result.featureType === 'poi'
+        ? [{ ...place, source: 'search' as const }]
+        : [];
       // Stop all type-ahead work before the view transition. In particular,
       // old geocoding requests must not publish results over Edit Atlas.
       queryAbortRef.current?.abort();
@@ -937,7 +1054,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     } finally {
       setAddingResult(null);
     }
-  }, [discoverDeepSeekPlaces, handoffToPlan, query, resolveFirstMapboxPoi, resolveResult, savedPlaces]);
+  }, [discoverDeepSeekPlaces, handoffToPlan, resolveResult, savedPlaces]);
 
   const handleResultAdd = useCallback(async (result: SearchResult) => {
     const key = result.kind === 'saved' ? result.place.id : result.externalId;
@@ -1232,6 +1349,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       {searching ? <ActivityIndicator size="small" color="#2563EB" /> : focusSearchActive ? <TouchableOpacity accessibilityLabel="Focus search area" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity> : null}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>
+    {seedNoteVisible ? <Animated.View pointerEvents="none" style={[styles.seedNote, { opacity: seedNoteOpacity }]}><Text style={styles.seedNoteText}>Tap any point on the map or search to choose a different place to add.</Text></Animated.View> : null}
     {localMustSeesVisible ? <Animated.View pointerEvents="box-none" style={[styles.localMustSeesNoteRow, { opacity: localMustSeesOpacity }]}><View pointerEvents="auto" style={styles.localMustSeesNote}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={hideLocalMustSees} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></View></Animated.View> : null}
     {nearbyPromptVisible ? <Animated.View pointerEvents="box-none" style={[styles.nearbyPromptRow, { opacity: nearbyPromptOpacity }]}><View pointerEvents="auto" style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
     {results.length > 0 ? <View pointerEvents="auto" style={styles.results}><ScrollView nestedScrollEnabled showsVerticalScrollIndicator style={styles.searchResultsScroll}>{results.map((result) => {
@@ -1251,8 +1369,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setAtlasMapState({
       markers: mapMarkers,
       cameraVerticalOffset: 0,
-      lockCameraToScreen: true,
-      cameraScreenOffsetY: atlasId ? EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y : 0,
+      // The editor sheet occupies the lower screen. Let HomeScreen pass its
+      // measured height as camera padding so both a GPS-country camera and an
+      // Edit Atlas focus area center in the remaining upper map viewport.
+      lockCameraToScreen: false,
+      minimumBoundsZoom: ATLAS_MINIMUM_BOUNDS_ZOOM,
+      disableRecommendedClustering: true,
       centerCoordinate: mapCenter,
       zoomLevel: mapZoom,
       // Edit mode, selected Create-search areas, and the location-aware blank

@@ -58,6 +58,8 @@ export const styles = StyleSheet.create({
   emptyAtlasConnector: { width: 2, height: 16, borderRadius: 1, alignSelf: 'center', backgroundColor: '#DDE4E7' },
   mapSearchLayer: { position: 'absolute', top: 62, left: 16, right: 16, zIndex: 20 },
   mapSearchBox: { minHeight: 46, borderRadius: 18, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 8, shadowColor: '#111827', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 7 },
+  seedNote: { alignSelf: 'center', marginTop: 8, maxWidth: '88%', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.94)', shadowColor: '#111827', shadowOpacity: 0.1, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+  seedNoteText: { color: '#555162', fontSize: 11, fontWeight: '600', textAlign: 'center' },
   localMustSeesNoteRow: { alignSelf: 'flex-start' },
   localMustSeesNote: { alignSelf: 'flex-start', maxWidth: '100%', minHeight: 30, marginTop: 7, paddingLeft: 9, paddingRight: 5, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.94)', flexDirection: 'row', alignItems: 'center', gap: 6, shadowColor: '#111827', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
   localMustSeesDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#8B5CF6' },

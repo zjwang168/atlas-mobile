@@ -66,7 +66,7 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
         </Animated.View>
       </View>
     </> : <>
-      <Text style={styles.candidateEmptyTitle}>Select another point on the map to add it</Text>
+      
       <View style={styles.candidateActions}>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAddClip, { width: addWidth, opacity: addOpacity }]} pointerEvents={saveActionsOpen ? 'none' : 'auto'}>
           <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><Text numberOfLines={1} style={styles.candidateAddEmptyText}>Select a place on the map</Text><Ionicons name="location-outline" size={19} color="#899590" /></View>

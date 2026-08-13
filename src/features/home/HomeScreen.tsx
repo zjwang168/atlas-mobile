@@ -476,6 +476,8 @@ function HomeScreenContent({
         cameraAnimationDurationMs={atlasMapState?.cameraAnimationDurationMs ?? (atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200)}
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
+        minimumBoundsZoom={atlasMapState?.minimumBoundsZoom}
+        disableRecommendedClustering={atlasMapState?.disableRecommendedClustering}
         cameraScreenOffsetY={atlasMapState?.cameraScreenOffsetY}
         routeGeoJSON={atlasMapState?.routeGeoJSON}
         routeVariant={atlasMapState?.routeVariant}

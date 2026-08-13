@@ -130,7 +130,7 @@ export type Overlay =
  */
 export type AtlasMapState = {
   markers: MapMarker[];
-  /** Per-Atlas camera adjustment. Create an Atlas deliberately leaves this at zero. */
+  /** Per-Atlas camera adjustment applied above the active bottom-panel padding. */
   cameraVerticalOffset?: number;
   /** Keeps the shared map stationary while the editor sheet is dragged. */
   lockCameraToScreen?: boolean;
@@ -139,6 +139,10 @@ export type AtlasMapState = {
   centerCoordinate?: [number, number];
   zoomLevel?: number;
   bounds?: { ne: [number, number]; sw: [number, number] };
+  /** Lowest zoom accepted while fitting this Atlas view's bounds. */
+  minimumBoundsZoom?: number;
+  /** Keeps each AI recommendation visible as its own purple marker. */
+  disableRecommendedClustering?: boolean;
   /** Changes when an Atlas view must re-apply identical bounds after reopening. */
   cameraKey?: string;
   /** Optional override for the shared map camera transition. */

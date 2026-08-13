@@ -55,6 +55,10 @@ interface MapboxMapProps {
   routeMarkers?: MapMarker[];
   /** Camera padding to offset the map center (e.g., when a bottom panel is visible) */
   padding?: MapPadding;
+  /** Lowest zoom accepted for a bounds camera, useful when a focused region is very large. */
+  minimumBoundsZoom?: number;
+  /** Prevents AI recommendation markers from being replaced by count clusters. */
+  disableRecommendedClustering?: boolean;
   /** Positive values move rendered map content down by this many screen points. */
   cameraScreenOffsetY?: number;
   /** Duration for prop-driven camera changes. The Save screen needs a brief
@@ -127,8 +131,8 @@ function markerVisualKey(marker: RenderMarker): string {
   return marker.clusterMembers?.length ? `cluster:${marker.id}` : `point:${marker.id}`;
 }
 
-function participatesInLayoutTransition(marker: RenderMarker, selectedMarkerId?: string | null): boolean {
-  return Boolean(marker.clusterMembers?.length) || canCluster(marker, selectedMarkerId);
+function participatesInLayoutTransition(marker: RenderMarker, selectedMarkerId?: string | null, disableRecommendedClustering = false): boolean {
+  return Boolean(marker.clusterMembers?.length) || canCluster(marker, selectedMarkerId, disableRecommendedClustering);
 }
 
 function markerTitleKey(marker: MapMarker): string | null {
@@ -162,11 +166,11 @@ function markerRenderPriority(marker: MapMarker, selectedMarkerId?: string | nul
           : 0;
 }
 
-function deduplicateMarkerLocations(markers: MapMarker[], selectedMarkerId?: string | null): MapMarker[] {
+function deduplicateMarkerLocations(markers: MapMarker[], selectedMarkerId?: string | null, disableRecommendedClustering = false): MapMarker[] {
   const result: MapMarker[] = [];
   for (const marker of markers) {
     const titleKey = markerTitleKey(marker);
-    if (!titleKey || !canMergeSemanticDuplicate(marker)) {
+    if (!titleKey || !canMergeSemanticDuplicate(marker) || (disableRecommendedClustering && marker.tone === 'recommended')) {
       result.push(marker);
       continue;
     }
@@ -232,6 +236,7 @@ function cameraForBounds(
   width: number,
   height: number,
   padding: [number, number, number, number],
+  minimumZoom = 1,
 ): { centerCoordinate: [number, number]; zoomLevel: number } {
   const [west, south] = bounds.sw;
   const [east, north] = bounds.ne;
@@ -243,7 +248,7 @@ function cameraForBounds(
   const availableHeight = Math.max(1, height - padding[0] - padding[2]);
   const longitudeZoom = Math.log2((availableWidth * 360) / (512 * longitudeSpan));
   const latitudeZoom = Math.log2(availableHeight / (512 * latitudeSpan));
-  const zoomLevel = Math.max(1, Math.min(20, Math.min(longitudeZoom, latitudeZoom)));
+  const zoomLevel = Math.max(minimumZoom, Math.min(20, Math.min(longitudeZoom, latitudeZoom)));
 
   return {
     // Camera padding already places this coordinate at the center of the
@@ -300,8 +305,9 @@ function screenMarkers(markers: ReadonlyArray<RenderMarker>, viewport: MapViewpo
   }).filter((point) => point.x >= -12 && point.x <= width + 12 && point.y >= -12 && point.y <= height + 12);
 }
 
-function canCluster(marker: MapMarker, selectedMarkerId?: string | null): boolean {
+function canCluster(marker: MapMarker, selectedMarkerId?: string | null, disableRecommendedClustering = false): boolean {
   return marker.id !== selectedMarkerId
+    && (!disableRecommendedClustering || marker.tone !== 'recommended')
     && marker.tone !== 'atlas'
     && marker.tone !== 'location'
     && marker.tone !== 'focused'
@@ -317,12 +323,13 @@ function clusterMarkerPoints(
   viewport: MapViewport,
   selectedMarkerId?: string | null,
   deletingMarkerId?: string | null,
+  disableRecommendedClustering = false,
 ): RenderMarker[] {
   const radius = viewport.zoom < 9 ? 58 : viewport.zoom < 11 ? 50 : viewport.zoom < 13 ? 44 : viewport.zoom < 15 ? 36 : 0;
   const groups: ScreenMarker[][] = [];
   const standalone: ScreenMarker[] = [];
   const candidates = [...points]
-    .filter((point) => canCluster(point.marker, selectedMarkerId) && point.marker.id !== deletingMarkerId)
+    .filter((point) => canCluster(point.marker, selectedMarkerId, disableRecommendedClustering) && point.marker.id !== deletingMarkerId)
     .sort((a, b) => a.marker.id.localeCompare(b.marker.id));
 
   for (const point of candidates) {
@@ -359,7 +366,7 @@ function clusterMarkerPoints(
 
   // Keep points which must never be hidden (selected, route, and special pins).
   points.forEach((point) => {
-    if (!canCluster(point.marker, selectedMarkerId) || point.marker.id === deletingMarkerId) {
+    if (!canCluster(point.marker, selectedMarkerId, disableRecommendedClustering) || point.marker.id === deletingMarkerId) {
       result.push(point.marker);
     }
   });
@@ -755,6 +762,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   routeDistanceLabels,
   routeMarkers,
   padding,
+  minimumBoundsZoom,
+  disableRecommendedClustering = false,
   cameraScreenOffsetY = 0,
   cameraAnimationDurationMs = 2000,
   selectedMarkerId,
@@ -779,10 +788,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       // the same nearby POI, which otherwise look like duplicated blue pins.
       const unique = new Map<string, MapMarker>();
       displayMarkers.forEach((marker) => unique.set(marker.id, marker));
-      return deduplicateMarkerLocations([...unique.values()], selectedMarkerId)
+      return deduplicateMarkerLocations([...unique.values()], selectedMarkerId, disableRecommendedClustering)
         .sort((a, b) => markerRenderPriority(a, selectedMarkerId) - markerRenderPriority(b, selectedMarkerId));
     },
-    [displayMarkers, selectedMarkerId],
+    [displayMarkers, disableRecommendedClustering, selectedMarkerId],
   );
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
@@ -832,8 +841,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     // them, leaving a permanent number bubble at maximum zoom.
     () => effectiveClusterViewport.zoom >= 15
       ? clusterSourceMarkerPoints.map((point) => point.marker)
-      : clusterMarkerPoints(clusterSourceMarkerPoints, effectiveClusterViewport, selectedMarkerId, deletingMarkerId),
-    [clusterSourceMarkerPoints, deletingMarkerId, effectiveClusterViewport, selectedMarkerId],
+      : clusterMarkerPoints(clusterSourceMarkerPoints, effectiveClusterViewport, selectedMarkerId, deletingMarkerId, disableRecommendedClustering),
+    [clusterSourceMarkerPoints, deletingMarkerId, disableRecommendedClustering, effectiveClusterViewport, selectedMarkerId],
   );
   const spreadMarkers = useMemo(
     () => spreadCoincidentMarkers(clusteredMarkers, effectiveClusterViewport),
@@ -860,6 +869,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       || marker.tone === 'home'
       || marker.tone === 'office'
       || marker.tone === 'school'
+      || (disableRecommendedClustering && marker.tone === 'recommended')
     ));
     const nearby = spreadMarkerPoints
       .filter((point) => point.marker.id !== selectedMarkerId)
@@ -867,7 +877,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       .slice(0, 96)
       .map((point) => point.marker)
     return [...new Map([...persistent, ...selected, ...nearby].map((marker) => [marker.id, marker])).values()];
-  }, [clusteredMarkers, renderedMarkers, selectedMarkerId, spreadMarkerPoints, width]);
+  }, [clusteredMarkers, disableRecommendedClustering, renderedMarkers, selectedMarkerId, spreadMarkerPoints, width]);
   useEffect(() => {
     const previous = displayedMarkersRef.current;
     const didCommitClusterLayout = previousClusterLayoutRevisionRef.current !== clusterLayoutRevision;
@@ -1050,7 +1060,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     // than accepting a native fit result that can be superseded by padding.
     const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}:${fitPadding.join(',')}`;
     if (nextBounds === previousBoundsRef.current) return;
-    const camera = cameraForBounds(bounds, width, height, fitPadding);
+    const camera = cameraForBounds(bounds, width, height, fitPadding, minimumBoundsZoom);
     cameraRef.current.setCamera({
       ...camera,
       padding: {
@@ -1063,7 +1073,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     });
     previousBoundsRef.current = nextBounds;
     onBoundsCameraApplied?.();
-  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, onBoundsCameraApplied, padding, width]);
+  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, minimumBoundsZoom, onBoundsCameraApplied, padding, width]);
   useEffect(() => {
     const [lng, lat] = cameraCenterCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;

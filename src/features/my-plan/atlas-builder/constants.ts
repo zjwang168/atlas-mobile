@@ -31,6 +31,7 @@ export const CONTINENTAL_US_ZOOM = 1.9;
 export const FOCUS_SAVED_PLACES_RADIUS_KM = 65;
 export const SEARCH_DEBOUNCE_MS = 350;
 
-// Create an Atlas stays at the original camera position; editing an existing
-// Atlas shifts its map content down by about 2 cm above the editing sheet.
-export const EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y = 80;
+// Country-scale focus areas should remain in the flat map range instead of
+// transitioning to the distant Globe view. Wide countries can be cropped at
+// the edges; the selected GPS/focus area remains centered in the usable map.
+export const ATLAS_MINIMUM_BOUNDS_ZOOM = 2.5;
