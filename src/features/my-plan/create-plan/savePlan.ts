@@ -113,7 +113,7 @@ async function buildSavedPlan(planId: string): Promise<SavedPlan | undefined> {
 /** Persist a new plan. Returns the saved plan with a generated id. */
 export async function savePlan(input: PlanInput): Promise<SavedPlan> {
   const plan = await createPlan({
-    title: input.location || 'Untitled Plan',
+    title: input.location || 'Untitled Atlas',
     destination: input.location || null,
     startDate: input.range.start,
     endDate: input.range.end,

@@ -29,6 +29,7 @@ const LIQUID_GLASS_AVAILABLE =
 
 type TopNavProps = {
   onNavigatePress?: () => void;
+  isCenteredOnUser?: boolean;
   onAvatarPress?: () => void;
   topMode?: TopMode;
   onTopModeChange?: (mode: TopMode) => void;
@@ -119,6 +120,7 @@ function SegmentButton({
 
 function TopNav({
   onNavigatePress,
+  isCenteredOnUser = true,
   onAvatarPress,
   topMode = 'saved',
   onTopModeChange,
@@ -132,7 +134,10 @@ function TopNav({
         pointerEvents="box-none"
         style={[styles.topRow, { paddingTop: top }]}
       >
-        <LeftNav onNavigatePress={onNavigatePress} />
+        <LeftNav
+          onNavigatePress={onNavigatePress}
+          isCenteredOnUser={isCenteredOnUser}
+        />
         {showTopMode && onTopModeChange ? (
           <View style={[styles.modeHost, { top: top }]}>
             <TopModeSwitch value={topMode} onChange={onTopModeChange} />

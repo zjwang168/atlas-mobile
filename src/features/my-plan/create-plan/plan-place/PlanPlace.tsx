@@ -30,7 +30,7 @@ type PlanPlaceProps = {
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function formatRangeSummary(location: string, range: DateRange): string {
-  if (!range.start) return location || 'New Plan';
+  if (!range.start) return location || 'New Atlas';
   const start = new Date(range.start + 'T00:00:00');
   const startStr = `${MONTH_SHORT[start.getMonth()]} ${start.getDate()}`;
   if (!range.end || range.end === range.start) {

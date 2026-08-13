@@ -15,6 +15,7 @@ const PRIMARY_COLOR = '#12C170';
 
 type LeftNavProps = {
   onNavigatePress?: () => void;
+  isCenteredOnUser?: boolean;
 };
 
 const glassShadow = {
@@ -37,7 +38,7 @@ const blurStyle = {
   justifyContent: 'center' as const,
 };
 
-export default function LeftNav({ onNavigatePress }: LeftNavProps) {
+export default function LeftNav({ onNavigatePress, isCenteredOnUser = true }: LeftNavProps) {
   return (
     <View className="flex-col items-center gap-2">
       <TouchableOpacity
@@ -63,7 +64,11 @@ export default function LeftNav({ onNavigatePress }: LeftNavProps) {
           />
         )}
         <View style={blurStyle}>
-          <NavigationArrowIcon size={24} weight="fill" color={PRIMARY_COLOR} />
+          <NavigationArrowIcon
+            size={24}
+            weight={isCenteredOnUser ? 'regular' : 'fill'}
+            color={PRIMARY_COLOR}
+          />
         </View>
       </TouchableOpacity>
     </View>

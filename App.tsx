@@ -1006,6 +1006,10 @@ function AppContent() {
           {overlay === 'import' && (
             <ImportScreen
               onClose={() => setOverlay('none')}
+              onSearchLocationManually={() => {
+                setOverlay('none');
+                setHomeOverlay({ kind: 'search' });
+              }}
               onOpenChatHistory={() => setShowChatHistory(true)}
               onSubmit={(text, mode, webSearch) => {
                 parseResultRef.current = null;

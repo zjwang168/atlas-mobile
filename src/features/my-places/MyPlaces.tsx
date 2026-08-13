@@ -3,8 +3,8 @@ import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
 import type { Place, PlaceDetail } from '@/types/place';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
 import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
-import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -39,7 +39,9 @@ const FILTERS: Array<{
 }> = [
   { value: 'all', label: 'All' },
   { value: 'places', label: 'Places', icon: MapPinIcon },
-  { value: 'atlas', label: 'Atlas', icon: MapTrifoldIcon },
+  // Keep the persisted `atlas` value for API compatibility; this saved-place
+  // collection is now presented to users as a List.
+  { value: 'atlas', label: 'Lists', icon: ListDashesIcon },
 ];
 
 function MyPlaces({
@@ -83,7 +85,7 @@ function MyPlaces({
     return (
       <View style={styles.compact}>
         <Text style={styles.compactLabel}>
-          {selectedView === 'atlas' ? 'Atlas' : 'Places'}
+          {selectedView === 'atlas' ? 'Lists' : 'Places'}
         </Text>
       </View>
     );
@@ -136,7 +138,7 @@ function MyPlaces({
         <View style={styles.filterRow}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Search saved places and atlases"
+            accessibilityLabel="Search saved places and lists"
             onPress={() => setSearchExpanded(true)}
             scaleTo={0.94}
             style={styles.searchButton}

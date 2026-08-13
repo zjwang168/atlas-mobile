@@ -26,6 +26,7 @@ import HomeTabBar, {
 } from './HomeTabBar';
 import SearchPanel from '../search/SearchPanel';
 import AccountModal from '../auth/AccountModal';
+import ProfileSettings from '../profile/ProfileSettings';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
@@ -38,6 +39,9 @@ const SHEET_DISMISS_FALLBACK_DELAY = 750;
 const IOS_HOME_SHEET_SHORT_FRACTION = 0.30;
 const IOS_HOME_SHEET_DEFAULT_FRACTION = 0.60;
 const IOS_HOME_SHEET_TALL_FRACTION = 0.94;
+// Treat the map as still centered on the user while its camera is within
+// roughly one city block of the current GPS coordinate.
+const USER_CENTER_TOLERANCE_DEGREES = 0.0008;
 
 // ---- Types ----
 
@@ -125,7 +129,9 @@ function HomeScreenContent({
 
   const [activeTab, setActiveTab] = useState<string>(TAB_PLACES);
   const [topMode, setTopMode] = useState<TopMode>('saved');
+  const [isMapCenteredOnUser, setIsMapCenteredOnUser] = useState(true);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [standaloneChatVisible, setStandaloneChatVisible] = useState(false);
   const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
   const [chatMapOpen, setChatMapOpen] = useState(false);
@@ -177,6 +183,7 @@ function HomeScreenContent({
     !externalOverlayVisible &&
     !chatVisible &&
     !accountOpen &&
+    !authOpen &&
     !mainSheetPaused &&
     (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
 
@@ -185,11 +192,12 @@ function HomeScreenContent({
       !externalOverlayVisible &&
       !chatVisible &&
       !accountOpen &&
+      !authOpen &&
       overlay.kind === 'none'
     ) {
       setMainSheetPaused(false);
     }
-  }, [accountOpen, chatVisible, externalOverlayVisible, overlay.kind]);
+  }, [accountOpen, authOpen, chatVisible, externalOverlayVisible, overlay.kind]);
 
   const finishMainSheetHandoff = useCallback(() => {
     if (pendingSheetFallbackRef.current) {
@@ -289,6 +297,19 @@ function HomeScreenContent({
         ? screenHeight * IOS_HOME_SHEET_TALL_FRACTION
         : screenHeight * IOS_HOME_SHEET_DEFAULT_FRACTION
     : SNAP_HEIGHTS[settledPanelSnapState];
+  // SwiftUI's fractional detent is resolved inside the presentation
+  // container, so its real on-screen height can differ from
+  // `screenHeight * fraction` by a few points. Preserve the live measured
+  // height when the detent settles instead of replacing it with that estimate.
+  const liveNativePanelHeightRef = useRef(
+    screenHeight * IOS_HOME_SHEET_DEFAULT_FRACTION,
+  );
+  // The home map follows only the short and default native-sheet detents.
+  // A large sheet still reports `tall` for its own content/scroll behavior,
+  // but must not push the map beyond the default (60%) camera position.
+  const mapFollowingPanelHeight = nativeMainPanelActive
+    ? liveNativePanelHeightRef.current
+    : settledBottomPanelHeight;
   const atlasCameraVerticalOffset = atlasMapState?.cameraVerticalOffset ?? 0;
   const lockAtlasCameraToScreen = Boolean(atlasMapState?.lockCameraToScreen);
   // Tracks the live panel height without React state — the panel reports it every
@@ -311,17 +332,20 @@ function HomeScreenContent({
     // Jay's atlasCameraVerticalOffset. Either side alone breaks the other's
     // camera. Math.max(0, …) is Jay's — the offset can be negative.
     paddingBottom: bottomPanelActive && !lockAtlasCameraToScreen
-      ? Math.max(0, settledBottomPanelHeight + atlasCameraVerticalOffset)
+      ? Math.max(0, mapFollowingPanelHeight + atlasCameraVerticalOffset)
       : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [atlasCameraVerticalOffset, bottomPanelActive, lockAtlasCameraToScreen, settledBottomPanelHeight]);
+  }), [atlasCameraVerticalOffset, bottomPanelActive, lockAtlasCameraToScreen, mapFollowingPanelHeight]);
   useEffect(() => {
     bottomPanelHeightRef.current = mapPadding.paddingBottom;
   }, [mapPadding]);
   // Per-frame panel height updates — pushed straight to the map's camera via ref,
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
+    if (nativeMainPanelActive) {
+      liveNativePanelHeightRef.current = height;
+    }
     bottomPanelHeightRef.current = height;
     const currentAtlasMapState = atlasMapStateRef.current;
     // Bounds-owned Atlas cameras must only be moved by fitBounds. A native
@@ -329,10 +353,10 @@ function HomeScreenContent({
     // zoom with the Camera's previous state.
     if (!currentAtlasMapState?.lockCameraToScreen && !currentAtlasMapState?.bounds) {
       const verticalOffset = currentAtlasMapState?.cameraVerticalOffset ?? 0;
-      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + verticalOffset) : 0);
+      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + verticalOffset) : 0, 0);
     }
     currentAtlasMapState?.onPanelHeightChange?.(height);
-  }, [bottomPanelActive]);
+  }, [bottomPanelActive, nativeMainPanelActive]);
 
   // A panel may already be resting when the Atlas overlay mounts, so its
   // height listener is not guaranteed to emit an initial frame. Seed the
@@ -412,8 +436,16 @@ function HomeScreenContent({
       so the button always moves the camera somewhere sensible. */
   const handleLocatePress = useCallback(async () => {
     const coordinate = await refreshUserLocation();
+    setIsMapCenteredOnUser(true);
     mapRef.current?.flyTo(coordinate);
   }, [refreshUserLocation]);
+
+  const handleHomeViewportChanged = useCallback((center: [number, number]) => {
+    const isCentered =
+      Math.abs(center[0] - userLocation[0]) <= USER_CENTER_TOLERANCE_DEGREES &&
+      Math.abs(center[1] - userLocation[1]) <= USER_CENTER_TOLERANCE_DEGREES;
+    setIsMapCenteredOnUser(isCentered);
+  }, [userLocation]);
 
   const handleMarkerPress = useCallback((marker: MapMarker) => {
     setSelectedPlaceId(marker.id);
@@ -455,7 +487,7 @@ function HomeScreenContent({
         deletingMarkerId={atlasMapState?.deletingMarkerId}
         onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
         onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
-        onViewportChanged={atlasMapState?.onViewportChanged}
+        onViewportChanged={atlasMapState?.onViewportChanged ?? handleHomeViewportChanged}
         onBoundsCameraApplied={atlasMapState?.onBoundsCameraApplied}
         // HJ turned the compass off outright; their `!atlasMapState` would
         // bring it back on the home map.
@@ -469,6 +501,7 @@ function HomeScreenContent({
           <TopBlurFade />
           <TopNav
             onNavigatePress={handleLocatePress}
+            isCenteredOnUser={isMapCenteredOnUser}
             topMode={topMode}
             onTopModeChange={setTopMode}
             showTopMode={activeTab === TAB_PLACES && !atlasMapState}
@@ -604,7 +637,12 @@ function HomeScreenContent({
         />
       </Animated.View>
 
-      <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
+      <ProfileSettings
+        visible={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        onRequestSignIn={() => setAuthOpen(true)}
+      />
+      <AccountModal visible={authOpen} onClose={() => setAuthOpen(false)} />
 
       {/* Full-screen overlays — driven by HomeContext, above everything */}
 
