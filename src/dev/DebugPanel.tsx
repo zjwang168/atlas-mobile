@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Reanimated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import { fetchConversations, fetchMemories } from '@/services/api/apiService';
 import { getCurrentUserId } from '@/services/local/localStore';
@@ -34,7 +35,11 @@ export default function DebugPanel({ onClose }: DebugPanelProps) {
   }, []);
 
   return (
-    <View style={styles.container}>
+    <Reanimated.View
+      entering={FadeIn.duration(200)}
+      exiting={FadeOut.duration(150)}
+      style={styles.container}
+    >
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Memory Debug</Text>
@@ -118,7 +123,7 @@ export default function DebugPanel({ onClose }: DebugPanelProps) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 24 }}
       />
-    </View>
+    </Reanimated.View>
   );
 }
 

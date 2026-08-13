@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Reanimated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -125,7 +126,12 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
   }, [status, trimmed, suggestions.length]);
 
   return (
-    <View className="absolute inset-0 z-40 bg-background" style={{ paddingTop: insets.top }}>
+    <Reanimated.View
+      entering={FadeIn.duration(200)}
+      exiting={FadeOut.duration(150)}
+      className="absolute inset-0 z-40 bg-background"
+      style={{ paddingTop: insets.top }}
+    >
       <View className="flex-row items-center gap-2 px-4 py-2">
         <Pressable onPress={onClose} hitSlop={8} className="p-1">
           <Ionicons name="arrow-back" size={24} color={iconColor(scheme)} />
@@ -173,6 +179,6 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
           ) : null
         }
       />
-    </View>
+    </Reanimated.View>
   );
 }

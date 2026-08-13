@@ -1,4 +1,5 @@
 import { Dimensions, View } from 'react-native';
+import Reanimated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
@@ -92,7 +93,11 @@ const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function Create
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <Reanimated.View
+      entering={FadeIn.duration(200)}
+      exiting={FadeOut.duration(150)}
+      style={{ flex: 1 }}
+    >
       {/* Header */}
       <View
         style={{
@@ -143,7 +148,7 @@ const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function Create
           inline={inline}
         />
       )}
-    </View>
+    </Reanimated.View>
   );
 });
 

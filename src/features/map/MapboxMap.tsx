@@ -81,6 +81,7 @@ const LABEL_POINT_CLEARANCE = 4;
 /** Close enough to read street names when recentring on the user. */
 const LOCATE_ZOOM_LEVEL = 15;
 const LOCATE_ANIMATION_MS = 800;
+const CAMERA_ANIMATION_MODE = 'easeTo';
 
 type MapViewport = {
   center: [number, number];
@@ -362,11 +363,12 @@ function MarkerDot({
   }, [hasActiveSelection, selected, selectedProgress, tone]);
   const animatedStyle = useAnimatedStyle(() => {
     const atlasPin = tone === 'atlas';
-    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : specialPlace ? '#1F2937' : '#007AFF';
-    // Green is the explicit current-choice state in the editor. AI pins stay
-    // purple only while unselected; an orange Atlas pin keeps its route color.
+    const baseColor = tone === 'atlas' ? '#12C170' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : specialPlace ? '#1F2937' : '#007AFF';
+    // Green is the explicit current-choice state in the editor and is also
+    // the Atlas pin's own resting color, so an Atlas pin looks the same
+    // selected or not. AI pins stay purple only while unselected.
     const selectedColor = tone === 'atlas'
-      ? '#E77B32'
+      ? '#12C170'
       : tone === 'recommended' && preserveToneOnSelect
         ? '#885CF6'
         : '#12C170';
@@ -619,6 +621,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         paddingLeft: fitPadding[3],
       },
       animationDuration: cameraAnimationDurationMs,
+      animationMode: CAMERA_ANIMATION_MODE,
     });
     previousBoundsRef.current = nextBounds;
   }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, padding, width]);
@@ -650,6 +653,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       centerCoordinate: cameraCenterCoordinate,
       zoomLevel,
       animationDuration: cameraAnimationDurationMs,
+      animationMode: CAMERA_ANIMATION_MODE,
       padding,
     });
   }, [bounds, cameraAnimationDurationMs, cameraCenterCoordinate, zoomLevel, padding, isReady, mapLoaded, cameraKey]);
@@ -661,6 +665,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       cameraRef.current?.setCamera({
         padding: nextPadding,
         animationDuration: durationMs,
+        animationMode: CAMERA_ANIMATION_MODE,
       });
     },
     flyTo: (coordinate, zoom = LOCATE_ZOOM_LEVEL) => {
@@ -672,15 +677,17 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         centerCoordinate: coordinate,
         zoomLevel: zoom,
         animationDuration: LOCATE_ANIMATION_MS,
+        animationMode: CAMERA_ANIMATION_MODE,
         padding: prevPaddingRef.current,
       });
     },
     focusCoordinate: (coordinate, nextZoomLevel = 15, durationMs = 90) => {
       cameraRef.current?.setCamera({
-      centerCoordinate: offsetCameraCenter(coordinate, nextZoomLevel, cameraScreenOffsetY),
+        centerCoordinate: offsetCameraCenter(coordinate, nextZoomLevel, cameraScreenOffsetY),
         zoomLevel: nextZoomLevel,
         padding: prevPaddingRef.current,
         animationDuration: durationMs,
+        animationMode: CAMERA_ANIMATION_MODE,
       });
     },
   }), [cameraScreenOffsetY]);
@@ -990,7 +997,7 @@ const styles = StyleSheet.create({
     height: 30,
     borderRadius: 15,
     borderWidth: 4,
-    backgroundColor: '#E77B32',
+    backgroundColor: '#12C170',
   },
   markerRecommended: {
     backgroundColor: '#885CF6',

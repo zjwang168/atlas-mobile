@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import Reanimated, { FadeInUp, LinearTransition } from 'react-native-reanimated';
+import Reanimated, { FadeIn, FadeInUp, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { ParseProgressEvent } from '../../../services/api/apiService';
@@ -654,7 +654,7 @@ export default function AnalyzingScreen({
       : `Extracting places from ${sourceName}`;
 
   return (
-    <View style={styles.container}>
+    <Reanimated.View entering={FadeIn.duration(200)} style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity accessibilityLabel="Hide analysis" style={styles.closeButton} onPress={onDismiss} activeOpacity={0.7}>
           <Ionicons name="close" size={20} color={COLOR.textPrimary} />
@@ -735,7 +735,7 @@ export default function AnalyzingScreen({
           <Text style={styles.cancelText}>Cancel</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </Reanimated.View>
   );
 }
 
