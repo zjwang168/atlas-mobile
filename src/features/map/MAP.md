@@ -102,6 +102,18 @@ The camera is controlled programmatically via a `MapboxGL.Camera` ref. `centerCo
 
 Currently `MapboxGL.StyleURL.Street`. Other options: `Outdoors`, `Light`, `Dark`, `Satellite`, `SatelliteStreet`, or a custom `mapbox://styles/…` URL.
 
-## Marker Customization
+## Marker Rendering
 
-Markers are rendered as `MapboxGL.MarkerView` with a custom React Native `View`. Edit the `marker` style in `MapboxMap.tsx` to change size, color, or shape. For large marker counts (>100), switch to `MapboxGL.ShapeSource` + `MapboxGL.SymbolLayer` for better performance.
+Markers render in two tiers, and which tier a marker lands in is decided by `rendersAsLayer()` from the marker data alone — never from the camera.
+
+**Layer tier — the ordinary `saved` and `recommended` pins.** A clustered `ShapeSource` feeding two `CircleLayer`s (cluster bubbles and individual dots) and two `SymbolLayer`s (the cluster count and the pin's name). Clustering, placement, and label collision all happen inside the map engine.
+
+**Annotation tier — `MarkerView`, for the few pins a layer cannot express**: the selected pin, the one being deleted, one carrying a popup, the numbered Atlas route pins, the Home/Office/School glyphs, and anything mid-animation (`entering`/`pulsing`). These keep the React `MarkerDot` with its Reanimated transitions.
+
+The split is what fixes the blink and the drift, and both had the same shape of cause. A `MarkerView` is a real native view mounted by React: change its key and React destroys and recreates it, which reads as a pin vanishing and popping back; change its `coordinate` and it moves. The previous implementation clustered in JavaScript from the current viewport, so a pin's key flipped between `point:…` and `cluster:…` whenever the camera crossed a zoom threshold or a member joined a group, and coincident pins were given viewport-derived display coordinates that were recomputed at every settle. A layer has no key and no per-pin view, so neither failure mode exists.
+
+Adding a marker type: if it needs animation, a popup, or a glyph, exclude it in `rendersAsLayer()` so it renders as an annotation. Otherwise let it fall through to the layer tier — that tier scales to thousands of points, and the annotation tier does not.
+
+Tapping is handled per tier: the annotation tier uses `onTouchEnd` on the marker's own view, while the layer tier reads the feature under the finger from `ShapeSource`'s `onPress`. A tapped cluster asks the engine for its expansion zoom rather than fitting bounds computed here. Both stamp the same press timestamp, so a pin tap is not also read as a tap on the map beneath it.
+
+Colour and size live in the layer styles in `MapboxMap.tsx` for the layer tier, and in the `marker` style for the annotation tier. The two are kept visually in step by hand; they are not derived from one source.
