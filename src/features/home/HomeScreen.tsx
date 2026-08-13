@@ -346,7 +346,6 @@ function HomeScreenContent({
   const handleChatPress = useCallback(() => {
     presentAboveMainSheet(() => {
       setStandaloneChatVisible(true);
-      setChatPresented(true);
     });
   }, [presentAboveMainSheet]);
   const handleAccountPress = useCallback(() => {

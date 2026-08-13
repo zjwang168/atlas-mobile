@@ -87,6 +87,7 @@ const CHAT_ENTER_TRANSITION = SlideInDown
   .damping(22)
   .stiffness(190)
   .mass(0.86);
+const CHAT_INPUT_FOCUS_DELAY_MS = Platform.OS === 'ios' ? 560 : 420;
 const ATLAS_AI_MARK = require('../../../../assets/atlas-ai-mark.png');
 const STARTER_PROMPTS = [
   'Cozy cafes to work from near me',
@@ -886,7 +887,7 @@ export default function AIChatBox({
 
     const focusTimer = setTimeout(() => {
       inputRef.current?.focus();
-    }, reducedMotion ? 0 : 320);
+    }, reducedMotion ? 0 : CHAT_INPUT_FOCUS_DELAY_MS);
 
     return () => clearTimeout(focusTimer);
   }, [reducedMotion, visible]);
