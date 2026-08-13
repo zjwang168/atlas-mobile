@@ -83,6 +83,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const seedUserInteractedRef = useRef(false);
   const seedRequestIdRef = useRef(0);
   const seedAutoSelectedRef = useRef(false);
+  const seedCameraAdjustedRef = useRef(false);
   const [seedNoteVisible, setSeedNoteVisible] = useState(false);
   const seedNoteOpacity = useRef(new Animated.Value(0)).current;
   const seedNoteShownRef = useRef(false);
@@ -202,13 +203,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       try {
         const deviceLocation = await refreshUserLocation();
         if (cancelled) return;
-        // Do not leave the Create screen on its continental-US fallback while
-        // country boundaries resolve. The final bounds fit respects Home's
-        // live bottom-sheet padding, so the full country stays in the usable
-        // upper map viewport.
+        // Keep the initial view in the flat-map range while the country
+        // boundary resolves. The final bounds fit respects Home's live
+        // bottom-sheet padding, so the country stays in the usable upper map
+        // viewport without briefly showing the globe.
         setMapCenter(deviceLocation);
         setMapBounds(undefined);
-        setMapZoom(4);
+        setMapZoom(ATLAS_MINIMUM_BOUNDS_ZOOM);
         const [address] = await Location.reverseGeocodeAsync({
           latitude: deviceLocation[1],
           longitude: deviceLocation[0],
@@ -607,6 +608,30 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     seedAutoSelectedRef.current = true;
     setFocused(fallback);
   }, [atlasId, focused, items.length, recommendedPlaces, savedPlaces, started]);
+
+  useEffect(() => {
+    // Preserve the entry camera until its focus bounds have been applied.
+    // Once the automatic green seed is ready, widen its separation from the
+    // GPS puck with a modest, one-time zoom rather than the normal POI-focus
+    // zoom (15), which is too tight for an Atlas focus area.
+    if (!focused || !seedAutoSelectedRef.current || seedCameraAdjustedRef.current || mapBounds) return;
+    seedCameraAdjustedRef.current = true;
+    const seedVisibleZoom = Math.max(mapZoom, 10.5);
+    const seedCoordinate: [number, number] = [focused.longitude, focused.latitude];
+    if (seedVisibleZoom !== mapZoom) setMapZoom(seedVisibleZoom);
+    // HomeScreen supplies the bottom-sheet height as Mapbox camera padding.
+    // Centering on the candidate here therefore places it at the center of the
+    // remaining visible (upper) map viewport, rather than at the full-screen
+    // center where the sheet can obscure it.
+    setMapCenter(seedCoordinate);
+    console.info('[AtlasSeed] camera-visibility-focus', {
+      name: focused.name,
+      previousCenter: mapCenter,
+      center: seedCoordinate,
+      previousZoom: mapZoom,
+      zoom: seedVisibleZoom,
+    });
+  }, [focused, mapBounds, mapCenter, mapZoom]);
 
   useEffect(() => {
     if (!focused || !seedAutoSelectedRef.current || seedNoteShownRef.current || items.length > 0) return;
@@ -1381,6 +1406,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       // Create screen own an explicit bounds camera.
       bounds: atlasId || started || isCreateAtlasLanding ? mapBounds : undefined,
       cameraKey,
+      resetCameraOrientation: true,
       cameraAnimationDurationMs: atlasId ? 0 : undefined,
       selectedMarkerId: focused?.id ?? null,
       routeGeoJSON: route?.route,
@@ -1445,7 +1471,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </Reanimated.View>)}
       </ScrollView>}
 
-      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} finishDisabled={saveDisabled} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
+      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} finishDisabled={saveDisabled} promptFirstAdd={Boolean(atlasId) && items.length === 0} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
 
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} dayLocked={undefinedDayLocked} hasExisting={timeModalIndex !== null && Boolean(items[timeModalIndex]?.timeline_time)} validationMessage={timeConflictMessage} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => { setTimeConflictMessage(null); setTimeModalIndex(null); }} onRemove={() => { if (timeModalIndex === null) return; const existing = items[timeModalIndex]; commitItems(items.map((entry, index) => index === timeModalIndex ? { ...entry, timeline_day: null, timeline_time: null } : entry)); if (existing?.joinId) updateAtlasPlace(existing.joinId, { timeline_day: null, timeline_time: null }).catch(console.warn); setTimeModalIndex(null); }} onSave={saveTimeDivider} />
       <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={saveTransport} onRemove={() => saveTransport(null)} onClose={() => setTransportModalIndex(null)} />

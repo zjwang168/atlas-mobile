@@ -74,10 +74,13 @@ export const styles = StyleSheet.create({
   addResultButtonPending: { backgroundColor: '#94A3B8' },
   focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#12C170' },
   candidateSlot: { minHeight: 94, paddingTop: 8, paddingBottom: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#DDE7E5', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'flex-end' },
-  candidateDescription: { width: 280, minHeight: 15, color: '#638078', fontSize: 11, lineHeight: 15, marginBottom: 6 },
+  // Shares the action row's fixed width so short place details sit centered
+  // over the add button and finish control as well as long details do.
+  candidateDescription: { width: 280, minHeight: 15, color: '#638078', fontSize: 11, lineHeight: 15, marginBottom: 6, textAlign: 'center' },
   candidateActions: { width: 280, height: 46, position: 'relative', alignSelf: 'center' },
   candidateActionClip: { height: 46, overflow: 'hidden', position: 'absolute', top: 0 },
   candidateAddClip: { left: 0 },
+  candidateAddGlow: { position: 'absolute', left: -5, top: -5, width: 240, height: 56, borderRadius: 28, backgroundColor: '#74E5A9' },
   candidateSaveClip: { right: 216 },
   candidateAskClip: { right: 50 },
   candidateAdd: { width: 230, height: 46, borderRadius: 23, paddingLeft: 17, paddingRight: 8, backgroundColor: '#12C170', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, shadowColor: '#0B8F52', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },

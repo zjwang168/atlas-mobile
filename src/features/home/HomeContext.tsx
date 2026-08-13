@@ -147,6 +147,8 @@ export type AtlasMapState = {
   cameraKey?: string;
   /** Optional override for the shared map camera transition. */
   cameraAnimationDurationMs?: number;
+  /** Resets the shared map to Atlas's north-up, top-down orientation. */
+  resetCameraOrientation?: boolean;
   selectedMarkerId?: string | null;
   deletingMarkerId?: string | null;
   routeGeoJSON?: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;

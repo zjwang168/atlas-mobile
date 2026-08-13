@@ -81,6 +81,8 @@ interface MapboxMapProps {
   onViewportChanged?: (center: [number, number], zoom: number) => void;
   /** Called after this map instance applies a bounds-based camera command. */
   onBoundsCameraApplied?: () => void;
+  /** Resets a reused map to the standard north-up, top-down Atlas view. */
+  resetCameraOrientation?: boolean;
   compassEnabled?: boolean;
   markerPopup?: { markerId: string; content: React.ReactNode } | null;
 }
@@ -101,6 +103,7 @@ const CLUSTER_MAX_ZOOM = 14;
 // A touch past the split point, so tapping a cluster lands on separated pins
 // rather than exactly at the zoom where they are still merging.
 const CLUSTER_EXPANSION_ZOOM_MARGIN = 0.4;
+const CLUSTER_BURST_DURATION_MS = 360;
 // A duplicate POI can arrive through a historical save, offline reconciliation,
 // or two search providers. Keep one visual pin for the same named place while
 // leaving the source records untouched.
@@ -125,6 +128,11 @@ type CameraState = {
     zoom: number;
     bounds: { ne: GeoJSON.Position; sw: GeoJSON.Position };
   };
+};
+type ClusterBurst = {
+  parent: GeoJSON.Feature<GeoJSON.Point>;
+  children: GeoJSON.Feature<GeoJSON.Point>[];
+  progress: number;
 };
 
 function markerVisualKey(marker: RenderMarker): string {
@@ -474,14 +482,18 @@ function MarkerLabel({
   selected: boolean;
 }) {
   const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(7)).current;
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
     animationRef.current?.stop();
-    animationRef.current = Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: visible ? 175 : 130, useNativeDriver: true });
+    animationRef.current = Animated.parallel([
+      Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: visible ? 220 : 130, useNativeDriver: true }),
+      Animated.timing(translateY, { toValue: visible ? 0 : 7, duration: visible ? 220 : 130, useNativeDriver: true }),
+    ]);
     animationRef.current.start();
     return () => animationRef.current?.stop();
-  }, [opacity, visible]);
+  }, [opacity, translateY, visible]);
 
   const width = labelWidthForTitle(title);
 
@@ -491,7 +503,7 @@ function MarkerLabel({
       style={[
         styles.markerLabel,
         selected && styles.markerLabelSelected,
-        { width, marginLeft: -width / 2, opacity: selected ? 1 : opacity },
+        { width, marginLeft: -width / 2, opacity: selected ? 1 : opacity, transform: [{ translateY: selected ? 0 : translateY }] },
       ]}
     >
       <View style={styles.markerLabelContent}>
@@ -639,6 +651,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   onMapPress,
   onViewportChanged,
   onBoundsCameraApplied,
+  resetCameraOrientation = false,
   compassEnabled = true,
   markerPopup,
 }, ref) {
@@ -680,6 +693,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const cameraFrameRef = useRef<number | null>(null);
   const placeSourceRef = useRef<MapboxGL.ShapeSource>(null);
   const markerPressTimestampRef = useRef(0);
+  const [layerVisible, setLayerVisible] = useState(false);
+  const [clusterBurst, setClusterBurst] = useState<ClusterBurst | null>(null);
+  const clusterBurstFrameRef = useRef<number | null>(null);
   const handleMapLayout = (event: LayoutChangeEvent) => {
     const { width: nextWidth, height: nextHeight } = event.nativeEvent.layout;
     if (nextWidth <= 0 || nextHeight <= 0) return;
@@ -717,12 +733,66 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
     })),
   }), [layerMarkers]);
+  const clusterTransitionBucket = Math.floor(viewport.zoom * 4);
+
+  const clusterBurstFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point> | null>(() => {
+    if (!clusterBurst) return null;
+    const origin = clusterBurst.parent.geometry.coordinates;
+    const parentCount = clusterBurst.parent.properties?.point_count_abbreviated ?? clusterBurst.parent.properties?.point_count ?? '';
+    const parentOpacity = Math.max(0, 1 - clusterBurst.progress * 2.5);
+    return {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          properties: { burstRole: 'parent', count: String(parentCount), opacity: parentOpacity },
+          geometry: { type: 'Point', coordinates: origin },
+        },
+        ...clusterBurst.children.map((child, index) => {
+          const target = child.geometry.coordinates;
+          const progress = 1 - Math.pow(1 - clusterBurst.progress, 3);
+          return {
+            type: 'Feature' as const,
+            id: `burst:${index}`,
+            properties: {
+              burstRole: 'child',
+              count: child.properties?.point_count_abbreviated ?? child.properties?.point_count ?? '',
+              opacity: Math.min(1, clusterBurst.progress * 2.2),
+            },
+            geometry: {
+              type: 'Point' as const,
+              coordinates: [
+                origin[0] + (target[0] - origin[0]) * progress,
+                origin[1] + (target[1] - origin[1]) * progress,
+              ],
+            },
+          };
+        }),
+      ],
+    };
+  }, [clusterBurst]);
+
+  useEffect(() => {
+    // The source keeps Mapbox's cluster identities stable. Briefly fading the
+    // visual layers around a source change gives split/merge transitions a
+    // clear handoff without remounting React MarkerViews during map gestures.
+    setLayerVisible(false);
+    const timer = setTimeout(() => setLayerVisible(true), 40);
+    return () => clearTimeout(timer);
+  }, [clusterTransitionBucket, layerFeatures]);
+  useEffect(() => () => {
+    if (clusterBurstFrameRef.current !== null) cancelAnimationFrame(clusterBurstFrameRef.current);
+  }, []);
   // The label collision pass now only sees the handful of annotation pins, so
   // it costs a fraction of what it did over every marker. Mapbox does its own
   // collision for the layer tier's labels.
   const annotationMarkerPoints = useMemo(
     () => screenMarkers(annotationMarkers, viewport, width, height),
     [annotationMarkers, height, viewport, width],
+  );
+  const layerMarkerPoints = useMemo(
+    () => screenMarkers(layerMarkers, viewport, width, height),
+    [height, layerMarkers, viewport, width],
   );
   const labelOwnerMarkerPoints = useMemo(
     () => labelOwnerPoints(annotationMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
@@ -731,6 +801,14 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const labelIds = useMemo(
     () => visibleLabelIds(labelOwnerMarkerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
     [height, labelOwnerMarkerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
+  );
+  const layerLabelOwnerPoints = useMemo(
+    () => labelOwnerPoints(layerMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
+    [deletingMarkerId, height, layerMarkerPoints, markerPopup?.markerId, selectedMarkerId, width],
+  );
+  const layerLabelIds = useMemo(
+    () => visibleLabelIds(layerLabelOwnerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
+    [height, layerLabelOwnerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
   );
   const routeDistanceGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
     const seen = new Set<string>();
@@ -787,11 +865,31 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     markerPressTimestampRef.current = Date.now();
 
     if (feature.properties?.point_count) {
-      // Ask the engine how far in this cluster splits, rather than guessing a
-      // zoom or fitting bounds we would have to compute ourselves.
-      placeSourceRef.current?.getClusterExpansionZoom(feature)
-        .then((expansionZoom) => {
+      // Mapbox exposes the exact next-level children. Use those positions for
+      // a short burst instead of fading one count bubble into unrelated dots.
+      Promise.all([
+        placeSourceRef.current?.getClusterExpansionZoom(feature),
+        placeSourceRef.current?.getClusterChildren(feature),
+      ])
+        .then(([expansionZoom, children]) => {
+          if (!expansionZoom || !children?.features?.length) return;
           const geometry = feature.geometry as GeoJSON.Point;
+          const childPoints = children.features.filter((child: GeoJSON.Feature) => child.geometry?.type === 'Point') as GeoJSON.Feature<GeoJSON.Point>[];
+          if (!childPoints.length) return;
+          if (clusterBurstFrameRef.current !== null) cancelAnimationFrame(clusterBurstFrameRef.current);
+          const startedAt = Date.now();
+          const parent = feature as GeoJSON.Feature<GeoJSON.Point>;
+          const animateBurst = () => {
+            const progress = Math.min(1, (Date.now() - startedAt) / CLUSTER_BURST_DURATION_MS);
+            setClusterBurst({ parent, children: childPoints, progress });
+            if (progress < 1) {
+              clusterBurstFrameRef.current = requestAnimationFrame(animateBurst);
+            } else {
+              clusterBurstFrameRef.current = null;
+              setTimeout(() => setClusterBurst(null), 70);
+            }
+          };
+          animateBurst();
           cameraRef.current?.setCamera({
             centerCoordinate: geometry.coordinates as [number, number],
             zoomLevel: expansionZoom + CLUSTER_EXPANSION_ZOOM_MARGIN,
@@ -852,6 +950,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     const camera = cameraForBounds(bounds, width, height, fitPadding, minimumBoundsZoom);
     cameraRef.current.setCamera({
       ...camera,
+      ...(resetCameraOrientation ? { heading: 0, pitch: 0 } : {}),
       padding: {
         paddingTop: fitPadding[0],
         paddingRight: fitPadding[1],
@@ -862,7 +961,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     });
     previousBoundsRef.current = nextBounds;
     onBoundsCameraApplied?.();
-  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, minimumBoundsZoom, onBoundsCameraApplied, padding, width]);
+  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, minimumBoundsZoom, onBoundsCameraApplied, padding, resetCameraOrientation, width]);
   useEffect(() => {
     const [lng, lat] = cameraCenterCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;
@@ -890,10 +989,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     cameraRef.current?.setCamera({
       centerCoordinate: cameraCenterCoordinate,
       zoomLevel,
+      ...(resetCameraOrientation ? { heading: 0, pitch: 0 } : {}),
       animationDuration: cameraAnimationDurationMs,
       padding,
     });
-  }, [bounds, cameraAnimationDurationMs, cameraCenterCoordinate, zoomLevel, padding, isReady, mapLoaded, cameraKey]);
+  }, [bounds, cameraAnimationDurationMs, cameraCenterCoordinate, zoomLevel, padding, isReady, mapLoaded, cameraKey, resetCameraOrientation]);
 
   useImperativeHandle(ref, () => ({
     setPaddingBottom: (paddingBottom, durationMs = PADDING_FOLLOW_DURATION_MS) => {
@@ -965,7 +1065,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       >
         <MapboxGL.Camera
           ref={cameraRef}
-          defaultSettings={{ centerCoordinate: cameraCenterCoordinate, zoomLevel, padding }}
+          defaultSettings={{ centerCoordinate: cameraCenterCoordinate, zoomLevel, ...(resetCameraOrientation ? { heading: 0, pitch: 0 } : {}), padding }}
         />
 
         {/* Gated on the caller having permission already. Rendering the puck
@@ -1019,11 +1119,16 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             id="placeClusterCircle"
             filter={['has', 'point_count']}
             style={{
-              circleColor: '#007AFF',
-              circleOpacity: 0.94,
-              circleRadius: ['step', ['get', 'point_count'], 15, 10, 19, 50, 24],
-              circleStrokeWidth: 3,
+              // Restore the familiar map count marker: a saturated blue
+              // bubble, white count, and a fine white edge.
+              circleColor: '#0A84FF',
+              circleOpacity: layerVisible && !clusterBurst ? 0.96 : 0,
+              circleOpacityTransition: { duration: 180, delay: 0 },
+              circleRadius: 16,
+              circleRadiusTransition: { duration: 220, delay: 0 },
+              circleStrokeWidth: 1.5,
               circleStrokeColor: '#FFFFFF',
+              circleStrokeColorTransition: { duration: 180, delay: 0 },
             }}
           />
           <MapboxGL.SymbolLayer
@@ -1031,8 +1136,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             filter={['has', 'point_count']}
             style={{
               textField: ['get', 'point_count_abbreviated'],
-              textSize: 12,
+              textSize: 14,
+              textFont: ['Open Sans Bold'],
               textColor: '#FFFFFF',
+              textOpacity: layerVisible && !clusterBurst ? 1 : 0,
+              textOpacityTransition: { duration: 180, delay: 0 },
               // The count belongs to its bubble; letting the engine drop it
               // would leave an unexplained circle.
               textAllowOverlap: true,
@@ -1045,6 +1153,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             style={{
               circleColor: ['match', ['get', 'tone'], 'recommended', '#885CF6', '#007AFF'],
               circleRadius: 7,
+              circleOpacity: layerVisible && !clusterBurst ? 1 : 0,
+              circleRadiusTransition: { duration: 220, delay: 0 },
+              circleOpacityTransition: { duration: 180, delay: 0 },
               circleStrokeWidth: 3,
               circleStrokeColor: '#FFFFFF',
             }}
@@ -1054,12 +1165,19 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             filter={['!', ['has', 'point_count']]}
             style={{
               textField: ['get', 'title'],
-              textSize: 11,
+              textSize: 12,
+              // The capsule labels below use the same collision decision but
+              // a native view so they can match the original design.
+              textOpacity: 0,
               textColor: '#1F2937',
               textHaloColor: 'rgba(255,255,255,0.95)',
-              textHaloWidth: 1.6,
-              textOffset: [0, 1.1],
-              textAnchor: 'top',
+              textHaloWidth: 2,
+              // A single pin earns a label above it once Mapbox's own
+              // collision engine has enough room at the current zoom.
+              textOffset: [0, -1.05],
+              textAnchor: 'bottom',
+              textOpacityTransition: { duration: 220, delay: 35 },
+              textTranslateTransition: { duration: 220, delay: 35 },
               // Unlike the count, a name may be dropped: this is Mapbox's own
               // collision pass, and it is what keeps dense areas readable.
               textOptional: true,
@@ -1067,6 +1185,65 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             }}
           />
         </MapboxGL.ShapeSource>
+        {clusterBurstFeatures ? (
+          <MapboxGL.ShapeSource id="placeClusterBurst" shape={clusterBurstFeatures}>
+            <MapboxGL.CircleLayer
+            id="placeClusterBurstCircle"
+              filter={['!=', ['get', 'count'], '']}
+              style={{
+                circleColor: '#0A84FF',
+                circleRadius: 16,
+                circleOpacity: ['get', 'opacity'],
+                circleStrokeWidth: 1.5,
+                circleStrokeColor: '#FFFFFF',
+              }}
+            />
+            <MapboxGL.CircleLayer
+              id="placeClusterBurstPoint"
+              filter={['==', ['get', 'count'], '']}
+              style={{
+                circleColor: '#007AFF',
+                circleRadius: 7,
+                circleOpacity: ['get', 'opacity'],
+                circleStrokeWidth: 3,
+                circleStrokeColor: '#FFFFFF',
+              }}
+            />
+            <MapboxGL.SymbolLayer
+              id="placeClusterBurstCount"
+              filter={['!=', ['get', 'count'], '']}
+              style={{
+                textField: ['get', 'count'],
+                textSize: 14,
+                textFont: ['Open Sans Bold'],
+                textColor: '#FFFFFF',
+                textOpacity: ['get', 'opacity'],
+                textAllowOverlap: true,
+                textIgnorePlacement: true,
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        ) : null}
+
+        {/* These are visual-only label views. Pins stay in the GPU layer; the
+            labels are capped by the same collision pass and never receive
+            touches, so map gestures remain entirely with Mapbox. */}
+        {layerMarkers.filter((marker) => layerLabelIds.has(marker.id) && marker.title).map((marker) => (
+          <MapboxGL.MarkerView
+            key={`layer-label:${marker.id}`}
+            coordinate={[marker.longitude, marker.latitude]}
+            style={styles.markerLabelAnnotation}
+            allowOverlap
+          >
+            <MarkerLabel
+              title={marker.title!}
+              hint={marker.labelHint}
+              ai={marker.ai}
+              visible={layerVisible && !clusterBurst}
+              selected={false}
+            />
+          </MapboxGL.MarkerView>
+        ))}
 
         {annotationMarkers.map((marker) => (
           <MapboxGL.MarkerView
@@ -1129,6 +1306,10 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
   },
+  markerLabelAnnotation: {
+    width: 1,
+    height: 1,
+  },
   markerAnnotationCluster: {
     width: 42,
     height: 42,
@@ -1170,19 +1351,19 @@ const styles = StyleSheet.create({
   },
   markerLabel: {
     position: 'absolute',
-    bottom: 28,
+    bottom: 30,
     left: '50%',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(15,23,42,0.24)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,23,42,0.14)',
     shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 7,
+    elevation: 4,
   },
   markerLabelSelected: {
     bottom: 33,
@@ -1205,8 +1386,8 @@ const styles = StyleSheet.create({
   markerLabelText: {
     flex: 1,
     color: '#1F2937',
-    fontSize: 12,
-    lineHeight: 14,
+    fontSize: 13,
+    lineHeight: 16,
     fontWeight: '600',
     letterSpacing: 0,
     textAlign: 'center',

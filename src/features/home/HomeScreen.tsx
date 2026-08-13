@@ -474,6 +474,7 @@ function HomeScreenContent({
         zoomLevel={mapZoom}
         cameraKey={atlasMapState?.cameraKey}
         cameraAnimationDurationMs={atlasMapState?.cameraAnimationDurationMs ?? (atlasMapState ? 1500 : selectedPlaceId ? 450 : 1200)}
+        resetCameraOrientation={atlasMapState?.resetCameraOrientation}
         bounds={overlay.kind === 'createPlan' ? CONTINENTAL_US_BOUNDS : atlasMapState?.bounds}
         padding={mapPadding}
         minimumBoundsZoom={atlasMapState?.minimumBoundsZoom}

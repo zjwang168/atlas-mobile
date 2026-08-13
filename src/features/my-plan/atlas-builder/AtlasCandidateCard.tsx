@@ -11,12 +11,13 @@ type AtlasCandidateCardProps = {
   saveActionsOpen: boolean;
   savingKind: 'atlas' | 'ai' | null;
   finishDisabled: boolean;
+  promptFirstAdd: boolean;
   onAdd: () => void;
   onToggleSaveActions: () => void;
   onSave: (askAI: boolean) => void;
 };
 
-export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, finishDisabled, onAdd, onToggleSaveActions, onSave }: AtlasCandidateCardProps) {
+export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, finishDisabled, promptFirstAdd, onAdd, onToggleSaveActions, onSave }: AtlasCandidateCardProps) {
   const unavailable = Boolean(place?.provisional);
   const description = unavailable ? 'Verifying map position...' : place?.subtitle;
   const expand = useRef(new Animated.Value(saveActionsOpen ? 1 : 0)).current;
@@ -45,11 +46,31 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
   const closeOpacity = expand.interpolate({ inputRange: [0, 0.55, 1], outputRange: [0, 0, 1] });
   const completeRotation = expand.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-90deg'] });
   const closeRotation = expand.interpolate({ inputRange: [0, 1], outputRange: ['90deg', '0deg'] });
+  const addGlow = useRef(new Animated.Value(0)).current;
+  const showFirstAddPrompt = promptFirstAdd && Boolean(place) && !added && !unavailable && !saveActionsOpen;
+  useEffect(() => {
+    addGlow.stopAnimation();
+    if (!showFirstAddPrompt) {
+      addGlow.setValue(0);
+      return;
+    }
+    const pulse = Animated.loop(Animated.sequence([
+      Animated.timing(addGlow, { toValue: 1, duration: 1250, useNativeDriver: true }),
+      Animated.timing(addGlow, { toValue: 0, duration: 1350, useNativeDriver: true }),
+    ]));
+    pulse.start();
+    return () => pulse.stop();
+  }, [addGlow, showFirstAddPrompt]);
+  const glowStyle = {
+    opacity: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.1, 0.32] }),
+    transform: [{ scale: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1.08] }) }],
+  };
 
   return <View style={styles.candidateSlot}>
     {place ? <>
       {description ? <Text numberOfLines={1} style={styles.candidateDescription}>{description}</Text> : null}
       <View style={styles.candidateActions}>
+        {showFirstAddPrompt ? <Animated.View pointerEvents="none" style={[styles.candidateAddGlow, glowStyle]} /> : null}
         <Animated.View style={[styles.candidateActionClip, styles.candidateAddClip, { width: addWidth, opacity: addOpacity }]} pointerEvents={saveActionsOpen ? 'none' : 'auto'}>
           <TouchableOpacity accessibilityLabel={added ? `${place.name} is already in Atlas` : `Add ${place.name} to Atlas`} disabled={added || unavailable} onPress={onAdd} style={[styles.candidateAdd, (added || unavailable) && styles.candidateAddDisabled]}>
             <Text numberOfLines={1} style={styles.candidateAddText}>{place.name}</Text>
@@ -69,7 +90,7 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
       
       <View style={styles.candidateActions}>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAddClip, { width: addWidth, opacity: addOpacity }]} pointerEvents={saveActionsOpen ? 'none' : 'auto'}>
-          <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><Text numberOfLines={1} style={styles.candidateAddEmptyText}>Select a place on the map</Text><Ionicons name="location-outline" size={19} color="#899590" /></View>
+          <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><Text numberOfLines={1} style={styles.candidateAddEmptyText}>Select a pin or serach to add</Text><Ionicons name="location-outline" size={19} color="#899590" /></View>
         </Animated.View>
         <Animated.View style={[styles.candidateActionClip, styles.candidateSaveClip, { width: saveWidth, opacity: saveOpacity, transform: [{ translateX: saveShift }] }]} pointerEvents={saveActionsOpen ? 'auto' : 'none'}><TouchableOpacity accessibilityLabel="Save Atlas" disabled={savingKind !== null} onPress={() => onSave(false)} style={styles.candidateSave}>{savingKind === 'atlas' ? <ActivityIndicator size="small" color="#155E46" /> : <><Ionicons name="bookmark-outline" size={14} color="#155E46" /><Text style={styles.candidateSaveText}>Save</Text></>}</TouchableOpacity></Animated.View>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAskClip, { width: askWidth, opacity: saveOpacity, transform: [{ translateX: saveShift }] }]} pointerEvents={saveActionsOpen ? 'auto' : 'none'}><TouchableOpacity accessibilityLabel="Save Atlas and ask AI" disabled={savingKind !== null} onPress={() => onSave(true)} style={styles.candidateAsk}>{savingKind === 'ai' ? <ActivityIndicator size="small" color="#FFFFFF" /> : <><Ionicons name="sparkles" size={15} color="#FFFFFF" /><Text style={styles.candidateAskText}>Save and Ask AI</Text></>}</TouchableOpacity></Animated.View>
