@@ -103,7 +103,7 @@ const CLUSTER_MAX_ZOOM = 14;
 // A touch past the split point, so tapping a cluster lands on separated pins
 // rather than exactly at the zoom where they are still merging.
 const CLUSTER_EXPANSION_ZOOM_MARGIN = 0.4;
-const CLUSTER_BURST_DURATION_MS = 760;
+const CLUSTER_BURST_DURATION_MS = 360;
 // A duplicate POI can arrive through a historical save, offline reconciliation,
 // or two search providers. Keep one visual pin for the same named place while
 // leaving the source records untouched.
@@ -782,13 +782,13 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     if (!clusterBurst) return null;
     const origin = clusterBurst.parent.geometry.coordinates;
     const parentCount = clusterBurst.parent.properties?.point_count_abbreviated ?? clusterBurst.parent.properties?.point_count ?? '';
-    const parentOpacity = Math.max(0, 1 - clusterBurst.progress * 2.7);
+    const parentOpacity = Math.max(0, 1 - clusterBurst.progress * 2.5);
     return {
       type: 'FeatureCollection',
       features: [
         {
           type: 'Feature',
-          properties: { burstRole: 'parent', count: String(parentCount), opacity: parentOpacity, progress: clusterBurst.progress },
+          properties: { burstRole: 'parent', count: String(parentCount), opacity: parentOpacity },
           geometry: { type: 'Point', coordinates: origin },
         },
         ...clusterBurst.children.map((child, index) => {
@@ -800,8 +800,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             properties: {
               burstRole: 'child',
               count: child.properties?.point_count_abbreviated ?? child.properties?.point_count ?? '',
-              opacity: Math.min(1, Math.max(0, (clusterBurst.progress - 0.22) * 1.7)),
-              progress: clusterBurst.progress,
+              opacity: Math.min(1, clusterBurst.progress * 2.2),
             },
             geometry: {
               type: 'Point' as const,
@@ -930,7 +929,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             centerCoordinate: geometry.coordinates as [number, number],
             zoomLevel: expansionZoom + CLUSTER_EXPANSION_ZOOM_MARGIN,
             padding: prevPaddingRef.current,
-            animationDuration: 720,
+            animationDuration: 340,
           });
         })
         .catch((expansionError) => {
@@ -1276,7 +1275,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               filter={['!=', ['get', 'count'], '']}
               style={{
                 circleColor: '#0A84FF',
-                circleRadius: ['interpolate', ['linear'], ['get', 'progress'], 0, 19, 0.5, 15, 1, 8],
+                circleRadius: 16,
                 circleOpacity: ['get', 'opacity'],
                 circleStrokeWidth: 1.5,
                 circleStrokeColor: '#FFFFFF',
@@ -1287,7 +1286,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               filter={['==', ['get', 'count'], '']}
               style={{
                 circleColor: '#007AFF',
-                circleRadius: ['interpolate', ['linear'], ['get', 'progress'], 0, 1.5, 0.32, 3, 0.7, 8.5, 1, 7],
+                circleRadius: 7,
                 circleOpacity: ['get', 'opacity'],
                 circleStrokeWidth: 3,
                 circleStrokeColor: '#FFFFFF',

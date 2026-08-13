@@ -77,11 +77,14 @@ export const styles = StyleSheet.create({
   searchSubmit: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
   addResultButtonPending: { backgroundColor: '#94A3B8' },
   focusResultButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#12C170' },
-  candidateSlot: { minHeight: 94, paddingTop: 8, paddingBottom: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#DDE7E5', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'flex-end' },
+  candidateSlot: { minHeight: 114, paddingTop: 8, paddingBottom: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#DDE7E5', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'flex-end' },
   // Shares the action row's fixed width so short place details sit centered
   // over the add button and finish control as well as long details do.
   candidateDescription: { width: 280, minHeight: 15, color: '#638078', fontSize: 11, lineHeight: 15, marginBottom: 6, textAlign: 'center' },
   candidateActions: { width: 280, height: 46, position: 'relative', alignSelf: 'center' },
+  candidateCancelHintSlot: { height: 18, marginTop: 4, justifyContent: 'center' },
+  candidateCancelHint: { color: '#A0AAA5', fontSize: 10, fontWeight: '600', textAlign: 'center' },
+  candidateCancelHintHidden: { opacity: 0 },
   candidateActionClip: { height: 46, overflow: 'hidden', position: 'absolute', top: 0 },
   candidateAddClip: { left: 0 },
   candidateAddGlow: { position: 'absolute', left: -8, top: -7, width: 246, height: 60, borderRadius: 30, backgroundColor: '#65D995', shadowColor: '#12C170', shadowOpacity: 0.38, shadowRadius: 13, shadowOffset: { width: 0, height: 0 }, elevation: 1 },

@@ -48,6 +48,7 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
   const closeRotation = expand.interpolate({ inputRange: [0, 1], outputRange: ['90deg', '0deg'] });
   const addGlow = useRef(new Animated.Value(0)).current;
   const showFirstAddPrompt = promptFirstAdd && Boolean(place) && !added && !unavailable && !saveActionsOpen;
+  const showCancelHint = Boolean(place) && !added && !unavailable && !saveActionsOpen;
   useEffect(() => {
     addGlow.stopAnimation();
     if (!showFirstAddPrompt) {
@@ -90,7 +91,7 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
       
       <View style={styles.candidateActions}>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAddClip, { width: addWidth, opacity: addOpacity }]} pointerEvents={saveActionsOpen ? 'none' : 'auto'}>
-          <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><Text numberOfLines={1} style={styles.candidateAddEmptyText}>Select a pin or serach to add</Text><Ionicons name="location-outline" size={19} color="#899590" /></View>
+          <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><Text numberOfLines={1} style={styles.candidateAddEmptyText}>Click a pin to add</Text><Ionicons name="location-outline" size={19} color="#899590" /></View>
         </Animated.View>
         <Animated.View style={[styles.candidateActionClip, styles.candidateSaveClip, { width: saveWidth, opacity: saveOpacity, transform: [{ translateX: saveShift }] }]} pointerEvents={saveActionsOpen ? 'auto' : 'none'}><TouchableOpacity accessibilityLabel="Save Atlas" disabled={savingKind !== null} onPress={() => onSave(false)} style={styles.candidateSave}>{savingKind === 'atlas' ? <ActivityIndicator size="small" color="#155E46" /> : <><Ionicons name="bookmark-outline" size={14} color="#155E46" /><Text style={styles.candidateSaveText}>Save</Text></>}</TouchableOpacity></Animated.View>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAskClip, { width: askWidth, opacity: saveOpacity, transform: [{ translateX: saveShift }] }]} pointerEvents={saveActionsOpen ? 'auto' : 'none'}><TouchableOpacity accessibilityLabel="Save Atlas and ask AI" disabled={savingKind !== null} onPress={() => onSave(true)} style={styles.candidateAsk}>{savingKind === 'ai' ? <ActivityIndicator size="small" color="#FFFFFF" /> : <><Ionicons name="sparkles" size={15} color="#FFFFFF" /><Text style={styles.candidateAskText}>Save and Ask AI</Text></>}</TouchableOpacity></Animated.View>
@@ -102,5 +103,8 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
         </Animated.View>
       </View>
     </>}
+    <View pointerEvents="none" style={styles.candidateCancelHintSlot}>
+      <Text style={[styles.candidateCancelHint, !showCancelHint && styles.candidateCancelHintHidden]}>Tap anywhere to cancel</Text>
+    </View>
   </View>;
 }

@@ -361,6 +361,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < 1) {
+      if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] cleared');
       setResults([]);
       setSearching(false);
       return;
@@ -368,10 +369,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     queryAbortRef.current?.abort();
     const controller = new AbortController();
     queryAbortRef.current = controller;
-    const local = isCreateAtlasLanding
-      ? []
-      : savedPlaces.filter((place) => isLocalMatch(place, trimmed)).slice(0, 8)
-        .map((place): SearchResult => ({ kind: 'saved', place }));
+    // Edit Atlas always searches a fixed 70 km radius around the focus area
+    // it opened with. It does not blend in saved-place matches.
+    const editSearchCenter = initialCenter ?? (initialBounds ? centerOfBounds(initialBounds) : mapCenter);
+    const editFocusBounds = !isCreateAtlasLanding ? boundsFromRadius(editSearchCenter, 70) : undefined;
+    const local: SearchResult[] = [];
     setResults([]);
     setSearching(true);
     let geographicResult: SearchResult | null = null;
@@ -381,15 +383,23 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
     // Search Box is capped at 10 requests/s per access token. Waiting briefly
     // after typing stops avoids turning each keystroke into an upstream call.
+    // `proximity` only biases Mapbox's ranking. The bbox is the hard 70 km
+    // filter that prevents remote POIs from leaking into Edit Atlas results.
+    const editFocusBbox = editFocusBounds
+      ? `${editFocusBounds.sw[0]},${editFocusBounds.sw[1]},${editFocusBounds.ne[0]},${editFocusBounds.ne[1]}`
+      : undefined;
+    const logContext = { query: trimmed, center: editSearchCenter, radiusKm: 70, bbox: editFocusBbox };
+    if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] scheduled', logContext);
     const timer = setTimeout(() => void suggestPlaces(
       trimmed,
       searchSessionRef.current,
       isCreateAtlasLanding
         ? { proximity: mapCenter, types: 'poi,place,locality,district,region,country', includeNonPoi: true }
-        : mapCenter ? { proximity: mapCenter } : {},
+        : { ...(mapCenter ? { proximity: mapCenter } : {}), ...(editFocusBbox ? { bbox: editFocusBbox } : {}) },
       controller.signal,
     ).then((remote) => {
       if (controller.signal.aborted) return;
+      if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] response', { ...logContext, received: remote.length, names: remote.map((item) => item.name) });
       const normalizedQuery = normalize(trimmed);
       const searchScore = (suggestion: typeof remote[number]) => {
         const geographic = ['place', 'locality', 'district', 'region', 'country'].includes(suggestion.feature_type);
@@ -401,14 +411,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         .sort((left, right) => searchScore(left) - searchScore(right) || left.name.localeCompare(right.name))
         .slice(0, isCreateAtlasLanding ? 8 : 2)
         .map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type }));
-      setResults(isCreateAtlasLanding ? withGeographicResult(uniqueRemote) : [...uniqueRemote, ...local].slice(0, 4));
+      const nextResults = isCreateAtlasLanding ? withGeographicResult(uniqueRemote) : uniqueRemote.slice(0, 4);
+      if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] displayed', { ...logContext, count: nextResults.length, names: nextResults.map((item) => item.kind === 'remote' ? item.name : item.place.name) });
+      setResults(nextResults);
     }).catch((error) => {
       if (!controller.signal.aborted && !isAbortError(error)) {
         console.warn('[AtlasBuilder] search failed', error);
-        setResults(isCreateAtlasLanding ? [] : local.slice(0, 4));
+        if (!isCreateAtlasLanding) console.warn('[AtlasEditSearch] failed', { ...logContext, error: error instanceof Error ? error.message : String(error) });
+        setResults([]);
       }
     }).finally(() => {
-      if (!controller.signal.aborted) setSearching(false);
+      if (!controller.signal.aborted) {
+        if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] finished', logContext);
+        setSearching(false);
+      }
     }), SEARCH_DEBOUNCE_MS);
 
     // This corrects ambiguous names such as California and Beijing after the
@@ -432,7 +448,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       clearTimeout(timer);
       controller.abort();
     };
-  }, [isCreateAtlasLanding, mapCenter, query, savedPlaces]);
+  }, [initialBounds, initialCenter, isCreateAtlasLanding, mapCenter, query]);
 
   const hideTransientUI = useCallback(() => {
     seedUserInteractedRef.current = true;
@@ -451,6 +467,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // previous query here as well; waiting for effect cleanup lets slow mobile
     // networks accumulate obsolete requests while somebody is still typing.
     queryAbortRef.current?.abort();
+    if (atlasId) console.info('[AtlasEditSearch] input', { query: nextQuery });
     setQuery(nextQuery);
     if (nextQuery.trim().length >= 1) {
       setResults([]);
@@ -590,20 +607,45 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     if (!started || atlasId || seedAttemptedRef.current || items.length > 0 || focused) return;
     const center = initialCenter ?? mapCenter;
     const bounds = mapBounds ?? initialBounds;
-    const savedCandidate = savedPlaces
+    const savedCandidatesInBounds = savedPlaces
       .filter((place) => bounds ? isWithinBounds(place, bounds) : isNearCoordinate(place, center))
       .sort((left, right) => {
         const leftDistance = (left.longitude - center[0]) ** 2 + (left.latitude - center[1]) ** 2;
         const rightDistance = (right.longitude - center[0]) ** 2 + (right.latitude - center[1]) ** 2;
         return leftDistance - rightDistance;
-      })[0];
+      });
+    const focusName = normalize(initialLocation ?? '');
+    const savedCandidatesMatchingFocus = focusName
+      ? savedPlaces.filter((place) => [place.city, place.region, place.country].some((value) => normalize(value ?? '') === focusName))
+      : [];
+    // A stale or malformed entry coordinate can point at a different region
+    // from the focus label. Recover using the user's saved places for that
+    // named area instead of attempting remote discovery around the bad center.
+    const recoveredFocus = !savedCandidatesInBounds.length && savedCandidatesMatchingFocus.length > 0;
+    const candidatePool = recoveredFocus ? savedCandidatesMatchingFocus : savedCandidatesInBounds;
+    const savedCandidate = candidatePool.length
+      ? candidatePool[Math.floor(Math.random() * candidatePool.length)]
+      : undefined;
     if (savedCandidate) {
       seedAttemptedRef.current = true;
       seedAutoSelectedRef.current = true;
+      if (recoveredFocus) {
+        const recoveredBounds = focusBoundsForSavedPlaces(
+          [savedCandidate.longitude, savedCandidate.latitude],
+          savedCandidatesMatchingFocus,
+        );
+        setMapCenter(centerOfBounds(recoveredBounds));
+        setMapBounds(recoveredBounds);
+        setMapZoom(zoomForBounds(recoveredBounds));
+      }
       console.info('[AtlasSeed] saved-place-selected', {
         name: savedCandidate.name,
         coordinate: [savedCandidate.longitude, savedCandidate.latitude],
         source: 'seed-effect',
+        inBoundsCount: savedCandidatesInBounds.length,
+        matchingFocusCount: savedCandidatesMatchingFocus.length,
+        recoveredFocus,
+        initialLocation,
       });
       setFocused(toDraft(savedCandidate));
       return;
@@ -967,7 +1009,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     searchSessionRef.current = createSearchSession();
     const resolved = await resolvePlace({ external_id: result.externalId, name: result.name, feature_type: 'poi', source: 'mapbox' }, sessionToken);
     if (!resolved) return null;
-    return {
+    const place: DraftPlace = {
       id: result.externalId,
       name: resolved.name,
       subtitle: resolved.subtitle,
@@ -979,7 +1021,19 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       country: resolved.country ?? null,
       category: resolved.type ?? result.featureType ?? null,
     };
-  }, []);
+    const editFocusBounds = !isCreateAtlasLanding
+      ? boundsFromRadius(initialCenter ?? (initialBounds ? centerOfBounds(initialBounds) : mapCenter), 70)
+      : undefined;
+    if (editFocusBounds && !isWithinBounds(place, editFocusBounds)) {
+      console.warn('[AtlasBuilder] rejected out-of-focus search result', {
+        name: place.name,
+        coordinate: [place.longitude, place.latitude],
+        bounds: editFocusBounds,
+      });
+      return null;
+    }
+    return place;
+  }, [initialBounds, initialCenter, isCreateAtlasLanding, mapCenter]);
 
   const focusAreaResult = useCallback(async (result: SearchResult) => {
     try {
@@ -1458,7 +1512,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const mapSearchOverlay = useMemo(() => <Animated.View pointerEvents="box-none" style={[styles.mapSearchLayer, { opacity: searchAppear, transform: [{ translateX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) }, { scaleX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }) }] }]}>
     <View pointerEvents="auto" style={styles.mapSearchBox}>
       <Ionicons name={focusSearchActive ? 'locate-outline' : 'search'} size={18} color={focusSearchActive ? '#12C170' : '#6B7280'} />
-      <TextInput ref={inputRef} value={query} onChangeText={handleQueryChange} placeholder={focusSearchActive ? 'Search an area' : 'Building Atlas in...'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={focusSearchActive ? openFullSearch : undefined} />
+      <TextInput ref={inputRef} value={query} onChangeText={handleQueryChange} placeholder={focusSearchActive ? 'Search an area' : isCreateAtlasLanding ? 'Building Atlas in...' : 'Search places'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={focusSearchActive ? openFullSearch : undefined} />
       {searching ? <ActivityIndicator size="small" color="#2563EB" /> : focusSearchActive ? <TouchableOpacity accessibilityLabel="Focus search area" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity> : null}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>

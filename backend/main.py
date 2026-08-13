@@ -1186,17 +1186,26 @@ async def places_search(
     language: str = Query("en"),
     country: Optional[str] = Query(None, description="ISO 3166-1 alpha-2 filter"),
     types: Optional[str] = Query(None, description="Comma-separated Mapbox feature types"),
+    bbox: Optional[str] = Query(None, description="west,south,east,north bounds restricting results"),
 ) -> PlaceSuggestResponse:
     """Suggest places for a partial query. Results carry no coordinates."""
+    logging.getLogger("atlas.place_search").info(
+        "Place suggest request | q=%r proximity=%s bbox=%s types=%s",
+        q, proximity, bbox, types,
+    )
     try:
         suggestions = await place_search_service.suggest(
             q, session_token,
             proximity=proximity, limit=limit, language=language, country=country,
-            types=types,
+            types=types, bbox=bbox,
         )
     except Exception as e:
         raise _place_search_http_error(e)
 
+    logging.getLogger("atlas.place_search").info(
+        "Place suggest response | q=%r count=%s bbox=%s",
+        q, len(suggestions), bbox,
+    )
     return PlaceSuggestResponse(
         query=q,
         session_token=session_token,

@@ -58,7 +58,7 @@ function isSaveable(suggestion: PlaceSuggestion): boolean {
 export async function suggestPlaces(
   query: string,
   sessionToken: string,
-  options: { proximity?: [number, number]; language?: string; country?: string; types?: string; includeNonPoi?: boolean } = {},
+  options: { proximity?: [number, number]; language?: string; country?: string; types?: string; bbox?: string; includeNonPoi?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<PlaceSuggestion[]> {
   const trimmed = query.trim();
@@ -73,6 +73,7 @@ export async function suggestPlaces(
       language: options.language,
       country: options.country,
       types: options.types,
+      bbox: options.bbox,
     },
     signal,
   );

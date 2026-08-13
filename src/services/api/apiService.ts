@@ -827,6 +827,8 @@ export async function searchPlaces(
     language?: string;
     country?: string;
     types?: string;
+    /** Mapbox bbox: west,south,east,north. Restricts, rather than ranks, results. */
+    bbox?: string;
   },
   signal?: AbortSignal,
 ): Promise<PlaceSuggestResponse> {
@@ -839,6 +841,7 @@ export async function searchPlaces(
   if (params.language) search.set('language', params.language);
   if (params.country) search.set('country', params.country);
   if (params.types) search.set('types', params.types);
+  if (params.bbox) search.set('bbox', params.bbox);
 
   // Mapbox search endpoints are public application queries. Avoid waiting for
   // Supabase session hydration before every keystroke.
