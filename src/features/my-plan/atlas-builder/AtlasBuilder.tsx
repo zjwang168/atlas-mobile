@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import { useHomeAtlases, useHomeLocation, useHomeOverlayActions, useHomePlaces } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import { discoverAtlasPlaces, geocodeAtlasArea, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
 import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
@@ -14,6 +14,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ActivityIndicator,
   Animated,
+  Keyboard,
   LayoutAnimation,
   Modal,
   Platform,
@@ -64,7 +65,10 @@ export type { AtlasSavedMapView, DraftPlace } from './types';
 
 export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
-  const { savedPlaces, atlasPlaces, atlases, setAtlasMapState, setTabBarVisible, userLocation, refreshUserLocation } = useHome();
+  const { savedPlaces } = useHomePlaces();
+  const { atlasPlaces, atlases } = useHomeAtlases();
+  const { setAtlasMapState, setTabBarVisible } = useHomeOverlayActions();
+  const { userLocation, refreshUserLocation } = useHomeLocation();
   const searchSession = useRef(createSearchSession()).current;
   const queryAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<TextInput>(null);
@@ -148,6 +152,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [existingAtlas?.title]);
   const focusAreas = useMemo(() => deriveFocusAreas(savedPlaces), [savedPlaces]);
   const undefinedDayLocked = useMemo(() => items.some((item) => Boolean(item.timeline_time) && !item.timeline_day), [items]);
+  const saveDisabled = items.length === 0;
+  useEffect(() => {
+    if (saveDisabled) setSaveActionsOpen(false);
+  }, [saveDisabled]);
   useEffect(() => {
     if (started && initialCandidates) setRecommendedPlaces(initialCandidates);
   }, [initialCandidates, started]);
@@ -409,6 +417,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [isCreateAtlasLanding, mapCenter, query, savedPlaces, searchSession]);
 
   const hideTransientUI = useCallback(() => {
+    Keyboard.dismiss();
     inputRef.current?.blur();
     setResults([]);
     setFocused(null);
@@ -827,7 +836,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         setItems((current) => current.map((item) => item.id === place.id ? { ...item, joinId } : item));
       });
     }
-    setFocused(place);
+    // Once added, clear the candidate action bar so the next map selection
+    // is visibly a fresh place to add rather than the already-added name.
+    setFocused(null);
+    setSaveActionsOpen(false);
     setQuery('');
     setResults([]);
   }, [items, onFirstPlaceAdded, onItemsChange, persistAddedPlace, showDialog]);
@@ -1220,8 +1232,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       {searching ? <ActivityIndicator size="small" color="#2563EB" /> : focusSearchActive ? <TouchableOpacity accessibilityLabel="Focus search area" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity> : null}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>
-    {localMustSeesVisible ? <Animated.View style={[styles.localMustSeesNote, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={hideLocalMustSees} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></Animated.View> : null}
-    {nearbyPromptVisible ? <Animated.View style={{ opacity: nearbyPromptOpacity }}><View style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
+    {localMustSeesVisible ? <Animated.View pointerEvents="box-none" style={[styles.localMustSeesNoteRow, { opacity: localMustSeesOpacity }]}><View pointerEvents="auto" style={styles.localMustSeesNote}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={hideLocalMustSees} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></View></Animated.View> : null}
+    {nearbyPromptVisible ? <Animated.View pointerEvents="box-none" style={[styles.nearbyPromptRow, { opacity: nearbyPromptOpacity }]}><View pointerEvents="auto" style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
     {results.length > 0 ? <View pointerEvents="auto" style={styles.results}><ScrollView nestedScrollEnabled showsVerticalScrollIndicator style={styles.searchResultsScroll}>{results.map((result) => {
       const key = result.kind === 'saved' ? result.place.id : result.externalId;
       const createSearchAction = isCreateAtlasLanding && !focusSearchActive;
@@ -1311,7 +1323,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </Reanimated.View>)}
       </ScrollView>}
 
-      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
+      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} finishDisabled={saveDisabled} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
 
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} dayLocked={undefinedDayLocked} hasExisting={timeModalIndex !== null && Boolean(items[timeModalIndex]?.timeline_time)} validationMessage={timeConflictMessage} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => { setTimeConflictMessage(null); setTimeModalIndex(null); }} onRemove={() => { if (timeModalIndex === null) return; const existing = items[timeModalIndex]; commitItems(items.map((entry, index) => index === timeModalIndex ? { ...entry, timeline_day: null, timeline_time: null } : entry)); if (existing?.joinId) updateAtlasPlace(existing.joinId, { timeline_day: null, timeline_time: null }).catch(console.warn); setTimeModalIndex(null); }} onSave={saveTimeDivider} />
       <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={saveTransport} onRemove={() => saveTransport(null)} onClose={() => setTransportModalIndex(null)} />

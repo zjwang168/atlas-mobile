@@ -295,6 +295,8 @@ function HomeScreenContent({
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
   const bottomPanelHeightRef = useRef(settledBottomPanelHeight);
+  const atlasMapStateRef = useRef(atlasMapState);
+  atlasMapStateRef.current = atlasMapState;
   const mapRef = useRef<MapboxMapHandle>(null);
   // Recomputed whenever the active bottom panel toggles OR its resolved snap state
   // changes, so a discrete camera recenter (e.g. selecting a different marker while
@@ -321,14 +323,16 @@ function HomeScreenContent({
   // bypassing React re-render entirely.
   const handlePanelHeightChange = useCallback((height: number) => {
     bottomPanelHeightRef.current = height;
+    const currentAtlasMapState = atlasMapStateRef.current;
     // Bounds-owned Atlas cameras must only be moved by fitBounds. A native
     // padding-only setCamera call after fitBounds can replace its calculated
     // zoom with the Camera's previous state.
-    if (!lockAtlasCameraToScreen && !atlasMapState?.bounds) {
-      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + atlasCameraVerticalOffset) : 0);
+    if (!currentAtlasMapState?.lockCameraToScreen && !currentAtlasMapState?.bounds) {
+      const verticalOffset = currentAtlasMapState?.cameraVerticalOffset ?? 0;
+      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + verticalOffset) : 0);
     }
-    atlasMapState?.onPanelHeightChange?.(height);
-  }, [atlasCameraVerticalOffset, atlasMapState, bottomPanelActive, lockAtlasCameraToScreen]);
+    currentAtlasMapState?.onPanelHeightChange?.(height);
+  }, [bottomPanelActive]);
 
   // A panel may already be resting when the Atlas overlay mounts, so its
   // height listener is not guaranteed to emit an initial frame. Seed the
@@ -379,6 +383,16 @@ function HomeScreenContent({
   const handlePlanExit = useCallback(() => {
     animateToTab(TAB_PLACES);
   }, [animateToTab]);
+  const nativeBottomBar = useMemo(() => (
+    effectiveTabBarVisible ? (
+      <HomeTabBar
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        onAddPress={handleAddPress}
+        onChatPress={handleChatPress}
+      />
+    ) : undefined
+  ), [activeTab, effectiveTabBarVisible, handleAddPress, handleChatPress, handleTabChange]);
 
   useEffect(() => {
     animateToTab(activeTab);
@@ -518,14 +532,7 @@ function HomeScreenContent({
           onSearchPress={handleSearchPress}
           onExitPlan={handlePlanExit}
           isActive={activeTab === TAB_PLAN}
-          bottomBar={effectiveTabBarVisible ? (
-            <HomeTabBar
-              activeTab={activeTab}
-              onTabChange={handleTabChange}
-              onAddPress={handleAddPress}
-              onChatPress={handleChatPress}
-            />
-          ) : undefined}
+          bottomBar={nativeBottomBar}
         />
       ) : null}
 

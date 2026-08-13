@@ -24,6 +24,7 @@ import Animated, {
 
 import { useContentPanelSnapGroup } from '@/components/content-panel/ContentPanelSnapProvider';
 import type { SnapState } from '@/components/content-panel/ContentPanel';
+import PanelGrabber from '@/components/content-panel/PanelGrabber';
 import type { TopMode } from '@/components/top-nav/TopNav';
 import type { Place, PlaceDetail } from '@/types/place';
 import Discover from '../discover/Discover';
@@ -159,6 +160,13 @@ function PlacesBottomSheet({
     setGroupSnapState(state);
   }, [setGroupSnapState]);
 
+  const handleGrabberDragEnd = useCallback((translationY: number) => {
+    const currentIndex = snapStateToIndex(groupSnapState);
+    const nextIndex = currentIndex + (translationY < 0 ? 1 : -1);
+    const nextState = SNAP_STATES[nextIndex];
+    if (nextState) setGroupSnapState(nextState);
+  }, [groupSnapState, setGroupSnapState]);
+
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
@@ -185,13 +193,15 @@ function PlacesBottomSheet({
       enableDynamicSizing={false}
       enablePanDownToClose={false}
       enableOverDrag={false}
+      enableContentPanningGesture={false}
+      handleComponent={null}
       onChange={handleSheetChange}
       backdropComponent={renderBackdrop}
       backgroundComponent={PlacesSheetBackground}
-      handleIndicatorStyle={styles.handleIndicator}
       style={[styles.sheetShell, sheetAnimatedStyle]}
     >
       <BottomSheetView style={styles.content}>
+        <PanelGrabber onDragEnd={handleGrabberDragEnd} />
         <View
           collapsable={false}
           pointerEvents={topMode === 'saved' ? 'auto' : 'none'}
@@ -244,17 +254,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255,255,255,0.90)',
   },
-  handleIndicator: {
-    width: 36,
-    height: 5,
-    backgroundColor: 'rgba(60,60,67,0.25)',
-  },
   content: {
     flex: 1,
   },
   modePane: {
     position: 'absolute',
-    top: 0,
+    top: 28,
     right: 0,
     bottom: 0,
     left: 0,

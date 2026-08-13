@@ -14,11 +14,15 @@ import { CaretRightIcon } from 'phosphor-react-native/src/icons/CaretRight';
 import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
+import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  ActivityIndicator,
   FlatList,
   Image,
+  Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   View,
@@ -82,6 +86,54 @@ type VisibleLocation = Pick<
   DistancePlaceItem,
   'locationLabel' | 'locationCount' | 'dateLabel'
 >;
+
+type CountryIndexItem = {
+  name: string;
+  flag: string;
+  count: number;
+  firstPlaceIndex: number;
+  cities: CityIndexItem[];
+};
+
+type CityIndexItem = {
+  name: string;
+  count: number;
+  firstPlaceIndex: number;
+};
+
+type CountryIndexRow =
+  | { kind: 'country'; item: CountryIndexItem }
+  | { kind: 'city'; item: CityIndexItem; countryName: string };
+
+const COUNTRY_FLAGS: Record<string, string> = Object.fromEntries(
+  'Afghanistan:AF|Albania:AL|Algeria:DZ|Andorra:AD|Angola:AO|Antigua and Barbuda:AG|Argentina:AR|Armenia:AM|Australia:AU|Austria:AT|Azerbaijan:AZ|Bahamas:BS|Bahrain:BH|Bangladesh:BD|Barbados:BB|Belarus:BY|Belgium:BE|Belize:BZ|Benin:BJ|Bhutan:BT|Bolivia:BO|Bosnia and Herzegovina:BA|Botswana:BW|Brazil:BR|Brunei:BN|Bulgaria:BG|Burkina Faso:BF|Burundi:BI|Cambodia:KH|Cameroon:CM|Canada:CA|Cape Verde:CV|Central African Republic:CF|Chad:TD|Chile:CL|China:CN|Colombia:CO|Comoros:KM|Congo:CG|Costa Rica:CR|Croatia:HR|Cuba:CU|Cyprus:CY|Czechia:CZ|Denmark:DK|Djibouti:DJ|Dominica:DM|Dominican Republic:DO|Ecuador:EC|Egypt:EG|El Salvador:SV|Equatorial Guinea:GQ|Eritrea:ER|Estonia:EE|Eswatini:SZ|Ethiopia:ET|Fiji:FJ|Finland:FI|France:FR|Gabon:GA|Gambia:GM|Georgia:GE|Germany:DE|Ghana:GH|Greece:GR|Grenada:GD|Guatemala:GT|Guinea:GN|Guinea-Bissau:GW|Guyana:GY|Haiti:HT|Honduras:HN|Hong Kong:HK|Hungary:HU|Iceland:IS|India:IN|Indonesia:ID|Iran:IR|Iraq:IQ|Ireland:IE|Israel:IL|Italy:IT|Ivory Coast:CI|Jamaica:JM|Japan:JP|Jordan:JO|Kazakhstan:KZ|Kenya:KE|Kiribati:KI|Kosovo:XK|Kuwait:KW|Kyrgyzstan:KG|Laos:LA|Latvia:LV|Lebanon:LB|Lesotho:LS|Liberia:LR|Libya:LY|Liechtenstein:LI|Lithuania:LT|Luxembourg:LU|Madagascar:MG|Malawi:MW|Malaysia:MY|Maldives:MV|Mali:ML|Malta:MT|Marshall Islands:MH|Mauritania:MR|Mauritius:MU|Mexico:MX|Micronesia:FM|Moldova:MD|Monaco:MC|Mongolia:MN|Montenegro:ME|Morocco:MA|Mozambique:MZ|Myanmar:MM|Namibia:NA|Nauru:NR|Nepal:NP|Netherlands:NL|New Zealand:NZ|Nicaragua:NI|Niger:NE|Nigeria:NG|North Korea:KP|North Macedonia:MK|Norway:NO|Oman:OM|Pakistan:PK|Palau:PW|Palestine:PS|Panama:PA|Papua New Guinea:PG|Paraguay:PY|Peru:PE|Philippines:PH|Poland:PL|Portugal:PT|Qatar:QA|Romania:RO|Russia:RU|Rwanda:RW|Saint Kitts and Nevis:KN|Saint Lucia:LC|Saint Vincent and the Grenadines:VC|Samoa:WS|San Marino:SM|Sao Tome and Principe:ST|Saudi Arabia:SA|Senegal:SN|Serbia:RS|Seychelles:SC|Sierra Leone:SL|Singapore:SG|Slovakia:SK|Slovenia:SI|Solomon Islands:SB|Somalia:SO|South Africa:ZA|South Korea:KR|South Sudan:SS|Spain:ES|Sri Lanka:LK|Sudan:SD|Suriname:SR|Sweden:SE|Switzerland:CH|Syria:SY|Taiwan:TW|Tajikistan:TJ|Tanzania:TZ|Thailand:TH|Timor-Leste:TL|Togo:TG|Tonga:TO|Trinidad and Tobago:TT|Tunisia:TN|Turkey:TR|Turkmenistan:TM|Tuvalu:TV|Uganda:UG|Ukraine:UA|United Arab Emirates:AE|United Kingdom:GB|United States:US|Uruguay:UY|Uzbekistan:UZ|Vanuatu:VU|Vatican City:VA|Venezuela:VE|Vietnam:VN|Yemen:YE|Zambia:ZM|Zimbabwe:ZW'
+    .split('|')
+    .map((entry) => {
+      const [name, code] = entry.split(':');
+      return [name.toLocaleLowerCase().replace(/[^a-z]/g, '_'), code];
+    }),
+);
+
+function countryFlag(country: string): string {
+  const key = country
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  const code = COUNTRY_FLAGS[key]
+    ?? COUNTRY_FLAGS[key.replace('republic_of_', '')]
+    ?? ({
+      czech_republic: 'CZ',
+      korea_south: 'KR',
+      korea_republic_of: 'KR',
+      taiwan_province_of_china: 'TW',
+      united_states_of_america: 'US',
+      uk: 'GB',
+    } as Record<string, string>)[key];
+  if (!code) return '';
+  return String.fromCodePoint(...code.split('').map((letter) => 0x1F1A5 + letter.charCodeAt(0)));
+}
 
 function placeListKeyExtractor(item: DistancePlaceItem): string {
   return item.place.id;
@@ -501,6 +553,114 @@ function getPlaceCountryKey(place: PlaceDetail): string | undefined {
   return isUsState ? 'United States' : lastAddressPart;
 }
 
+function getPlaceCityKey(place: PlaceDetail): string | undefined {
+  return place.city?.trim() || undefined;
+}
+
+function countryGroupKey(country: string): string {
+  return country.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+}
+
+function CountriesIndex({
+  visible,
+  rows,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  rows: CountryIndexRow[];
+  onClose: () => void;
+  onSelect: (target: Pick<CountryIndexItem, 'name' | 'firstPlaceIndex'>) => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.countryIndexModal}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close country list"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View accessibilityViewIsModal style={styles.countryIndexSheet}>
+          <View style={styles.countryIndexHandle} />
+          <View style={styles.countryIndexHeader}>
+            <Text style={styles.countryIndexTitle}>Countries</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close country list"
+              onPress={onClose}
+              hitSlop={8}
+              style={styles.countryIndexClose}
+            >
+              <Text style={styles.countryIndexCloseLabel}>Done</Text>
+            </Pressable>
+          </View>
+          <FlatList
+            data={rows}
+            keyExtractor={(row) => row.kind === 'country'
+              ? `country-${row.item.name}`
+              : `city-${row.countryName}-${row.item.name}`}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.countryIndexList}
+            renderItem={({ item: row }) => row.kind === 'country' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Show saved places in ${row.item.name}`}
+                onPress={() => onSelect(row.item)}
+                style={({ pressed }) => [
+                  styles.countryIndexRow,
+                  pressed && styles.countryIndexRowPressed,
+                ]}
+              >
+                <View style={styles.countryIndexFlag}>
+                  <Text style={styles.countryIndexFlagLabel}>{row.item.flag || '•'}</Text>
+                </View>
+                <Text numberOfLines={1} style={styles.countryIndexName}>{row.item.name}</Text>
+                <Text style={styles.countryIndexCount}>{row.item.count}</Text>
+                <CaretRightIcon size={16} weight="bold" color="#B0B0B0" />
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Show saved places in ${row.item.name}, ${row.countryName}`}
+                onPress={() => onSelect(row.item)}
+                style={({ pressed }) => [
+                  styles.cityIndexRow,
+                  pressed && styles.countryIndexRowPressed,
+                ]}
+              >
+                <View style={styles.cityIndexBullet} />
+                <Text numberOfLines={1} style={styles.cityIndexName}>{row.item.name}</Text>
+                <Text style={styles.cityIndexCount}>{row.item.count}</Text>
+                <CaretRightIcon size={14} weight="bold" color="#C2C2C2" />
+              </Pressable>
+            )}
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function CountryJumpLoading({ country }: { country: string | null }) {
+  if (!country) return null;
+  return (
+    <View pointerEvents="none" style={styles.countryJumpBackdrop}>
+      <View style={styles.countryJumpNotice}>
+        <ActivityIndicator size="small" color="#12A967" />
+        <Text numberOfLines={1} style={styles.countryJumpText}>
+          Opening {country}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function AllPlaces({
   onPlacePress,
   bottomInset = 0,
@@ -560,6 +720,50 @@ function AllPlaces({
     ? distanceSortedPlaces
     : dateSortedPlaces;
 
+  const countriesIndex = useMemo<CountryIndexItem[]>(() => {
+    const entries = new Map<string, CountryIndexItem>();
+    sortedPlaces.forEach(({ place }, index) => {
+      const name = getPlaceCountryKey(place) ?? 'Other places';
+      const key = countryGroupKey(name);
+      let country = entries.get(key);
+      if (!country) {
+        country = {
+          name,
+          flag: countryFlag(name),
+          count: 0,
+          firstPlaceIndex: index,
+          cities: [],
+        };
+        entries.set(key, country);
+      }
+      country.count += 1;
+
+      const cityName = getPlaceCityKey(place);
+      if (!cityName) return;
+      let city = country.cities.find((item) => item.name === cityName);
+      if (!city) {
+        city = { name: cityName, count: 0, firstPlaceIndex: index };
+        country.cities.push(city);
+      }
+      city.count += 1;
+    });
+    return Array.from(entries.values())
+      .map((country) => ({
+        ...country,
+        cities: [...country.cities].sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [sortedPlaces]);
+
+  const countryIndexRows = useMemo<CountryIndexRow[]>(() => countriesIndex.flatMap((country) => [
+    { kind: 'country' as const, item: country },
+    ...country.cities.map((city) => ({
+      kind: 'city' as const,
+      item: city,
+      countryName: country.name,
+    })),
+  ]), [countriesIndex]);
+
   const firstVisibleLocation = useMemo<VisibleLocation>(() => ({
     locationLabel: sortedPlaces[0]?.locationLabel ?? 'Saved places',
     locationCount: sortedPlaces[0]?.locationCount ?? 0,
@@ -572,6 +776,12 @@ function AllPlaces({
   const placesHeaderShadowOpacity = useRef(new Animated.Value(0)).current;
   const isPlacesHeaderShadowVisibleRef = useRef(false);
   const placesListRef = useRef<FlatList<DistancePlaceItem>>(null);
+  const [countriesIndexOpen, setCountriesIndexOpen] = useState(false);
+  const [jumpingCountry, setJumpingCountry] = useState<string | null>(null);
+  const pendingJumpIndexRef = useRef<number | null>(null);
+  const jumpRetryCountRef = useRef(0);
+  const jumpRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jumpTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onAtlasViewableItemsChanged = useRef(() => {}).current;
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 55,
@@ -609,6 +819,17 @@ function AllPlaces({
   }) => {
     const firstVisibleItem = viewableItems.find((token) => token.isViewable)?.item;
     if (!firstVisibleItem) return;
+    const pendingIndex = pendingJumpIndexRef.current;
+    if (pendingIndex !== null && viewableItems.some((token) => (
+      token.isViewable && token.index === pendingIndex
+    ))) {
+      pendingJumpIndexRef.current = null;
+      if (jumpRetryTimerRef.current) clearTimeout(jumpRetryTimerRef.current);
+      jumpRetryTimerRef.current = null;
+      if (jumpTimeoutRef.current) clearTimeout(jumpTimeoutRef.current);
+      jumpTimeoutRef.current = null;
+      setJumpingCountry(null);
+    }
     updateVisibleLocation({
       locationLabel: firstVisibleItem.locationLabel,
       locationCount: firstVisibleItem.locationCount,
@@ -621,6 +842,11 @@ function AllPlaces({
     setVisibleLocation(firstVisibleLocation);
     locationLabelOpacity.setValue(1);
   }, [firstVisibleLocation, locationLabelOpacity]);
+
+  useEffect(() => () => {
+    if (jumpRetryTimerRef.current) clearTimeout(jumpRetryTimerRef.current);
+    if (jumpTimeoutRef.current) clearTimeout(jumpTimeoutRef.current);
+  }, []);
 
   const handlePlacesListScroll = useCallback((
     event: NativeSyntheticEvent<NativeScrollEvent>,
@@ -643,6 +869,49 @@ function AllPlaces({
   useEffect(() => {
     placesListRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [sortMode]);
+
+  const scrollToCountry = useCallback((country: Pick<CountryIndexItem, 'name' | 'firstPlaceIndex'>) => {
+    if (jumpRetryTimerRef.current) clearTimeout(jumpRetryTimerRef.current);
+    if (jumpTimeoutRef.current) clearTimeout(jumpTimeoutRef.current);
+    setCountriesIndexOpen(false);
+    setJumpingCountry(country.name);
+    pendingJumpIndexRef.current = country.firstPlaceIndex;
+    jumpRetryCountRef.current = 0;
+    jumpTimeoutRef.current = setTimeout(() => {
+      pendingJumpIndexRef.current = null;
+      setJumpingCountry(null);
+    }, 1800);
+    requestAnimationFrame(() => {
+      placesListRef.current?.recordInteraction();
+      placesListRef.current?.scrollToIndex({
+        index: country.firstPlaceIndex,
+        animated: true,
+        viewPosition: 0,
+      });
+    });
+  }, []);
+
+  const retryCountryJump = useCallback((index: number, averageItemLength: number) => {
+    if (pendingJumpIndexRef.current !== index) return;
+    const retryCount = jumpRetryCountRef.current;
+    jumpRetryCountRef.current += 1;
+    if (retryCount >= 2) {
+      pendingJumpIndexRef.current = null;
+      setJumpingCountry(null);
+      return;
+    }
+    // Render the destination neighborhood first, then retry the exact index.
+    // The loading notice stays up until the requested row is actually visible.
+    placesListRef.current?.scrollToOffset({
+      offset: Math.max(0, index * averageItemLength),
+      animated: false,
+    });
+    if (jumpRetryTimerRef.current) clearTimeout(jumpRetryTimerRef.current);
+    jumpRetryTimerRef.current = setTimeout(() => {
+      if (pendingJumpIndexRef.current !== index) return;
+      placesListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
+    }, 120 + retryCount * 120);
+  }, []);
 
   const sortMenuActions = useMemo<MenuAction[]>(() => [
     {
@@ -754,17 +1023,31 @@ function AllPlaces({
       <View style={styles.root}>
         <View style={styles.placesDivider} />
         <View style={styles.placesListHeader}>
-          <Animated.View style={[styles.placesLocationCopy, { opacity: locationLabelOpacity }]}>
-            <Text numberOfLines={1} style={styles.placesLocationLabel}>
-              {sortMode === 'date' ? (
-                visibleLocation.dateLabel
-              ) : (
-                `${visibleLocation.locationLabel} · ${visibleLocation.locationCount} ${
-                  visibleLocation.locationCount === 1 ? 'place' : 'places'
-                }`
-              )}
-            </Text>
-          </Animated.View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Browse saved places by country"
+            accessibilityHint="Choose a country and jump to its saved places"
+            disabled={countriesIndex.length === 0}
+            onPress={() => setCountriesIndexOpen(true)}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.placesLocationButton,
+              pressed && styles.countryIndexButtonPressed,
+            ]}
+          >
+            <MapTrifoldIcon size={16} weight="fill" color="#B0B0B0" />
+            <Animated.View style={[styles.placesLocationCopy, { opacity: locationLabelOpacity }]}>
+              <Text numberOfLines={1} style={styles.placesLocationLabel}>
+                {sortMode === 'date' ? (
+                  visibleLocation.dateLabel
+                ) : (
+                  `${visibleLocation.locationLabel} · ${visibleLocation.locationCount} ${
+                    visibleLocation.locationCount === 1 ? 'place' : 'places'
+                  }`
+                )}
+              </Text>
+            </Animated.View>
+          </Pressable>
           <MenuView
             key={sortMode}
             actions={sortMenuActions}
@@ -819,6 +1102,9 @@ function AllPlaces({
             scrollEventThrottle={16}
             viewabilityConfig={viewabilityConfig}
             onViewableItemsChanged={onViewableItemsChanged}
+            onScrollToIndexFailed={({ index, averageItemLength }) => {
+              retryCountryJump(index, averageItemLength);
+            }}
           />
           <Animated.View
             pointerEvents="none"
@@ -838,6 +1124,13 @@ function AllPlaces({
             />
           </Animated.View>
         </View>
+        <CountriesIndex
+          visible={countriesIndexOpen}
+          rows={countryIndexRows}
+          onClose={() => setCountriesIndexOpen(false)}
+          onSelect={scrollToCountry}
+        />
+        <CountryJumpLoading country={jumpingCountry} />
       </View>
     );
   }
@@ -992,6 +1285,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 32,
   },
+  placesLocationButton: {
+    flex: 1,
+    minHeight: 34,
+    marginVertical: -7,
+    paddingRight: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  countryIndexButtonPressed: {
+    opacity: 0.58,
+  },
   atlasListHeader: {
     paddingHorizontal: 16,
     paddingTop: 16,
@@ -1029,6 +1334,150 @@ const styles = StyleSheet.create({
     left: 0,
     zIndex: 3,
     height: 18,
+  },
+  countryIndexModal: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  countryJumpBackdrop: {
+    position: 'absolute',
+    top: 14,
+    right: 16,
+    left: 16,
+    zIndex: 10,
+    alignItems: 'center',
+  },
+  countryJumpNotice: {
+    maxWidth: '78%',
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: 'rgba(250,250,250,0.98)',
+    boxShadow: '0 7px 22px rgba(0,0,0,0.14)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  countryJumpText: {
+    flexShrink: 1,
+    color: '#303030',
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  countryIndexSheet: {
+    maxHeight: '68%',
+    minHeight: 220,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+    backgroundColor: '#FAFAFA',
+  },
+  countryIndexHandle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 5,
+    marginTop: 9,
+    marginBottom: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(60,60,67,0.22)',
+  },
+  countryIndexHeader: {
+    height: 48,
+    paddingHorizontal: 20,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E1E1E1',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  countryIndexTitle: {
+    color: '#1A1A1A',
+    fontSize: 17,
+    fontWeight: '600',
+    lineHeight: 22,
+  },
+  countryIndexClose: {
+    minWidth: 44,
+    minHeight: 36,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  countryIndexCloseLabel: {
+    color: '#12A967',
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  countryIndexList: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 28,
+  },
+  countryIndexRow: {
+    minHeight: 58,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5E5',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  cityIndexRow: {
+    minHeight: 42,
+    paddingLeft: 46,
+    paddingRight: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EDEDED',
+  },
+  cityIndexBullet: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#B6B6B6',
+  },
+  cityIndexName: {
+    flex: 1,
+    color: '#5E5E5E',
+    fontSize: 15,
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  cityIndexCount: {
+    color: '#A0A0A0',
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 18,
+    fontVariant: ['tabular-nums'],
+  },
+  countryIndexRowPressed: {
+    opacity: 0.58,
+  },
+  countryIndexFlag: {
+    width: 28,
+    alignItems: 'center',
+  },
+  countryIndexFlagLabel: {
+    fontSize: 21,
+    lineHeight: 26,
+  },
+  countryIndexName: {
+    flex: 1,
+    color: '#262626',
+    fontSize: 16,
+    fontWeight: '500',
+    lineHeight: 22,
+  },
+  countryIndexCount: {
+    color: '#8A8A8A',
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 20,
+    fontVariant: ['tabular-nums'],
   },
   sortMenu: {
     alignSelf: 'flex-start',

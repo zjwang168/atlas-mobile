@@ -208,6 +208,25 @@ export function useHomeOverlay() {
   return useContext(OverlayContext);
 }
 
+type OverlayActionsContextValue = Pick<
+  OverlayContextValue,
+  'setOverlay' | 'setTabBarVisible' | 'setAtlasMapState' | 'setActiveSidekick' | 'setImportNotification'
+>;
+
+const OverlayActionsContext = createContext<OverlayActionsContextValue>({
+  setOverlay: () => {},
+  setTabBarVisible: () => {},
+  setAtlasMapState: () => {},
+  setActiveSidekick: () => {},
+  setImportNotification: () => {},
+});
+
+/** Stable overlay actions for components that publish map/UI state but do not
+ * need to subscribe to every map-state update they publish. */
+export function useHomeOverlayActions() {
+  return useContext(OverlayActionsContext);
+}
+
 // --- Location domain: device position, set once on mount and on manual retry ---
 
 type LocationContextValue = {
@@ -689,6 +708,17 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     [overlay, tabBarVisible, atlasMapState, activeSidekick, importNotification],
   );
 
+  const overlayActionsValue = useMemo<OverlayActionsContextValue>(
+    () => ({
+      setOverlay,
+      setTabBarVisible,
+      setAtlasMapState,
+      setActiveSidekick,
+      setImportNotification,
+    }),
+    [],
+  );
+
   const locationValue = useMemo<LocationContextValue>(
     () => ({
       userLocation,
@@ -746,16 +776,18 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <OverlayContext.Provider value={overlayValue}>
-      <LocationContext.Provider value={locationValue}>
-        <PlacesContext.Provider value={placesValue}>
-          <AtlasesContext.Provider value={atlasesValue}>
-            <ChatHistoryContext.Provider value={chatHistoryValue}>
-              <ContentPanelSnapProvider>{children}</ContentPanelSnapProvider>
-            </ChatHistoryContext.Provider>
-          </AtlasesContext.Provider>
-        </PlacesContext.Provider>
-      </LocationContext.Provider>
-    </OverlayContext.Provider>
+    <OverlayActionsContext.Provider value={overlayActionsValue}>
+      <OverlayContext.Provider value={overlayValue}>
+        <LocationContext.Provider value={locationValue}>
+          <PlacesContext.Provider value={placesValue}>
+            <AtlasesContext.Provider value={atlasesValue}>
+              <ChatHistoryContext.Provider value={chatHistoryValue}>
+                <ContentPanelSnapProvider>{children}</ContentPanelSnapProvider>
+              </ChatHistoryContext.Provider>
+            </AtlasesContext.Provider>
+          </PlacesContext.Provider>
+        </LocationContext.Provider>
+      </OverlayContext.Provider>
+    </OverlayActionsContext.Provider>
   );
 }

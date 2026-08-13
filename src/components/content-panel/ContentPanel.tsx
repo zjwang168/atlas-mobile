@@ -23,6 +23,7 @@ import Animated, {
   useSharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import PanelGrabber from './PanelGrabber';
 import { useContentPanelSnapGroup } from './ContentPanelSnapProvider';
 
 export type SnapState = 'compact' | 'short' | 'default' | 'tall' | 'full';
@@ -184,6 +185,13 @@ export default function ContentPanel({
     if (visible && nextIndex >= 0) sheetRef.current?.snapToIndex(nextIndex);
   }, [resolvedSnaps, updateSnapState, visible]);
 
+  const handleGrabberDragEnd = useCallback((translationY: number) => {
+    const currentIndex = resolvedSnaps.indexOf(currentSnapState);
+    const direction = translationY < 0 ? 1 : -1;
+    const nextState = resolvedSnaps[currentIndex + direction];
+    if (nextState) snapTo(nextState);
+  }, [currentSnapState, resolvedSnaps, snapTo]);
+
   const reportHeight = useCallback((panelHeight: number) => {
     onHeightChange?.(Math.max(0, panelHeight));
   }, [onHeightChange]);
@@ -284,14 +292,16 @@ export default function ContentPanel({
       enableDynamicSizing={false}
       enablePanDownToClose={false}
       enableOverDrag={false}
+      enableContentPanningGesture={false}
+      handleComponent={null}
       onChange={handleChange}
       onClose={handleClose}
       backdropComponent={renderBackdrop}
       backgroundComponent={renderBackground}
-      handleIndicatorStyle={[styles.handleIndicator, !showHandle && styles.handleHidden]}
       style={[styles.sheetShell, sheetAnimatedStyle]}
     >
       <BottomSheetView style={styles.content}>
+        <PanelGrabber onDragEnd={handleGrabberDragEnd} />
         {children({
           snapState: currentSnapState,
           snapTo,
@@ -318,14 +328,6 @@ const styles = StyleSheet.create({
   },
   backgroundSolid: {
     backgroundColor: '#FFFFFF',
-  },
-  handleIndicator: {
-    width: 36,
-    height: 5,
-    backgroundColor: 'rgba(60,60,67,0.25)',
-  },
-  handleHidden: {
-    opacity: 0,
   },
   content: {
     flex: 1,

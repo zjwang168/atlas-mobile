@@ -1,6 +1,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import { useHomeAtlases, useHomeChatHistory, useHomeLocation, useHomeOverlayActions } from '@/features/home/HomeContext';
 import { atlasCameraFromStops } from '@/features/map/atlasCamera';
 import { createChatSession } from '@/services/api/apiService';
 import { mockUser } from '../../../mock-data/mockUser';
@@ -19,7 +19,10 @@ type MyPlanProps = {
 };
 
 function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit }: MyPlanProps) {
-  const { atlases, setAtlasMapState, setOverlay, setActiveSidekick, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, userLocation } = useHome();
+  const { atlases } = useHomeAtlases();
+  const { setAtlasMapState, setOverlay, setActiveSidekick } = useHomeOverlayActions();
+  const { addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem } = useHomeChatHistory();
+  const { userLocation } = useHomeLocation();
   const [builderVisible, setBuilderVisible] = useState(false);
   const [buildSeed, setBuildSeed] = useState<DraftPlace[] | null>(null);
   const [draftItems, setDraftItems] = useState<DraftPlace[]>([]);
