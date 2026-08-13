@@ -1267,6 +1267,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         viewportZoomRef.current = zoom;
         scheduleNearbyPrompt(center);
       },
+      // Bounds are a one-shot fit command, not a permanent camera lock.
+      // Leaving them in shared state makes unrelated editor updates re-own
+      // the native map camera and blocks later pan/zoom gestures.
+      onBoundsCameraApplied: () => setMapBounds((current) => current ? undefined : current),
       overlay: atlasMapOverlay,
       hideTopSearchButton: true,
       markerPopup: null,
@@ -1294,8 +1298,6 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </View>
       </View>
 
-      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
-
       {!atlasId && items.length === 0 && !started && !handoffStarted ? <View style={styles.createLanding}>
         <View style={styles.simpleStartHero}><TouchableOpacity onPress={simpleStart} style={styles.simpleStartHeroButton}><View style={styles.simpleStartHeroTop}><View style={styles.simpleStartHeroIcon}><Ionicons name="map-outline" size={26} color="#12C170" /></View><Ionicons name="arrow-forward" size={21} color="#12C170" /></View><View style={styles.simpleStartHeroCopy}><Text style={styles.simpleStartHeroTitle}>Simple Start</Text><Text style={styles.simpleStartHeroSubtitle}>Build an atlas from scratch</Text></View></TouchableOpacity></View>
         <View style={styles.planListSection}><FocusAreas areas={focusAreas} onFocus={focusArea} /></View>
@@ -1308,6 +1310,8 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNote={(note) => { commitItems(items.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note: encodeAtlasPlaceMetadata(note, item.transport) }).catch(console.warn); }} />
         </Reanimated.View>)}
       </ScrollView>}
+
+      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
 
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} dayLocked={undefinedDayLocked} hasExisting={timeModalIndex !== null && Boolean(items[timeModalIndex]?.timeline_time)} validationMessage={timeConflictMessage} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => { setTimeConflictMessage(null); setTimeModalIndex(null); }} onRemove={() => { if (timeModalIndex === null) return; const existing = items[timeModalIndex]; commitItems(items.map((entry, index) => index === timeModalIndex ? { ...entry, timeline_day: null, timeline_time: null } : entry)); if (existing?.joinId) updateAtlasPlace(existing.joinId, { timeline_day: null, timeline_time: null }).catch(console.warn); setTimeModalIndex(null); }} onSave={saveTimeDivider} />
       <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={saveTransport} onRemove={() => saveTransport(null)} onClose={() => setTransportModalIndex(null)} />

@@ -65,6 +65,8 @@ interface MapboxMapProps {
   deletingMarkerId?: string | null;
   onMapPress?: () => void;
   onViewportChanged?: (center: [number, number], zoom: number) => void;
+  /** Called after this map instance applies a bounds-based camera command. */
+  onBoundsCameraApplied?: () => void;
   compassEnabled?: boolean;
   markerPopup?: { markerId: string; content: React.ReactNode } | null;
 }
@@ -525,6 +527,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   deletingMarkerId,
   onMapPress,
   onViewportChanged,
+  onBoundsCameraApplied,
   compassEnabled = true,
   markerPopup,
 }, ref) {
@@ -734,7 +737,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       animationDuration: cameraAnimationDurationMs,
     });
     previousBoundsRef.current = nextBounds;
-  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, padding, width]);
+    onBoundsCameraApplied?.();
+  }, [bounds, cameraAnimationDurationMs, cameraKey, height, isReady, mapLoaded, onBoundsCameraApplied, padding, width]);
   useEffect(() => {
     const [lng, lat] = cameraCenterCoordinate;
     const [prevLng, prevLat] = prevCenterRef.current;

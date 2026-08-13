@@ -151,6 +151,8 @@ export type AtlasMapState = {
   onMarkerPress?: (marker: MapMarker) => void;
   onMapPress?: () => void;
   onViewportChanged?: (center: [number, number], zoom: number) => void;
+  /** Releases a one-shot bounds camera after it has been applied. */
+  onBoundsCameraApplied?: () => void;
   /** Atlas-only controls live above the one shared map, never in its panel. */
   overlay?: ReactNode;
   /** Receives the live Edit atlas panel height so map overlays can follow it. */

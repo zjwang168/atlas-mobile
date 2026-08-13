@@ -442,6 +442,7 @@ function HomeScreenContent({
         onMarkerPress={atlasMapState?.onMarkerPress ?? handleMarkerPress}
         onMapPress={atlasMapState?.onMapPress ?? handleHomeMapPress}
         onViewportChanged={atlasMapState?.onViewportChanged}
+        onBoundsCameraApplied={atlasMapState?.onBoundsCameraApplied}
         // HJ turned the compass off outright; their `!atlasMapState` would
         // bring it back on the home map.
         compassEnabled={false}
