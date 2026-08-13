@@ -369,8 +369,8 @@ export default function ProfileSettings({
 
           <View style={styles.statsRow}>
             <StatCard value={savedPlaces.length} label="Places" />
-            <StatCard value={planCount} label="Lists" />
-            <StatCard value={atlases.length} label="Atlas" />
+            <StatCard value={planCount} label="Atlas" />
+            <StatCard value={atlases.length} label="Lists" />
           </View>
 
           <View style={styles.sections}>

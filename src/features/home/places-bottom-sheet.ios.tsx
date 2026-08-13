@@ -12,6 +12,7 @@ import {
   presentationBackgroundInteraction,
   presentationDetents,
   presentationDragIndicator,
+  onGeometryChange,
   type PresentationDetent,
 } from '@expo/ui/swift-ui/modifiers';
 import {
@@ -19,6 +20,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -101,6 +103,25 @@ function PlacesBottomSheet({
   const { width, height } = useWindowDimensions();
   const [isPresented, setIsPresented] = useState(visible);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(
+    snapGroup,
+    'default',
+  );
+  const lastReportedHeightRef = useRef(-1);
+  const rawSheetHeightRef = useRef(-1);
+  const defaultFollowingHeightRef = useRef<number | null>(null);
+  const currentSnapStateRef = useRef(groupSnapState);
+  const initialDefaultCaptureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    currentSnapStateRef.current = groupSnapState;
+  }, [groupSnapState]);
+
+  useEffect(() => () => {
+    if (initialDefaultCaptureTimerRef.current) {
+      clearTimeout(initialDefaultCaptureTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     const showSub = Keyboard.addListener('keyboardWillShow', (e) => {
@@ -114,10 +135,6 @@ function PlacesBottomSheet({
       hideSub.remove();
     };
   }, []);
-  const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(
-    snapGroup,
-    'default',
-  );
   const selection = detentForSnapState(groupSnapState);
 
   useEffect(() => {
@@ -125,13 +142,68 @@ function PlacesBottomSheet({
   }, [visible]);
 
   const handleDetentChange = useCallback((detent: PresentationDetent) => {
-    setGroupSnapState(snapStateForDetent(detent));
-    onHeightChange?.(height * fractionForDetent(detent));
-  }, [height, onHeightChange, setGroupSnapState]);
+    const nextState = snapStateForDetent(detent);
+    currentSnapStateRef.current = nextState;
+    // Capture SwiftUI's actual resolved default-detent height. Fractional
+    // detents are measured inside the presentation container, so this is a
+    // few points different from `windowHeight * 0.60`.
+    if (nextState === 'default' && rawSheetHeightRef.current > 0) {
+      defaultFollowingHeightRef.current = rawSheetHeightRef.current;
+    }
+    setGroupSnapState(nextState);
+  }, [setGroupSnapState]);
 
   const handleSnapTo = useCallback((state: SnapState) => {
     setGroupSnapState(state);
   }, [setGroupSnapState]);
+
+  // `presentationDetents(...).onSelectionChange` only fires after the sheet
+  // settles on a detent. Observe the presented view's global frame as well so
+  // the map can follow the sheet continuously while the user's finger moves.
+  const handleSheetGeometryChange = useCallback((frame: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => {
+    const rawHeight = Math.max(0, Math.min(height, height - frame.y));
+    rawSheetHeightRef.current = rawHeight;
+
+    // SwiftUI does not emit an initial selection-change callback. Capture the
+    // initial default detent only after geometry has stopped changing briefly;
+    // resetting this timer on every frame prevents capturing a transition
+    // frame while the sheet is still presenting or being dragged.
+    if (defaultFollowingHeightRef.current === null) {
+      if (initialDefaultCaptureTimerRef.current) {
+        clearTimeout(initialDefaultCaptureTimerRef.current);
+      }
+      initialDefaultCaptureTimerRef.current = setTimeout(() => {
+        if (
+          currentSnapStateRef.current === 'default' &&
+          rawSheetHeightRef.current > 0
+        ) {
+          defaultFollowingHeightRef.current = rawSheetHeightRef.current;
+        }
+      }, 100);
+    }
+
+    // The map follows short↔default only. Clamp default↔large to the native
+    // default detent's measured height, so it cannot move in either direction.
+    const maxFollowingHeight =
+      defaultFollowingHeightRef.current ?? height * DEFAULT_DETENT.fraction;
+    const liveHeight = Math.max(
+      0,
+      Math.min(maxFollowingHeight, rawHeight),
+    );
+    if (
+      !Number.isFinite(liveHeight) ||
+      Math.abs(liveHeight - lastReportedHeightRef.current) < 0.5
+    ) {
+      return;
+    }
+    lastReportedHeightRef.current = liveHeight;
+    onHeightChange?.(liveHeight);
+  }, [height, onHeightChange]);
 
   const modifiers = useMemo(() => [
     ignoreSafeArea({ regions: 'container', edges: 'bottom' }),
@@ -146,7 +218,8 @@ function PlacesBottomSheet({
     }),
     interactiveDismissDisabled(true),
     presentationBackground('#FAFAFA'),
-  ], [handleDetentChange, selection]);
+    onGeometryChange(handleSheetGeometryChange),
+  ], [handleDetentChange, handleSheetGeometryChange, selection]);
 
   return (
     <Host style={[styles.host, { width }]} pointerEvents="none">

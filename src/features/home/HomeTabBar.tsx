@@ -63,7 +63,7 @@ const TAB_ITEMS: TabItem[] = [
   },
   {
     key: TAB_PLAN,
-    label: 'My Plan',
+    label: 'Atlas',
     icon: MapTrifoldIcon,
   },
   {

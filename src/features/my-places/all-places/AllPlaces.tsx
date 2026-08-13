@@ -14,6 +14,7 @@ import { CaretRightIcon } from 'phosphor-react-native/src/icons/CaretRight';
 import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
+import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -207,16 +208,20 @@ function sortPlacesByDate(
 }
 
 function CategoryChip({ category }: { category?: string }) {
-  const label = category || 'Place';
+  const sourceLabel = category?.trim() || 'Place';
+  const isRestaurant = /restaurant|food|dining|café|cafe/i.test(sourceLabel);
+  const label = isRestaurant ? 'Restaurant' : sourceLabel;
+  const Icon = isRestaurant ? ForkKnifeIcon : MapPinIcon;
+
   return (
-    <BlurView
-      tint="light"
-      intensity={80}
-      style={styles.chipOuter}
-    >
+    <View pointerEvents="none" style={styles.chipOuter}>
+      <BlurView tint="light" intensity={80} style={styles.chipBlur} />
       <View style={styles.chipBg} />
-      <Text numberOfLines={1} style={styles.chipLabel}>{label}</Text>
-    </BlurView>
+      <View style={styles.chipContent}>
+        <Icon size={13} weight="fill" color="#D4940A" />
+        <Text numberOfLines={1} style={styles.chipLabel}>{label}</Text>
+      </View>
+    </View>
   );
 }
 
@@ -445,17 +450,17 @@ function AtlasSection({
     <View style={styles.section}>
       <PressableScale
         accessibilityRole="button"
-        accessibilityLabel="View all atlases"
+        accessibilityLabel="View all lists"
         onPress={onHeaderPress}
         scaleTo={0.985}
         style={styles.sectionHeader}
       >
         <View style={styles.sectionTitleGroup}>
-          <Text style={[typography.h3, styles.sectionTitle]}>Atlas</Text>
+          <Text style={[typography.h3, styles.sectionTitle]}>Lists</Text>
           <CaretRightIcon size={16} weight="bold" color="#8A8A8A" />
         </View>
         <Text style={[typography.bodySmall, styles.sectionCount]}>
-          {atlases.length} {atlases.length === 1 ? 'Atlas' : 'Atlases'}
+          {atlases.length} {atlases.length === 1 ? 'List' : 'Lists'}
         </Text>
       </PressableScale>
 
@@ -472,7 +477,7 @@ function AtlasSection({
       ) : (
         <View style={styles.emptyState}>
           <Text style={[typography.bodySmall, styles.emptyText]}>
-            Your atlases will appear here.
+            Your lists will appear here.
           </Text>
         </View>
       )}
@@ -849,7 +854,7 @@ function AllPlaces({
         ? 'Alphabetical'
         : 'Most places';
     const atlasSummary = `${atlasPreviews.length} ${
-      atlasPreviews.length === 1 ? 'Atlas' : 'Atlases'
+      atlasPreviews.length === 1 ? 'List' : 'Lists'
     } · ${atlasCountryCount} ${atlasCountryCount === 1 ? 'Country' : 'Countries'}`;
 
     return (
@@ -876,7 +881,7 @@ function AllPlaces({
             <View
               accessible
               accessibilityRole="button"
-              accessibilityLabel="Sort atlases"
+              accessibilityLabel="Sort lists"
               style={styles.sortButton}
             >
               <ArrowsDownUpIcon size={16} weight="bold" color="#717171" />
@@ -1197,18 +1202,20 @@ const styles = StyleSheet.create({
   },
   chipOuter: {
     position: 'absolute',
-    bottom: 8,
+    top: 8,
     left: 8,
     maxWidth: CARD_SIZE - 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingLeft: 6,
-    paddingRight: 8,
-    paddingVertical: 3,
     borderRadius: 100,
     overflow: 'hidden',
     boxShadow: '0px 4px 13px rgba(0,0,0,0.15)',
+  },
+  chipBlur: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    borderRadius: 100,
   },
   chipBg: {
     position: 'absolute',
@@ -1217,6 +1224,16 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     backgroundColor: 'rgba(255,255,255,0.8)',
+  },
+  chipContent: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingLeft: 6,
+    paddingRight: 8,
+    paddingVertical: 3,
   },
   chipLabel: {
     flexShrink: 1,

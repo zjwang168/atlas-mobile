@@ -94,13 +94,13 @@ const CreatePlan = forwardRef<CreatePlanHandle, CreatePlanProps>(function Create
           paddingBottom: 16,
         }}
       >
-        <Text style={{ fontSize: 22, fontWeight: '600', color: '#09090b' }}>New Plan</Text>
+        <Text style={{ fontSize: 22, fontWeight: '600', color: '#09090b' }}>New Atlas</Text>
         <Button
           variant="secondary"
           size="icon"
           className="rounded-full w-8 h-8"
           onPress={() => showDialog({
-            title: 'Discard this plan?',
+            title: 'Discard this atlas?',
             message: 'Your destination, dates, and selected places will be cleared.',
             tone: 'danger',
             actions: [
