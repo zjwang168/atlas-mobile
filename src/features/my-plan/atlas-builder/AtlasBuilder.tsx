@@ -63,6 +63,10 @@ import {
 
 export type { AtlasSavedMapView, DraftPlace } from './types';
 
+// Roughly 0.5 cm on an iPhone 17 Pro Max. Applied only to the blank Create
+// landing camera so the GPS-country map sits a little higher above the sheet.
+const CREATE_ATLAS_CAMERA_VERTICAL_OFFSET = 48;
+
 export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces } = useHomePlaces();
@@ -233,7 +237,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         if (!country) return;
         const resolvedCountry = await geocodeAtlasArea(country);
         if (cancelled || !resolvedCountry?.bounds) return;
-        const countryBounds = expandBounds(resolvedCountry.bounds, 0.12);
+        // Leave a little more geographic breathing room on the initial
+        // Create screen. Search and completed-Atlas cameras remain unchanged.
+        const countryBounds = expandBounds(resolvedCountry.bounds, 0.3);
         viewportCenterRef.current = centerOfBounds(countryBounds);
         viewportZoomRef.current = zoomForBounds(countryBounds, 1.1);
         pendingCreateCountryBoundsRef.current = countryBounds;
@@ -1575,7 +1581,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useLayoutEffect(() => {
     setAtlasMapState({
       markers: mapMarkers,
-      cameraVerticalOffset: 0,
+      cameraVerticalOffset: isCreateAtlasLanding ? CREATE_ATLAS_CAMERA_VERTICAL_OFFSET : 0,
       // The editor sheet occupies the lower screen. Let HomeScreen pass its
       // measured height as camera padding so both a GPS-country camera and an
       // Edit Atlas focus area center in the remaining upper map viewport.
