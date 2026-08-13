@@ -29,6 +29,10 @@ type AtlasDetailProps = {
 type AtlasDisplayPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url'>;
 type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null; transport: AtlasTransportMode | null };
 type FocusBounds = { ne: [number, number]; sw: [number, number] };
+
+function itineraryKeyExtractor(item: ItineraryItem): string {
+  return item.rowId;
+}
 type RouteFeature = GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
 type MapPresentation = {
   markers: MapMarker[];
@@ -300,13 +304,13 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     setOptimizationDismissed(false);
   }, [atlas, atlasId]);
 
-  const openNextStopDirections = (from: ItineraryItem, to: ItineraryItem) => {
+  const openNextStopDirections = useCallback((from: ItineraryItem, to: ItineraryItem) => {
     const origin = `${from.place.latitude},${from.place.longitude}`;
     const destination = `${to.place.latitude},${to.place.longitude}`;
     Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}`).catch((error) => {
       console.warn('[AtlasDetail] could not open Google Maps directions:', error);
     });
-  };
+  }, []);
 
   const dismissAtlas = useCallback(() => {
     setRouteCamera(null);
@@ -642,12 +646,25 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
     if (pendingMapReleaseRef.current) clearTimeout(pendingMapReleaseRef.current);
   }, []);
 
+  const renderItineraryRow = useCallback(({ item, index }: { item: ItineraryItem; index: number }) => (
+    <ItineraryRow
+      item={item}
+      index={index}
+      nextItem={listItems[index + 1]}
+      distanceLabel={activeRouteDistanceLabels[index]?.text}
+      selected={selectedPlaceId === item.place.id}
+      onPress={() => setSelectedPlaceId(item.place.id)}
+      onShare={!capturingShare && index === 0 ? openSharePreview : undefined}
+      onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined}
+    />
+  ), [listItems, activeRouteDistanceLabels, selectedPlaceId, capturingShare, openSharePreview, openNextStopDirections]);
+
   if (!atlas) return null;
 
   return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange} compactContent={({ snapTo }) => <CompactAtlas atlas={atlas} onExpand={() => snapTo('default')} onDismiss={dismissAtlas} />}>
     {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={handleEditorClosed} onSaved={(_, askAI, mapView) => handleEditorSaved(askAI, mapView)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#18181B" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#18181B" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
-      <FlatList data={listItems} keyExtractor={(item) => item.rowId} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={({ item, index }) => <ItineraryRow item={item} index={index} nextItem={listItems[index + 1]} distanceLabel={activeRouteDistanceLabels[index]?.text} selected={selectedPlaceId === item.place.id} onPress={() => setSelectedPlaceId(item.place.id)} onShare={!capturingShare && index === 0 ? openSharePreview : undefined} onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined} />} />
+      <FlatList data={listItems} keyExtractor={itineraryKeyExtractor} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={renderItineraryRow} />
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><TouchableOpacity accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} style={styles.shareClose}><Ionicons name="close" size={22} color="#202024" /></TouchableOpacity><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
     </>}
   </ContentPanel>;
@@ -666,8 +683,13 @@ function ShareAction({ icon, label, onPress }: { icon: keyof typeof Ionicons.gly
 }
 
 function OptimizedRouteReview({ items, originalItems, bottomInset, onClose, onSave }: { items: ItineraryItem[]; originalItems: ItineraryItem[]; bottomInset: number; onClose: () => void; onSave: () => void }) {
-  const originalIndexByRowId = new Map(originalItems.map((item, index) => [item.rowId, index]));
-  return <View style={styles.optimizedReview}><View style={styles.optimizedReviewHeader}><View><Text style={styles.optimizedReviewTitle}>Better route</Text><Text style={styles.optimizedReviewSubtitle}>Optimized stop order</Text></View><TouchableOpacity accessibilityLabel="Close optimized route" onPress={onClose} style={styles.optimizedReviewClose}><Ionicons name="close" size={20} color="#252528" /></TouchableOpacity></View><FlatList data={items} keyExtractor={(item) => item.rowId} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 92, gap: 8 }} renderItem={({ item, index }) => { const originalIndex = originalIndexByRowId.get(item.rowId) ?? index; const change = originalIndex - index; return <View style={styles.optimizedRow}><View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>{item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.optimizedImage} /> : <View style={[styles.optimizedImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}<View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text></View>{change ? <View style={[styles.orderChange, change > 0 ? styles.orderUp : styles.orderDown]}><Ionicons name={change > 0 ? 'arrow-up-outline' : 'arrow-down-outline'} size={11} color={change > 0 ? '#217558' : '#986033'} /><Text style={[styles.orderChangeText, change > 0 ? styles.orderUpText : styles.orderDownText]}>{Math.abs(change)}</Text></View> : <View style={styles.orderUnchanged}><Text style={styles.orderUnchangedText}>Same</Text></View>}</View>; }} /><View style={styles.optimizedReviewFooter}><TouchableOpacity onPress={onClose} style={styles.optimizedCancel}><Text style={styles.optimizedCancelText}>Cancel</Text></TouchableOpacity><TouchableOpacity onPress={onSave} style={styles.optimizedSave}><Text style={styles.optimizedSaveText}>Save new route</Text></TouchableOpacity></View></View>;
+  const originalIndexByRowId = useMemo(() => new Map(originalItems.map((item, index) => [item.rowId, index])), [originalItems]);
+  const renderItem = useCallback(({ item, index }: { item: ItineraryItem; index: number }) => {
+    const originalIndex = originalIndexByRowId.get(item.rowId) ?? index;
+    const change = originalIndex - index;
+    return <View style={styles.optimizedRow}><View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>{item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.optimizedImage} /> : <View style={[styles.optimizedImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}<View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text></View>{change ? <View style={[styles.orderChange, change > 0 ? styles.orderUp : styles.orderDown]}><Ionicons name={change > 0 ? 'arrow-up-outline' : 'arrow-down-outline'} size={11} color={change > 0 ? '#217558' : '#986033'} /><Text style={[styles.orderChangeText, change > 0 ? styles.orderUpText : styles.orderDownText]}>{Math.abs(change)}</Text></View> : <View style={styles.orderUnchanged}><Text style={styles.orderUnchangedText}>Same</Text></View>}</View>;
+  }, [originalIndexByRowId]);
+  return <View style={styles.optimizedReview}><View style={styles.optimizedReviewHeader}><View><Text style={styles.optimizedReviewTitle}>Better route</Text><Text style={styles.optimizedReviewSubtitle}>Optimized stop order</Text></View><TouchableOpacity accessibilityLabel="Close optimized route" onPress={onClose} style={styles.optimizedReviewClose}><Ionicons name="close" size={20} color="#252528" /></TouchableOpacity></View><FlatList data={items} keyExtractor={itineraryKeyExtractor} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 92, gap: 8 }} renderItem={renderItem} /><View style={styles.optimizedReviewFooter}><TouchableOpacity onPress={onClose} style={styles.optimizedCancel}><Text style={styles.optimizedCancelText}>Cancel</Text></TouchableOpacity><TouchableOpacity onPress={onSave} style={styles.optimizedSave}><Text style={styles.optimizedSaveText}>Save new route</Text></TouchableOpacity></View></View>;
 }
 
 function ItineraryRow({ item, index, nextItem, distanceLabel, selected, onPress, onShare, onNavigate }: { item: ItineraryItem; index: number; nextItem?: ItineraryItem; distanceLabel?: string; selected: boolean; onPress: () => void; onShare?: () => void; onNavigate?: () => void }) {

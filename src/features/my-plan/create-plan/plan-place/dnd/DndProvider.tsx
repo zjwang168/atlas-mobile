@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { useSharedValue, useAnimatedStyle } from 'react-native-reanimated';
 import { NativeOnlyAnimatedView } from '@/components/ui/native-only-animated-view';
@@ -86,15 +86,15 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
   const [ghostState, setGhostState] = useState<{ place: PlannedPlace; kind: 'free' | 'dated' } | null>(null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const registerDropZone = (slotKey: SlotKey, ref: React.RefObject<any>) => {
+  const registerDropZone = useCallback((slotKey: SlotKey, ref: React.RefObject<any>) => {
     zonesRef.current.set(slotKeyToString(slotKey), { slotKey, ref });
-  };
+  }, []);
 
-  const unregisterDropZone = (slotKey: SlotKey) => {
+  const unregisterDropZone = useCallback((slotKey: SlotKey) => {
     zonesRef.current.delete(slotKeyToString(slotKey));
-  };
+  }, []);
 
-  const startDrag = (place: PlannedPlace, sourceSlot: SlotKey) => {
+  const startDrag = useCallback((place: PlannedPlace, sourceSlot: SlotKey) => {
     ghostPlaceRef.current = place;
     ghostSourceSlotRef.current = sourceSlot;
     setGhostState({ place, kind: sourceSlot.kind });
@@ -118,9 +118,9 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
         }
       });
     }
-  };
+  }, [dropZonesSnap, reportScrollYToPanel]);
 
-  const finishDrag = (zoneKey: string | null) => {
+  const finishDrag = useCallback((zoneKey: string | null) => {
     reportScrollYToPanel(scrollOffset.value);
 
     if (zoneKey && ghostSourceSlotRef.current && ghostPlaceRef.current) {
@@ -133,7 +133,7 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
     setGhostState(null);
     ghostPlaceRef.current = null;
     ghostSourceSlotRef.current = null;
-  };
+  }, [onDrop, reportScrollYToPanel, scrollOffset]);
 
   const ghostStyle = useAnimatedStyle(() => ({
     position: 'absolute' as const,
@@ -148,24 +148,27 @@ export function DndProvider({ children, onDrop, reportScrollYToPanel }: DndProvi
     zIndex: 100,
   }));
 
+  const contextValue = useMemo<DndContextValue>(
+    () => ({
+      isDragging,
+      activeZoneKey,
+      ghostX,
+      ghostY,
+      dragSourceKind,
+      dropZonesSnap,
+      scrollOffset,
+      containerScreenY,
+      containerScreenX,
+      registerDropZone,
+      unregisterDropZone,
+      startDrag,
+      finishDrag,
+    }),
+    [isDragging, activeZoneKey, ghostX, ghostY, dragSourceKind, dropZonesSnap, scrollOffset, containerScreenY, containerScreenX, registerDropZone, unregisterDropZone, startDrag, finishDrag],
+  );
+
   return (
-    <DndContext.Provider
-      value={{
-        isDragging,
-        activeZoneKey,
-        ghostX,
-        ghostY,
-        dragSourceKind,
-        dropZonesSnap,
-        scrollOffset,
-        containerScreenY,
-        containerScreenX,
-        registerDropZone,
-        unregisterDropZone,
-        startDrag,
-        finishDrag,
-      }}
-    >
+    <DndContext.Provider value={contextValue}>
       <View
         ref={containerRef}
         style={{ flex: 1 }}

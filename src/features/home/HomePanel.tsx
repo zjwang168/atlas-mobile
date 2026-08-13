@@ -5,7 +5,7 @@ import ContentPanel from '../../components/content-panel/ContentPanel';
 import { Place, PlaceDetail } from '../../types/place';
 import { type PlacesView } from '../my-places/MyPlaces';
 import MyPlan from '../my-plan/MyPlan';
-import { useHome } from './HomeContext';
+import { useHomePlaces } from './HomeContext';
 import PlacesBottomSheet from './places-bottom-sheet';
 import { TAB_PLAN, TAB_PLACES } from './HomeTabBar';
 
@@ -46,7 +46,7 @@ function HomePanel({
   onExitPlan,
   isActive = true,
 }: HomePanelProps) {
-  const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHome();
+  const { setSelectedPlaceCoordinate, setSelectedPlaceId } = useHomePlaces();
   const handlePlacePress = useCallback((place: Place) => {
     setSelectedPlaceCoordinate([place.longitude, place.latitude]);
     setSelectedPlaceId(place.id);

@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 
-import { useHome } from '../home/HomeContext';
+import { useHomePlaces } from '../home/HomeContext';
 import { toPlaceDetail, updatePlaceName } from '../../services/place/placeService';
 import ContentPanel from '../../components/content-panel/ContentPanel';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
@@ -26,7 +26,7 @@ type PlaceDetailProps = {
 };
 
 export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapGroup, onHeightChange }: PlaceDetailProps) {
-  const { savedPlaces } = useHome();
+  const { savedPlaces } = useHomePlaces();
   const [place, setPlace] = useState<PlaceDetailType | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [notFound, setNotFound] = useState(false);

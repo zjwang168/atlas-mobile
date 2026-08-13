@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import { useHome, useHomeAtlases } from '@/features/home/HomeContext';
 import { atlasCameraFromStops, type AtlasCameraPresentation } from '@/features/map/atlasCamera';
 import { typography } from '@/theme/typography';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -21,7 +21,7 @@ function coverIndex(atlasId: string, count: number): number {
 function CategoryPillsRow() {
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
-  const { createAtlas } = useHome();
+  const { createAtlas } = useHomeAtlases();
   const { show: showDialog } = useAppDialog();
 
   const handleCreateAtlas = () => {

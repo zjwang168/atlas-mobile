@@ -155,41 +155,22 @@ export type AtlasMapState = {
   hideChrome?: boolean;
 } | null;
 
-type HomeContextValue = {
+// Each domain below owns its own context + memoized value, so a component
+// that only reads one domain (e.g. useHomePlaces()) doesn't re-render when
+// an unrelated domain changes (e.g. chat history syncing from Supabase).
+// useHome() composes all five for existing multi-domain consumers.
+
+// --- Overlay domain: navigation/UI chrome, changes on most screen transitions ---
+
+type OverlayContextValue = {
   overlay: Overlay;
   setOverlay: (overlay: Overlay) => void;
   tabBarVisible: boolean;
   setTabBarVisible: (visible: boolean) => void;
   atlasMapState: AtlasMapState;
   setAtlasMapState: (state: AtlasMapState) => void;
-  /** 最新解析出的地点（来自 import 流程），供 HomeScreen 地图显示 */
-  parsedPlaces: ParsedPlace[];
-  setParsedPlaces: (places: ParsedPlace[]) => void;
-  /** 从 Supabase 已加载的已保存地点 */
-  savedPlaces: SavedPlace[];
-  /** Whether the initial saved-place read has completed. */
-  savedPlacesLoaded: boolean;
-  setSavedPlaces: (places: SavedPlace[]) => void;
-  /** 从 Supabase 刷新已保存地点列表 */
-  refreshSavedPlaces: () => Promise<void>;
-  /** Chat History 列表（最近 50 条） */
-  chatHistory: ChatHistoryItem[];
-  deletedChatHistory: ChatHistoryItem[];
-  activeHistoryItem: ChatHistoryItem | null;
-  setActiveHistoryItem: (item: ChatHistoryItem | null) => void;
-  /** 添加一条新的 Chat History 记录 */
-  addChatHistoryItem: (item: Omit<ChatHistoryItem, 'id' | 'createdAt'>) => string;
-  replaceChatHistoryItem: (tempId: string, item: ChatHistoryItem) => void;
-  deleteChatHistoryItem: (id: string) => void;
-  restoreChatHistoryItem: (id: string) => void;
-  /** 批量设置 Chat History（用于从 Supabase 加载） */
-  setChatHistory: (items: ChatHistoryItem[]) => void;
-  /** 选中地点的坐标，用于地图居中 */
-  selectedPlaceCoordinate: [number, number] | null;
-  setSelectedPlaceCoordinate: (coord: [number, number] | null) => void;
-  selectedPlaceId: string | null;
-  setSelectedPlaceId: (id: string | null) => void;
-  /** Import 通知弹窗状态 */
+  activeSidekick: 'none' | 'aiChat' | 'places';
+  setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
   importNotification: {
     visible: boolean;
     title: string;
@@ -200,50 +181,122 @@ type HomeContextValue = {
     title: string;
     places: ParsedPlace[];
   } | null) => void;
-  /** 从 Supabase 删除一个已保存地点 */
-  deleteSavedPlace: (id: string) => Promise<void>;
-  /** 更新已保存地点的备注（本地立即生效，联网后同步到 Supabase） */
-  updateSavedPlaceNote: (id: string, note: string) => Promise<void>;
-  /** Loaded atlases (local cache + Supabase sync) */
-  atlases: Atlas[];
-  /** Refreshes the atlas list from Supabase */
-  refreshAtlases: () => Promise<void>;
-  /** Creates a new atlas (local cache first, syncs to Supabase); returns null on failure */
-  createAtlas: (title: string) => Promise<Atlas | null>;
-  /** Deletes an atlas (local cache first, syncs to Supabase); atlas_places rows cascade */
-  deleteAtlas: (id: string) => Promise<void>;
-  /** Every atlas_places row for every atlas (local cache + Supabase sync); filter by atlas_id for one atlas */
-  atlasPlaces: AtlasPlace[];
-  /** Adds places to an atlas (local cache first, syncs to Supabase); skips places already in the atlas */
-  addPlacesToAtlas: (atlasId: string, placeIds: string[]) => Promise<void>;
-  /** Removes a place from an atlas by its atlas_places row id (local cache first, syncs to Supabase) */
-  removePlaceFromAtlas: (joinRowId: string) => Promise<void>;
-  /** 当前激活的 sidekick */
-  activeSidekick: 'none' | 'aiChat' | 'places';
-  setActiveSidekick: (sidekick: 'none' | 'aiChat' | 'places') => void;
-  /** 用户当前位置坐标 [lng, lat]。权限未授予或定位失败时为 DEFAULT_MAP_CENTER */
-  userLocation: [number, number];
-  /** 定位权限状态 */
-  locationStatus: LocationPermissionStatus;
-  /** true 表示 userLocation 是回退值而非真实定位 */
-  isLocationFallback: boolean;
-  /** 重新取一次定位；首次调用会弹系统授权框。永不 reject */
-  refreshUserLocation: () => Promise<[number, number]>;
 };
 
-const HomeContext = createContext<HomeContextValue>({
+const OverlayContext = createContext<OverlayContextValue>({
   overlay: { kind: 'none' },
   setOverlay: () => {},
   tabBarVisible: true,
   setTabBarVisible: () => {},
   atlasMapState: null,
   setAtlasMapState: () => {},
+  activeSidekick: 'none',
+  setActiveSidekick: () => {},
+  importNotification: null,
+  setImportNotification: () => {},
+});
+
+export function useHomeOverlay() {
+  return useContext(OverlayContext);
+}
+
+// --- Location domain: device position, set once on mount and on manual retry ---
+
+type LocationContextValue = {
+  userLocation: [number, number];
+  locationStatus: LocationPermissionStatus;
+  isLocationFallback: boolean;
+  refreshUserLocation: () => Promise<[number, number]>;
+};
+
+const LocationContext = createContext<LocationContextValue>({
+  userLocation: DEFAULT_MAP_CENTER,
+  locationStatus: 'undetermined',
+  isLocationFallback: true,
+  refreshUserLocation: async () => DEFAULT_MAP_CENTER,
+});
+
+export function useHomeLocation() {
+  return useContext(LocationContext);
+}
+
+// --- Places domain: saved places, in-progress imports, map selection ---
+
+type PlacesContextValue = {
+  parsedPlaces: ParsedPlace[];
+  setParsedPlaces: (places: ParsedPlace[]) => void;
+  savedPlaces: SavedPlace[];
+  savedPlacesLoaded: boolean;
+  setSavedPlaces: (places: SavedPlace[]) => void;
+  refreshSavedPlaces: () => Promise<void>;
+  deleteSavedPlace: (id: string) => Promise<void>;
+  updateSavedPlaceNote: (id: string, note: string) => Promise<void>;
+  selectedPlaceCoordinate: [number, number] | null;
+  setSelectedPlaceCoordinate: (coord: [number, number] | null) => void;
+  selectedPlaceId: string | null;
+  setSelectedPlaceId: (id: string | null) => void;
+};
+
+const PlacesContext = createContext<PlacesContextValue>({
   parsedPlaces: [],
   setParsedPlaces: () => {},
   savedPlaces: [],
   savedPlacesLoaded: false,
   setSavedPlaces: () => {},
   refreshSavedPlaces: async () => {},
+  deleteSavedPlace: async () => {},
+  updateSavedPlaceNote: async () => {},
+  selectedPlaceCoordinate: null,
+  setSelectedPlaceCoordinate: () => {},
+  selectedPlaceId: null,
+  setSelectedPlaceId: () => {},
+});
+
+export function useHomePlaces() {
+  return useContext(PlacesContext);
+}
+
+// --- Atlases domain: atlases + atlas_places join rows ---
+
+type AtlasesContextValue = {
+  atlases: Atlas[];
+  refreshAtlases: () => Promise<void>;
+  createAtlas: (title: string) => Promise<Atlas | null>;
+  deleteAtlas: (id: string) => Promise<void>;
+  atlasPlaces: AtlasPlace[];
+  addPlacesToAtlas: (atlasId: string, placeIds: string[]) => Promise<void>;
+  removePlaceFromAtlas: (joinRowId: string) => Promise<void>;
+};
+
+const AtlasesContext = createContext<AtlasesContextValue>({
+  atlases: [],
+  refreshAtlases: async () => {},
+  createAtlas: async () => null,
+  deleteAtlas: async () => {},
+  atlasPlaces: [],
+  addPlacesToAtlas: async () => {},
+  removePlaceFromAtlas: async () => {},
+});
+
+export function useHomeAtlases() {
+  return useContext(AtlasesContext);
+}
+
+// --- Chat history domain: cached import/chat sessions ---
+
+type ChatHistoryContextValue = {
+  chatHistory: ChatHistoryItem[];
+  deletedChatHistory: ChatHistoryItem[];
+  activeHistoryItem: ChatHistoryItem | null;
+  setActiveHistoryItem: (item: ChatHistoryItem | null) => void;
+  addChatHistoryItem: (item: Omit<ChatHistoryItem, 'id' | 'createdAt'>) => string;
+  replaceChatHistoryItem: (tempId: string, item: ChatHistoryItem) => void;
+  deleteChatHistoryItem: (id: string) => void;
+  restoreChatHistoryItem: (id: string) => void;
+  setChatHistory: (items: ChatHistoryItem[]) => void;
+};
+
+const ChatHistoryContext = createContext<ChatHistoryContextValue>({
   chatHistory: [],
   deletedChatHistory: [],
   activeHistoryItem: null,
@@ -253,31 +306,31 @@ const HomeContext = createContext<HomeContextValue>({
   deleteChatHistoryItem: () => {},
   restoreChatHistoryItem: () => {},
   setChatHistory: () => {},
-  selectedPlaceCoordinate: null,
-  setSelectedPlaceCoordinate: () => {},
-  selectedPlaceId: null,
-  setSelectedPlaceId: () => {},
-  importNotification: null,
-  setImportNotification: () => {},
-  deleteSavedPlace: async () => {},
-  updateSavedPlaceNote: async () => {},
-  atlases: [],
-  refreshAtlases: async () => {},
-  createAtlas: async () => null,
-  deleteAtlas: async () => {},
-  atlasPlaces: [],
-  addPlacesToAtlas: async () => {},
-  removePlaceFromAtlas: async () => {},
-  activeSidekick: 'none',
-  setActiveSidekick: () => {},
-  userLocation: DEFAULT_MAP_CENTER,
-  locationStatus: 'undetermined',
-  isLocationFallback: true,
-  refreshUserLocation: async () => DEFAULT_MAP_CENTER,
 });
 
-export function useHome() {
-  return useContext(HomeContext);
+export function useHomeChatHistory() {
+  return useContext(ChatHistoryContext);
+}
+
+// --- Composite: everything, for consumers that span multiple domains ---
+
+type HomeContextValue =
+  & OverlayContextValue
+  & LocationContextValue
+  & PlacesContextValue
+  & AtlasesContextValue
+  & ChatHistoryContextValue;
+
+export function useHome(): HomeContextValue {
+  const overlay = useHomeOverlay();
+  const location = useHomeLocation();
+  const places = useHomePlaces();
+  const atlases = useHomeAtlases();
+  const chatHistory = useHomeChatHistory();
+  return useMemo(
+    () => ({ ...overlay, ...location, ...places, ...atlases, ...chatHistory }),
+    [overlay, location, places, atlases, chatHistory],
+  );
 }
 
 function mergeHistoryItems(existing: ChatHistoryItem[], incoming: ChatHistoryItem[]): ChatHistoryItem[] {
@@ -612,7 +665,7 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const contextValue = useMemo<HomeContextValue>(
+  const overlayValue = useMemo<OverlayContextValue>(
     () => ({
       overlay,
       setOverlay,
@@ -620,81 +673,81 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
       setTabBarVisible,
       atlasMapState,
       setAtlasMapState,
+      activeSidekick,
+      setActiveSidekick,
+      importNotification,
+      setImportNotification,
+    }),
+    [overlay, tabBarVisible, atlasMapState, activeSidekick, importNotification],
+  );
+
+  const locationValue = useMemo<LocationContextValue>(
+    () => ({
+      userLocation,
+      locationStatus,
+      isLocationFallback,
+      refreshUserLocation,
+    }),
+    [userLocation, locationStatus, isLocationFallback, refreshUserLocation],
+  );
+
+  const placesValue = useMemo<PlacesContextValue>(
+    () => ({
       parsedPlaces,
       setParsedPlaces,
       savedPlaces,
       savedPlacesLoaded,
       setSavedPlaces,
       refreshSavedPlaces,
+      deleteSavedPlace,
+      updateSavedPlaceNote,
+      selectedPlaceCoordinate,
+      setSelectedPlaceCoordinate,
+      selectedPlaceId,
+      setSelectedPlaceId,
+    }),
+    [parsedPlaces, savedPlaces, savedPlacesLoaded, refreshSavedPlaces, deleteSavedPlace, updateSavedPlaceNote, selectedPlaceCoordinate, selectedPlaceId],
+  );
+
+  const atlasesValue = useMemo<AtlasesContextValue>(
+    () => ({
+      atlases,
+      refreshAtlases,
+      createAtlas,
+      deleteAtlas,
+      atlasPlaces,
+      addPlacesToAtlas,
+      removePlaceFromAtlas,
+    }),
+    [atlases, refreshAtlases, createAtlas, deleteAtlas, atlasPlaces, addPlacesToAtlas, removePlaceFromAtlas],
+  );
+
+  const chatHistoryValue = useMemo<ChatHistoryContextValue>(
+    () => ({
       chatHistory,
       deletedChatHistory,
       activeHistoryItem,
       setActiveHistoryItem,
       addChatHistoryItem,
       replaceChatHistoryItem,
-      deleteSavedPlace,
-      updateSavedPlaceNote,
-      atlases,
-      refreshAtlases,
-      createAtlas,
-      deleteAtlas,
-      atlasPlaces,
-      addPlacesToAtlas,
-      removePlaceFromAtlas,
       deleteChatHistoryItem,
       restoreChatHistoryItem,
       setChatHistory,
-      selectedPlaceCoordinate,
-      setSelectedPlaceCoordinate,
-      selectedPlaceId,
-      setSelectedPlaceId,
-      importNotification,
-      setImportNotification,
-      activeSidekick,
-      setActiveSidekick,
-      userLocation,
-      locationStatus,
-      isLocationFallback,
-      refreshUserLocation,
     }),
-    [
-      overlay,
-      tabBarVisible,
-      atlasMapState,
-      parsedPlaces,
-      savedPlaces,
-      savedPlacesLoaded,
-      refreshSavedPlaces,
-      chatHistory,
-      deletedChatHistory,
-      activeHistoryItem,
-      addChatHistoryItem,
-      replaceChatHistoryItem,
-      deleteSavedPlace,
-      updateSavedPlaceNote,
-      atlases,
-      refreshAtlases,
-      createAtlas,
-      deleteAtlas,
-      atlasPlaces,
-      addPlacesToAtlas,
-      removePlaceFromAtlas,
-      deleteChatHistoryItem,
-      restoreChatHistoryItem,
-      selectedPlaceCoordinate,
-      selectedPlaceId,
-      importNotification,
-      activeSidekick,
-      userLocation,
-      locationStatus,
-      isLocationFallback,
-      refreshUserLocation,
-    ],
+    [chatHistory, deletedChatHistory, activeHistoryItem, addChatHistoryItem, replaceChatHistoryItem, deleteChatHistoryItem, restoreChatHistoryItem],
   );
 
   return (
-    <HomeContext.Provider value={contextValue}>
-      <ContentPanelSnapProvider>{children}</ContentPanelSnapProvider>
-    </HomeContext.Provider>
+    <OverlayContext.Provider value={overlayValue}>
+      <LocationContext.Provider value={locationValue}>
+        <PlacesContext.Provider value={placesValue}>
+          <AtlasesContext.Provider value={atlasesValue}>
+            <ChatHistoryContext.Provider value={chatHistoryValue}>
+              <ContentPanelSnapProvider>{children}</ContentPanelSnapProvider>
+            </ChatHistoryContext.Provider>
+          </AtlasesContext.Provider>
+        </PlacesContext.Provider>
+      </LocationContext.Provider>
+    </OverlayContext.Provider>
   );
 }

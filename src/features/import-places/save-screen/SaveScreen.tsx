@@ -22,7 +22,7 @@ import TopBlurFade from '../../../components/ui/top-blur-fade';
 import { type ParseResult } from '../../../services/import/importService';
 import { isSamePlace } from '../../../services/place/placeService';
 import { typography } from '../../../theme/typography';
-import { useHome } from '../../home/HomeContext';
+import { useHomePlaces } from '../../home/HomeContext';
 import MapboxMap, { type MapboxMapHandle, type MapMarker } from '../../map/MapboxMap';
 import PlaceDetail from '../../place-detail/PlaceDetail';
 
@@ -71,7 +71,7 @@ function PlaceThumbnail({ uri }: { uri?: string }) {
 export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSaveAndAskAI }: SaveScreenProps) {
   const insets = useSafeAreaInsets();
   const { height: screenH } = useWindowDimensions();
-  const { savedPlaces } = useHome();
+  const { savedPlaces } = useHomePlaces();
 
   const isPlaceAlreadySaved = useCallback(
     (place: { name: string; latitude: number; longitude: number }) =>

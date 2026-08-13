@@ -5,7 +5,7 @@ import { FlatList, Pressable, StyleSheet, TouchableOpacity, View } from 'react-n
 import { Text } from '@/components/ui/text';
 import { typography } from '@/theme/typography';
 import type { ChatHistoryItem } from '@/features/home/HomeContext';
-import { useHome } from '@/features/home/HomeContext';
+import { useHomePlaces } from '@/features/home/HomeContext';
 import { isSamePlace } from '@/services/place/placeService';
 
 type HistoryPlacesPanelProps = {
@@ -31,6 +31,10 @@ function isPlaceSaved(
   return savedPlaces.some((s) => isSamePlace(place, s));
 }
 
+function keyExtractor(place: { id: string }): string {
+  return place.id;
+}
+
 export default function HistoryPlacesPanel({
   item,
   selectedPlaceId,
@@ -40,7 +44,7 @@ export default function HistoryPlacesPanel({
   onScroll,
   bottomInset = 0,
 }: HistoryPlacesPanelProps) {
-  const { savedPlaces } = useHome();
+  const { savedPlaces } = useHomePlaces();
   const [selected, setSelected] = useState<string[]>([]);
   const listRef = useRef<FlatList>(null);
 
@@ -90,6 +94,47 @@ export default function HistoryPlacesPanel({
   const selectableCount = item.places.length - savedSet.size;
   const selectedUnsavedCount = selected.filter((id) => !savedSet.has(id)).length;
 
+  const renderItem = useCallback(({ item: place }: { item: ChatHistoryItem['places'][number] }) => {
+    const active = selectedPlaceId === place.id;
+    const isSaved = savedSet.has(place.id);
+    const isChecked = selected.includes(place.id);
+    return (
+      <Pressable
+        style={[styles.row, active && styles.rowActive]}
+        onPress={() => onPlacePress(place.id)}
+      >
+        <View style={[styles.pin, active && styles.pinActive]}>
+          <Ionicons name="location" size={16} color={active ? '#FFFFFF' : '#2563EB'} />
+        </View>
+        <View style={styles.rowText}>
+          <Text style={styles.placeName} numberOfLines={1}>{place.name}</Text>
+          <Text style={styles.placeSubtitle} numberOfLines={2}>{place.subtitle}</Text>
+          <View style={[
+            styles.chip,
+            place.sentiment === 'positive' && styles.chipPositive,
+            place.sentiment === 'negative' && styles.chipNegative,
+          ]}>
+            <Text style={styles.chipText}>{sentimentLabel(place.sentiment)}</Text>
+          </View>
+        </View>
+        {isSaved ? (
+          <View style={styles.savedBadge}>
+            <Text style={styles.savedBadgeText}>Saved</Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            onPress={() => toggleSelect(place.id)}
+            hitSlop={10}
+            activeOpacity={0.7}
+            style={[styles.check, isChecked ? styles.checkOn : styles.checkOff]}
+          >
+            {isChecked ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+          </TouchableOpacity>
+        )}
+      </Pressable>
+    );
+  }, [selectedPlaceId, savedSet, selected, onPlacePress, toggleSelect]);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -117,53 +162,14 @@ export default function HistoryPlacesPanel({
       <FlatList
         ref={listRef}
         data={item.places}
-        keyExtractor={(place) => place.id}
+        keyExtractor={keyExtractor}
         style={styles.list}
         contentContainerStyle={{ paddingBottom: bottomInset + 96 }}
         onScroll={(event) => onScroll?.(event.nativeEvent.contentOffset.y)}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
-        renderItem={({ item: place }) => {
-          const active = selectedPlaceId === place.id;
-          const isSaved = savedSet.has(place.id);
-          const isChecked = selected.includes(place.id);
-          return (
-            <Pressable
-              style={[styles.row, active && styles.rowActive]}
-              onPress={() => onPlacePress(place.id)}
-            >
-              <View style={[styles.pin, active && styles.pinActive]}>
-                <Ionicons name="location" size={16} color={active ? '#FFFFFF' : '#2563EB'} />
-              </View>
-              <View style={styles.rowText}>
-                <Text style={styles.placeName} numberOfLines={1}>{place.name}</Text>
-                <Text style={styles.placeSubtitle} numberOfLines={2}>{place.subtitle}</Text>
-                <View style={[
-                  styles.chip,
-                  place.sentiment === 'positive' && styles.chipPositive,
-                  place.sentiment === 'negative' && styles.chipNegative,
-                ]}>
-                  <Text style={styles.chipText}>{sentimentLabel(place.sentiment)}</Text>
-                </View>
-              </View>
-              {isSaved ? (
-                <View style={styles.savedBadge}>
-                  <Text style={styles.savedBadgeText}>Saved</Text>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  onPress={() => toggleSelect(place.id)}
-                  hitSlop={10}
-                  activeOpacity={0.7}
-                  style={[styles.check, isChecked ? styles.checkOn : styles.checkOff]}
-                >
-                  {isChecked ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
-                </TouchableOpacity>
-              )}
-            </Pressable>
-          );
-        }}
+        renderItem={renderItem}
       />
     </View>
   );

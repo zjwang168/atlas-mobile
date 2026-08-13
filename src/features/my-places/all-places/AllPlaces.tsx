@@ -84,6 +84,14 @@ type VisibleLocation = Pick<
   'locationLabel' | 'locationCount' | 'dateLabel'
 >;
 
+function placeListKeyExtractor(item: DistancePlaceItem): string {
+  return item.place.id;
+}
+
+function atlasListKeyExtractor(atlas: { id: string }): string {
+  return atlas.id;
+}
+
 function toRadians(value: number): number {
   return (value * Math.PI) / 180;
 }
@@ -735,6 +743,14 @@ function AllPlaces({
     setOverlay({ kind: 'atlasDetail', atlasId });
   }, [setOverlay]);
 
+  const renderPlaceItem = useCallback(({ item }: { item: DistancePlaceItem }) => (
+    <SavedPlaceListItem place={item.place} onPress={handlePlacePress} />
+  ), [handlePlacePress]);
+
+  const renderAtlasItem = useCallback(({ item }: { item: AtlasPreview }) => (
+    <AtlasRow atlas={item} onPress={handleAtlasPress} />
+  ), [handleAtlasPress]);
+
   const showPlaces = filter === 'all' || filter === 'places';
   const showAtlases = filter === 'all' || filter === 'atlas';
   if (filter === 'places') {
@@ -783,10 +799,8 @@ function AllPlaces({
             key="saved-places-list"
             ref={placesListRef}
             data={sortedPlaces}
-            keyExtractor={(item) => item.place.id}
-            renderItem={({ item }) => (
-              <SavedPlaceListItem place={item.place} onPress={handlePlacePress} />
-            )}
+            keyExtractor={placeListKeyExtractor}
+            renderItem={renderPlaceItem}
             scrollEnabled={verticalScrollEnabled}
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={[
@@ -879,10 +893,8 @@ function AllPlaces({
           <FlatList
             key="saved-atlas-list"
             data={sortedAtlasPreviews}
-            keyExtractor={(atlas) => atlas.id}
-            renderItem={({ item }) => (
-              <AtlasRow atlas={item} onPress={handleAtlasPress} />
-            )}
+            keyExtractor={atlasListKeyExtractor}
+            renderItem={renderAtlasItem}
             scrollEnabled={verticalScrollEnabled}
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={[

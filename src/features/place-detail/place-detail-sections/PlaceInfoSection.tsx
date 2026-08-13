@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
-import { useHome } from '../../home/HomeContext';
+import { useHomePlaces } from '../../home/HomeContext';
 import { PlaceDetail, PlaceLink, PlaceTag } from '../../../types/place';
 
 type PlaceInfoSectionProps = {
@@ -77,7 +77,7 @@ function LinkRow({ link }: { link: PlaceLink }) {
 }
 
 function NoteSection({ place }: { place: PlaceDetail }) {
-  const { updateSavedPlaceNote } = useHome();
+  const { updateSavedPlaceNote } = useHomePlaces();
   const colorScheme = useColorScheme();
   const foreground = colorScheme === 'dark' ? '#fafafa' : '#18181B';
   const [isEditing, setIsEditing] = useState(false);
