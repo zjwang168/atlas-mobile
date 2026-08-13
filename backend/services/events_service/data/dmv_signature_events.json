@@ -1,0 +1,651 @@
+{
+  "_comment": [
+    "Hand-curated DMV signature events. This file is the 'signature' layer of",
+    "the events service: the annual festivals, parades, and specialty markets",
+    "that no free feed carries, because each one lives only on its own site.",
+    "",
+    "Deliberately NOT dated. An annual festival moves by a week or two each",
+    "year, and inventing a precise 2026 date we cannot verify would be worse",
+    "than saying 'weekends, late August through October'. Each entry therefore",
+    "carries an approximate annual window plus human schedule text, and the",
+    "adapter emits it in the recurring shape (starts_at null, schedule_text",
+    "set) — the same shape farmers markets use.",
+    "",
+    "annual_window months are inclusive, MM-DD. Coordinates were resolved once",
+    "by geocoding `address` and are committed here so no lookup happens at",
+    "request time. Re-run scripts/geocode_curated_events.py after editing an",
+    "annual_window bounds are inclusive, MM-DD. Coordinates were resolved once by geocoding `address` against OpenStreetMap and are committed here so no lookup happens at request time. Re-run `python3 -m backend.services.events_service.geocode_curated --write` after editing an address."
+  ],
+  "events": [
+    {
+      "id": "md-renaissance-festival",
+      "title": "Maryland Renaissance Festival",
+      "category": "festival",
+      "blurb": "A 27-acre Tudor village of jousting, turkey legs, and 200-odd performers, running every weekend from late summer into autumn.",
+      "location_name": "Revel Grove",
+      "address": "1821 Crownsville Road, Annapolis, MD 21401",
+      "url": "https://www.rennfest.com/",
+      "annual_window": {
+        "start": "08-22",
+        "end": "10-25"
+      },
+      "schedule_text": "Weekends, late August through late October",
+      "featured": true,
+      "is_free": false,
+      "latitude": 39.001755,
+      "longitude": -76.583776
+    },
+    {
+      "id": "dc-cherry-blossom-festival",
+      "title": "National Cherry Blossom Festival",
+      "category": "festival",
+      "blurb": "Four weeks around peak bloom at the Tidal Basin — the parade, the kite festival, and the crowds that come with them.",
+      "location_name": "Tidal Basin",
+      "address": "1850 West Basin Drive SW, Washington, DC 20024",
+      "url": "https://nationalcherryblossomfestival.org/",
+      "annual_window": {
+        "start": "03-20",
+        "end": "04-14"
+      },
+      "schedule_text": "Late March through mid-April, around peak bloom",
+      "featured": true,
+      "is_free": true,
+      "latitude": 38.881848,
+      "longitude": -77.033944
+    },
+    {
+      "id": "dc-smithsonian-folklife",
+      "title": "Smithsonian Folklife Festival",
+      "category": "festival",
+      "blurb": "Free open-air festival on the Mall built around living cultural traditions, with a different region or theme each year.",
+      "location_name": "National Mall",
+      "address": "Smithsonian Institution Building, 1000 Jefferson Drive SW, Washington, DC 20560",
+      "url": "https://festival.si.edu/",
+      "annual_window": {
+        "start": "06-24",
+        "end": "07-06"
+      },
+      "schedule_text": "Late June into early July",
+      "featured": true,
+      "is_free": true,
+      "latitude": 38.888795,
+      "longitude": -77.025938
+    },
+    {
+      "id": "dc-independence-day",
+      "title": "Independence Day on the National Mall",
+      "category": "festival",
+      "blurb": "The parade down Constitution Avenue, the Capitol concert, and fireworks over the Washington Monument.",
+      "location_name": "National Mall",
+      "address": "National Mall, Washington, DC 20024",
+      "url": "https://www.nps.gov/nama/planyourvisit/independence-day.htm",
+      "annual_window": {
+        "start": "07-04",
+        "end": "07-04"
+      },
+      "schedule_text": "July 4th",
+      "featured": true,
+      "is_free": true,
+      "latitude": 38.883905,
+      "longitude": -77.023952
+    },
+    {
+      "id": "dc-jazz-festival",
+      "title": "DC Jazz Festival",
+      "category": "music",
+      "blurb": "A week of jazz across the city, anchored by free waterfront stages at The Wharf.",
+      "location_name": "The Wharf",
+      "address": "760 Maine Avenue SW, Washington, DC 20024",
+      "url": "https://dcjazzfest.org/",
+      "annual_window": {
+        "start": "08-25",
+        "end": "09-07"
+      },
+      "schedule_text": "Late August into early September",
+      "featured": true,
+      "is_free": false,
+      "latitude": 38.878183,
+      "longitude": -77.022005
+    },
+    {
+      "id": "dc-fiesta-dc",
+      "title": "Fiesta DC",
+      "category": "festival",
+      "blurb": "The city's largest Latino festival — a parade of nations plus food and music stages along Pennsylvania Avenue.",
+      "location_name": "Pennsylvania Avenue NW",
+      "address": "Freedom Plaza, Washington, DC",
+      "url": "https://fiestadc.org/",
+      "annual_window": {
+        "start": "09-19",
+        "end": "09-28"
+      },
+      "schedule_text": "Late September, usually a weekend",
+      "featured": true,
+      "is_free": true,
+      "latitude": 38.89585,
+      "longitude": -77.030779
+    },
+    {
+      "id": "dc-h-street-festival",
+      "title": "H Street Festival",
+      "category": "festival",
+      "blurb": "Eleven blocks of H Street NE closed off for a day: a dozen stages, street food, and neighbourhood vendors.",
+      "location_name": "H Street NE",
+      "address": "H Street NE & 8th Street NE, Washington, DC 20002",
+      "url": "https://hstreetfestival.org/",
+      "annual_window": {
+        "start": "09-13",
+        "end": "09-28"
+      },
+      "schedule_text": "A Saturday in late September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.899889,
+      "longitude": -76.995081
+    },
+    {
+      "id": "dc-adams-morgan-day",
+      "title": "Adams Morgan Day",
+      "category": "festival",
+      "blurb": "One of the oldest neighbourhood festivals in the city, along 18th Street NW.",
+      "location_name": "18th Street NW",
+      "address": "2461 18th Street NW, Washington, DC 20009",
+      "url": "https://www.adamsmorganday.org/",
+      "annual_window": {
+        "start": "09-06",
+        "end": "09-21"
+      },
+      "schedule_text": "A Sunday in September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.922014,
+      "longitude": -77.042243
+    },
+    {
+      "id": "dc-capital-pride",
+      "title": "Capital Pride Parade & Festival",
+      "category": "festival",
+      "blurb": "The parade through Dupont and Logan, followed by a street festival on Pennsylvania Avenue.",
+      "location_name": "Dupont Circle to Logan Circle",
+      "address": "17th Street NW & P Street NW, Washington, DC 20036",
+      "url": "https://capitalpride.org/",
+      "annual_window": {
+        "start": "06-05",
+        "end": "06-15"
+      },
+      "schedule_text": "Second weekend of June",
+      "featured": true,
+      "is_free": true,
+      "latitude": 38.909574,
+      "longitude": -77.038754
+    },
+    {
+      "id": "dc-national-book-festival",
+      "title": "Library of Congress National Book Festival",
+      "category": "arts",
+      "blurb": "A free one-day festival with a hundred-plus authors across a dozen stages.",
+      "location_name": "Walter E. Washington Convention Center",
+      "address": "Walter E. Washington Convention Center, Washington, DC",
+      "url": "https://loc.gov/bookfest/",
+      "annual_window": {
+        "start": "08-28",
+        "end": "09-14"
+      },
+      "schedule_text": "A Saturday in late August or early September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.905127,
+      "longitude": -77.022954
+    },
+    {
+      "id": "dc-passport-dc",
+      "title": "Passport DC — Around the World Embassy Tour",
+      "category": "community",
+      "blurb": "Dozens of embassies open their doors for a weekend of food, music, and rooms you cannot otherwise walk into.",
+      "location_name": "Embassy Row",
+      "address": "Sheridan Circle NW, Washington, DC 20008",
+      "url": "https://www.culturaltourismdc.org/passportdc",
+      "annual_window": {
+        "start": "05-01",
+        "end": "05-31"
+      },
+      "schedule_text": "Weekends through May",
+      "featured": true,
+      "is_free": true,
+      "latitude": 38.912406,
+      "longitude": -77.050877
+    },
+    {
+      "id": "dc-kennedy-center-open-house",
+      "title": "Kennedy Center Open House Arts Festival",
+      "category": "arts",
+      "blurb": "The whole building free for a day — dance, orchestras, and hip-hop across every stage and the roof terrace.",
+      "location_name": "The Kennedy Center",
+      "address": "2700 F Street NW, Washington, DC 20566",
+      "url": "https://www.kennedy-center.org/",
+      "annual_window": {
+        "start": "09-01",
+        "end": "09-30"
+      },
+      "schedule_text": "A Saturday in September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.895736,
+      "longitude": -77.055759
+    },
+    {
+      "id": "dc-georgetown-glow",
+      "title": "Georgetown GLOW",
+      "category": "arts",
+      "blurb": "A winter walking trail of outdoor light installations through Georgetown, free and after dark.",
+      "location_name": "Georgetown",
+      "address": "3222 M Street NW, Washington, DC 20007",
+      "url": "https://www.georgetowndc.com/glow/",
+      "annual_window": {
+        "start": "12-01",
+        "end": "01-05"
+      },
+      "schedule_text": "Evenings, December into early January",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.904996,
+      "longitude": -77.06374
+    },
+    {
+      "id": "dc-downtown-holiday-market",
+      "title": "Downtown Holiday Market",
+      "category": "market",
+      "blurb": "Six weeks of open-air stalls outside the Portrait Gallery — local makers, and the closest thing DC has to a Christkindlmarkt.",
+      "location_name": "F Street NW",
+      "address": "800 F Street NW, Washington, DC 20004",
+      "url": "https://downtowndc.org/holiday-market/",
+      "annual_window": {
+        "start": "11-21",
+        "end": "12-23"
+      },
+      "schedule_text": "Daily, noon to 8pm, late November through 23 December",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.896871,
+      "longitude": -77.023479
+    },
+    {
+      "id": "dc-national-christmas-tree",
+      "title": "National Christmas Tree Lighting",
+      "category": "festival",
+      "blurb": "The tree on the Ellipse, lit by the President; the surrounding Pathway of Peace stays up all season.",
+      "location_name": "The Ellipse",
+      "address": "The Ellipse, Washington, DC",
+      "url": "https://www.nps.gov/whho/planyourvisit/national-christmas-tree.htm",
+      "annual_window": {
+        "start": "12-01",
+        "end": "01-01"
+      },
+      "schedule_text": "Lighting in early December; display through the season",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.893966,
+      "longitude": -77.036549
+    },
+    {
+      "id": "dc-eastern-market",
+      "title": "Eastern Market Weekend Market",
+      "category": "market",
+      "blurb": "The 1873 market hall on Capitol Hill, with the outdoor farmers' line on Saturdays and the flea market both days.",
+      "location_name": "Eastern Market",
+      "address": "225 7th Street SE, Washington, DC 20003",
+      "url": "https://easternmarket-dc.org/",
+      "annual_window": {
+        "start": "01-01",
+        "end": "12-31"
+      },
+      "schedule_text": "Saturdays and Sundays, year-round",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.886587,
+      "longitude": -76.99647
+    },
+    {
+      "id": "dc-union-market",
+      "title": "Union Market",
+      "category": "market",
+      "blurb": "A converted wholesale warehouse in NE — food hall, rooftop, and a rotating programme of night markets and screenings.",
+      "location_name": "Union Market",
+      "address": "1309 5th Street NE, Washington, DC 20002",
+      "url": "https://unionmarketdc.com/",
+      "annual_window": {
+        "start": "01-01",
+        "end": "12-31"
+      },
+      "schedule_text": "Open most days, year-round",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.90861,
+      "longitude": -76.997405
+    },
+    {
+      "id": "dc-state-fair",
+      "title": "DC State Fair",
+      "category": "community",
+      "blurb": "A city-scale county fair: best pie, biggest vegetable, and a funniest-looking-produce category taken very seriously.",
+      "location_name": "Franklin Park",
+      "address": "1332 I Street NW, Washington, DC 20005",
+      "url": "https://dcstatefair.org/",
+      "annual_window": {
+        "start": "09-01",
+        "end": "09-30"
+      },
+      "schedule_text": "A Sunday in September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.90125,
+      "longitude": -77.030445
+    },
+    {
+      "id": "va-del-ray-halloween-parade",
+      "title": "Del Ray Halloween Parade",
+      "category": "community",
+      "blurb": "A costume parade down Mount Vernon Avenue with a dog contest that outdraws the children's one.",
+      "location_name": "Mount Vernon Avenue",
+      "address": "2000 Mount Vernon Avenue, Alexandria, VA 22301",
+      "url": "https://visitdelray.com/",
+      "annual_window": {
+        "start": "10-18",
+        "end": "10-31"
+      },
+      "schedule_text": "A Sunday in late October",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.824026,
+      "longitude": -77.058449
+    },
+    {
+      "id": "va-art-on-the-avenue",
+      "title": "Art on the Avenue",
+      "category": "arts",
+      "blurb": "A mile of Mount Vernon Avenue given over to 300-odd makers, plus stages and street food.",
+      "location_name": "Mount Vernon Avenue, Del Ray",
+      "address": "2400 Mount Vernon Avenue, Alexandria, VA 22301",
+      "url": "https://artontheavenue.org/",
+      "annual_window": {
+        "start": "10-01",
+        "end": "10-12"
+      },
+      "schedule_text": "First Saturday in October",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.826994,
+      "longitude": -77.059041
+    },
+    {
+      "id": "va-scottish-christmas-walk",
+      "title": "Alexandria Scottish Christmas Walk Parade",
+      "category": "festival",
+      "blurb": "Pipe bands and clan tartans through Old Town on the first Saturday of December.",
+      "location_name": "Old Town Alexandria",
+      "address": "Market Square, Alexandria, Virginia",
+      "url": "https://www.campagnacenter.org/scottishwalkweekend",
+      "annual_window": {
+        "start": "12-01",
+        "end": "12-08"
+      },
+      "schedule_text": "First Saturday in December",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.804985,
+      "longitude": -77.042996
+    },
+    {
+      "id": "va-old-town-farmers-market",
+      "title": "Old Town Alexandria Farmers' Market",
+      "category": "market",
+      "blurb": "Running since 1753 in Market Square — among the oldest continuously operating markets in the country.",
+      "location_name": "Market Square",
+      "address": "301 King Street, Alexandria, VA 22314",
+      "url": "https://www.alexandriava.gov/FarmersMarkets",
+      "annual_window": {
+        "start": "01-01",
+        "end": "12-31"
+      },
+      "schedule_text": "Saturdays, 7am to noon, year-round",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.805417,
+      "longitude": -77.043208
+    },
+    {
+      "id": "va-clarendon-day",
+      "title": "Clarendon Day",
+      "category": "festival",
+      "blurb": "Arlington's big street festival — two stages, a 5K, and Wilson Boulevard closed to traffic.",
+      "location_name": "Clarendon",
+      "address": "3100 Wilson Boulevard, Arlington, VA 22201",
+      "url": "https://www.clarendon.org/clarendon-day/",
+      "annual_window": {
+        "start": "09-20",
+        "end": "10-05"
+      },
+      "schedule_text": "A Saturday in late September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.887075,
+      "longitude": -77.09525
+    },
+    {
+      "id": "va-viva-vienna",
+      "title": "Viva! Vienna!",
+      "category": "festival",
+      "blurb": "Memorial Day weekend carnival and craft fair through the centre of Vienna.",
+      "location_name": "Historic Church Street, Vienna",
+      "address": "127 Center Street South, Vienna, VA 22180",
+      "url": "https://www.vivavienna.org/",
+      "annual_window": {
+        "start": "05-22",
+        "end": "05-31"
+      },
+      "schedule_text": "Memorial Day weekend",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.900669,
+      "longitude": -77.264451
+    },
+    {
+      "id": "va-wolf-trap-filene-season",
+      "title": "Wolf Trap Filene Center Summer Season",
+      "category": "music",
+      "blurb": "The only national park built for the performing arts — an outdoor amphitheatre where the lawn tickets are the point.",
+      "location_name": "Filene Center, Wolf Trap",
+      "address": "Wolf Trap National Park for the Performing Arts, Virginia",
+      "url": "https://www.wolftrap.org/",
+      "annual_window": {
+        "start": "05-15",
+        "end": "09-15"
+      },
+      "schedule_text": "Most evenings, mid-May through mid-September",
+      "featured": true,
+      "is_free": false,
+      "latitude": 38.938008,
+      "longitude": -77.264661
+    },
+    {
+      "id": "va-shenandoah-apple-blossom",
+      "title": "Shenandoah Apple Blossom Festival",
+      "category": "festival",
+      "blurb": "Winchester's week-long spring festival, going since 1924 — two parades, a carnival, and orchards in bloom.",
+      "location_name": "Old Town Winchester",
+      "address": "128 North Cameron Street, Winchester, VA 22601",
+      "url": "https://www.thebloom.com/",
+      "annual_window": {
+        "start": "04-24",
+        "end": "05-05"
+      },
+      "schedule_text": "Ten days, late April into early May",
+      "featured": false,
+      "is_free": false,
+      "latitude": 39.184589,
+      "longitude": -78.163719
+    },
+    {
+      "id": "va-leesburg-flower-garden",
+      "title": "Leesburg Flower & Garden Festival",
+      "category": "market",
+      "blurb": "Historic downtown Leesburg turned over to growers and garden makers for a weekend each spring.",
+      "location_name": "Downtown Leesburg",
+      "address": "King Street & Market Street, Leesburg, VA 20176",
+      "url": "https://www.idalee.org/",
+      "annual_window": {
+        "start": "04-15",
+        "end": "04-30"
+      },
+      "schedule_text": "A weekend in late April",
+      "featured": false,
+      "is_free": true,
+      "latitude": 39.110823,
+      "longitude": -77.55662
+    },
+    {
+      "id": "va-occoquan-craft-show",
+      "title": "Occoquan Arts & Crafts Show",
+      "category": "market",
+      "blurb": "A riverside town of 1,000 people that takes on 300 craft vendors twice a year.",
+      "location_name": "Historic Occoquan",
+      "address": "Mill Street, Occoquan, VA 22125",
+      "url": "https://occoquanva.gov/",
+      "annual_window": {
+        "start": "09-20",
+        "end": "09-30"
+      },
+      "schedule_text": "A weekend in late September, and again in early June",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.682988,
+      "longitude": -77.259122
+    },
+    {
+      "id": "md-takoma-park-folk-festival",
+      "title": "Takoma Park Folk Festival",
+      "category": "music",
+      "blurb": "A free all-day festival of seven stages, no headliners, and a strict all-volunteer rule since 1978.",
+      "location_name": "Takoma Park Middle School",
+      "address": "7611 Piney Branch Road, Takoma Park, MD 20912",
+      "url": "https://tpff.org/",
+      "annual_window": {
+        "start": "09-06",
+        "end": "09-21"
+      },
+      "schedule_text": "A Sunday in September",
+      "featured": false,
+      "is_free": true,
+      "latitude": 38.98492,
+      "longitude": -77.014752
+    },
+    {
+      "id": "md-kensington-day-of-the-book",
+      "title": "Kensington Day of the Book Festival",
+      "category": "arts",
+      "blurb": "Howard Avenue closed off for a street fair entirely about books — authors, poets, and secondhand stalls.",
+      "location_name": "Howard Avenue, Kensington",
+      "address": "3730 Howard Avenue, Kensington, MD 20895",
+      "url": "https://www.dayofthebook.com/",
+      "annual_window": {
+        "start": "04-20",
+        "end": "04-30"
+      },
+      "schedule_text": "A Sunday in late April",
+      "featured": false,
+      "is_free": true,
+      "latitude": 39.027094,
+      "longitude": -77.072933
+    },
+    {
+      "id": "md-greenbelt-labor-day",
+      "title": "Greenbelt Labor Day Festival",
+      "category": "community",
+      "blurb": "A four-day town festival in one of the New Deal's planned communities, running since 1955.",
+      "location_name": "Roosevelt Center",
+      "address": "129 Centerway, Greenbelt, MD 20770",
+      "url": "https://greenbeltlaborday.com/",
+      "annual_window": {
+        "start": "08-29",
+        "end": "09-08"
+      },
+      "schedule_text": "Labor Day weekend",
+      "featured": false,
+      "is_free": true,
+      "latitude": 39.000478,
+      "longitude": -76.877216
+    },
+    {
+      "id": "md-montgomery-county-fair",
+      "title": "Montgomery County Agricultural Fair",
+      "category": "community",
+      "blurb": "Nine days of livestock judging, tractor pulls, and fried everything, twenty miles from the Capitol.",
+      "location_name": "Montgomery County Agricultural Center",
+      "address": "16 Chestnut Street, Gaithersburg, MD 20877",
+      "url": "https://mcagfair.com/",
+      "annual_window": {
+        "start": "08-07",
+        "end": "08-17"
+      },
+      "schedule_text": "Nine days in mid-August",
+      "featured": false,
+      "is_free": false,
+      "latitude": 39.143222,
+      "longitude": -77.202242
+    },
+    {
+      "id": "md-maryland-state-fair",
+      "title": "Maryland State Fair",
+      "category": "community",
+      "blurb": "Timonium's eleven-day state fair — thoroughbred racing, agriculture halls, and a midway.",
+      "location_name": "Maryland State Fairgrounds",
+      "address": "2200 York Road, Timonium, MD 21093",
+      "url": "https://www.marylandstatefair.com/",
+      "annual_window": {
+        "start": "08-21",
+        "end": "09-07"
+      },
+      "schedule_text": "Late August into Labor Day weekend",
+      "featured": false,
+      "is_free": false,
+      "latitude": 39.44644,
+      "longitude": -76.633123
+    },
+    {
+      "id": "md-glen-echo-folk-dance",
+      "title": "Glen Echo Park Spanish Ballroom Dances",
+      "category": "music",
+      "blurb": "Contra, swing, and waltz in a 1933 ballroom inside a former amusement park, most weekends of the year.",
+      "location_name": "Spanish Ballroom, Glen Echo Park",
+      "address": "7300 MacArthur Boulevard, Glen Echo, MD 20812",
+      "url": "https://glenechopark.org/",
+      "annual_window": {
+        "start": "01-01",
+        "end": "12-31"
+      },
+      "schedule_text": "Most Friday, Saturday, and Sunday evenings",
+      "featured": false,
+      "is_free": false,
+      "latitude": 38.966906,
+      "longitude": -77.139451
+    },
+    {
+      "id": "md-artscape-baltimore",
+      "title": "Artscape",
+      "category": "arts",
+      "blurb": "Billed as the largest free arts festival in the country — three days across Baltimore's Station North.",
+      "location_name": "Station North, Baltimore",
+      "address": "1300 Mount Royal Avenue, Baltimore, MD 21217",
+      "url": "https://www.artscape.org/",
+      "annual_window": {
+        "start": "08-01",
+        "end": "09-30"
+      },
+      "schedule_text": "Three days in late summer",
+      "featured": false,
+      "is_free": true,
+      "latitude": 39.305051,
+      "longitude": -76.619761
+    }
+  ]
+}
