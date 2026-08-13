@@ -2,6 +2,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Text } from '@/components/ui/text';
 import { useHomeAtlases, useHomeChatHistory, useHomeLocation, useHomeOverlayActions } from '@/features/home/HomeContext';
 import { atlasCameraFromStops } from '@/features/map/atlasCamera';
+
+const ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y = -250;
 import { createChatSession } from '@/services/api/apiService';
 import { mockUser } from '../../../mock-data/mockUser';
 import type { SnapState } from '../../components/content-panel/ContentPanel';
@@ -147,17 +149,19 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
         description: marker.description,
       }))) : undefined;
       if (mapView && completedCamera) {
-        // Keep only the final Atlas orange pins from this exact synchronous
-        // state update. Mapbox derives its Web Mercator center and zoom from
-        // these bounds plus the completed sheet's live bottom padding.
+        // Keep the completed Atlas on the same stable orange-pin overview as
+        // reopening an existing Atlas. Do not fit bounds during the sheet's
+        // first layout pass, which can transiently yield a globe zoom.
         setAtlasMapState({
           markers: completedCamera.markers,
           centerCoordinate: completedCamera.centerCoordinate,
-          zoomLevel: mapView.zoomLevel,
-          bounds: completedCamera.bounds,
+          zoomLevel: completedCamera.zoomLevel,
           cameraKey: `atlas-save-${atlasId}-${Date.now()}`,
           cameraVerticalOffset: 28,
+          cameraScreenOffsetY: ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y,
+          lockCameraToScreen: true,
           cameraAnimationDurationMs: 0,
+          resetCameraOrientation: true,
           selectedMarkerId: null,
           markerPopup: null,
           overlay: null,

@@ -10,6 +10,7 @@ import { useCallback, useMemo } from 'react';
 import { AtlasCard } from './AtlasCard';
 
 const CATEGORY_PILLS = ['All', 'Restaurants', 'Museums', 'Trails', 'Cafes', 'Landmarks'];
+const ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y = -250;
 
 function coverIndex(atlasId: string, count: number): number {
   if (count <= 1) return 0;
@@ -113,11 +114,15 @@ export default function Atlas({ verticalScrollEnabled = true }: AtlasProps) {
       setAtlasMapState({
         markers: camera.markers,
         centerCoordinate: camera.centerCoordinate,
-        zoomLevel: 10,
-        bounds: camera.bounds,
+        zoomLevel: camera.zoomLevel,
         cameraKey: `atlas-bookmark-${atlasId}-${Date.now()}`,
         cameraVerticalOffset: 28,
+        cameraScreenOffsetY: ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y,
+        // Keep the orange-pin overview stable while the completed Atlas
+        // itinerary panel enters. Its height must not re-offset this camera.
+        lockCameraToScreen: true,
         cameraAnimationDurationMs: 0,
+        resetCameraOrientation: true,
         selectedMarkerId: null,
         markerPopup: null,
         overlay: null,

@@ -56,6 +56,10 @@ const TRANSPORT_PRESENTATION: Record<AtlasTransportMode, { label: string; icon: 
 // Keep the orange-pin overview above the completed Atlas sheet and its route
 // control, so the lowest stop remains fully tappable and visible.
 const ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET = 28;
+// The completed Atlas itinerary covers roughly the lower half of the screen.
+// Keep its orange-pin overview centered in the exposed upper map area, not at
+// the physical center underneath the panel.
+const ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y = -250;
 // Let the My Places surface take over before replacing the Atlas-owned map
 // markers with the full saved-places set. Updating both at once can make the
 // native Mapbox marker reconciliation block the close tap for several seconds.
@@ -73,7 +77,6 @@ function getMapPresentation(items: ItineraryItem[], route: Atlas['route_geojson'
   if (!camera) return { markers: [], centerCoordinate: undefined, zoomLevel: 6 };
   return {
     ...camera,
-    zoomLevel: 10,
     routeGeoJSON: route ?? undefined,
   };
 }
@@ -444,10 +447,12 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     if (camera) {
       const nextState: AtlasMapState = {
         ...camera,
-        zoomLevel: mapView.zoomLevel,
         cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
+        cameraScreenOffsetY: ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y,
+        lockCameraToScreen: true,
         cameraKey: `atlas-save-${atlas?.id ?? atlasId}-${Date.now()}`,
         cameraAnimationDurationMs: 0,
+        resetCameraOrientation: true,
         routeGeoJSON: mapView.routeGeoJSON,
         selectedMarkerId: null,
         markerPopup: null,
@@ -471,6 +476,7 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     const nextState: AtlasMapState = {
       ...presentation,
       cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
+      cameraScreenOffsetY: ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y,
       cameraKey: `atlas-cancel-${atlas?.id ?? atlasId}-${Date.now()}`,
       cameraAnimationDurationMs: 0,
       routeGeoJSON: displayedRoute ?? undefined,
@@ -596,6 +602,10 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
 
   useLayoutEffect(() => {
     if (!atlas || editing) return;
+    // Keep the card's existing camera while the durable atlas rows are still
+    // hydrating. Publishing an empty presentation here would make Home fall
+    // back to the device/GPS camera.
+    if (!presentation.centerCoordinate || presentation.markers.length === 0) return;
     // Save can open this page before its local atlas_places subscription has
     // delivered every newly-written row. Keep the complete synchronous
     // orange-pin handoff until the durable Atlas rows have caught up, rather
@@ -607,7 +617,20 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     const nextMapState: AtlasMapState = {
       ...activePresentation,
       cameraVerticalOffset: ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET,
+      // Place the orange-pin center in the exposed upper map area. This must
+      // be on the normal detail state (not only save/cancel handoffs).
+      cameraScreenOffsetY: ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y,
+      // The view visible for a split second after closing is the desired
+      // full-screen orange-pin overview. Keep that exact camera while the
+      // itinerary panel is open instead of letting panel padding rewrite it.
+      lockCameraToScreen: true,
       ...scopedRouteCamera,
+      // A Mapbox fitBounds issued while ContentPanel is reporting its first
+      // height can be calculated against a nearly zero viewport, producing a
+      // globe zoom. The same orange-pin bounds already give us the correct
+      // center and dynamic overview zoom, so keep the camera deterministic.
+      bounds: undefined,
+      resetCameraOrientation: true,
       cameraKey: scopedRouteCamera?.cameraKey ?? overviewCameraKey,
       cameraAnimationDurationMs: 320,
       ...(scopedRouteCamera ? { cameraAnimationDurationMs: scopedRouteCamera.cameraAnimationDurationMs } : {}),

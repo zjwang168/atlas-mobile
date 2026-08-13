@@ -5,6 +5,8 @@ export type MapBounds = { ne: [number, number]; sw: [number, number] };
 export type AtlasCameraPresentation = {
   markers: MapMarker[];
   centerCoordinate: [number, number];
+  /** Stable overview zoom derived from the orange-pin footprint. */
+  zoomLevel: number;
   bounds: MapBounds;
 };
 
@@ -46,6 +48,15 @@ export function atlasCameraFromStops(stops: ReadonlyArray<AtlasStop>): AtlasCame
   const bounds = atlasBoundsFromCoordinates(stops.map((stop) => [stop.longitude, stop.latitude]));
   if (!bounds) return undefined;
 
+  const longitudeSpan = Math.max(0.00001, bounds.ne[0] - bounds.sw[0]);
+  const latitudeSpan = Math.max(0.00001, bounds.ne[1] - bounds.sw[1]);
+  // Leave practical room around the pins for the completed Atlas sheet. This
+  // is deliberately independent of the sheet's first layout callback, which
+  // can briefly report an unusable viewport to native Mapbox.
+  // Keep the full orange-pin footprint visible, but avoid the loose
+  // continent-scale framing that makes a city Atlas read as one tiny cluster.
+  const zoomLevel = Math.max(3, Math.min(16, Math.log2(360 / Math.max(longitudeSpan, latitudeSpan)) - 0.3));
+
   return {
     markers: stops.map((stop, index) => ({
       id: stop.id,
@@ -60,6 +71,7 @@ export function atlasCameraFromStops(stops: ReadonlyArray<AtlasStop>): AtlasCame
       (bounds.ne[0] + bounds.sw[0]) / 2,
       (bounds.ne[1] + bounds.sw[1]) / 2,
     ],
+    zoomLevel,
     bounds,
   };
 }

@@ -144,6 +144,42 @@ function markerVisualKey(marker: RenderMarker): string {
 }
 
 /**
+ * Give near-identical native points a small screen-space nudge. This is not
+ * clustering: every feature keeps its own coordinates, id, and Mapbox hit
+ * target. It only prevents stacked orange/purple glyphs from becoming one
+ * unreadable dot when several recommendations share a venue geocode.
+ */
+function nativePointOffsets(markers: ReadonlyArray<MapMarker>): Map<string, [number, number]> {
+  const groups: MapMarker[][] = [];
+  markers.forEach((marker) => {
+    const group = groups.find((candidate) => candidate.some((item) => (
+      Math.abs(item.longitude - marker.longitude) <= 0.001
+      && Math.abs(item.latitude - marker.latitude) <= 0.001
+    )));
+    if (group) group.push(marker);
+    else groups.push([marker]);
+  });
+  const offsets = new Map<string, [number, number]>();
+  groups.forEach((group) => {
+    if (group.length < 2) return;
+    group.forEach((marker, index) => {
+      const angle = (index / group.length) * Math.PI * 2 - Math.PI / 2;
+      // Geographic display offset, roughly 50-120 metres. It is applied only
+      // to the rendered GeoJSON feature; the saved place coordinates remain
+      // untouched and each Mapbox point keeps its own press target.
+      const radius = Math.min(0.0011, 0.00048 + group.length * 0.00007);
+      offsets.set(marker.id, [Math.cos(angle) * radius, Math.sin(angle) * radius]);
+    });
+  });
+  return offsets;
+}
+
+function offsetCoordinate(marker: MapMarker, offsets: ReadonlyMap<string, [number, number]>): [number, number] {
+  const [longitudeOffset, latitudeOffset] = offsets.get(marker.id) ?? [0, 0];
+  return [marker.longitude + longitudeOffset, marker.latitude + latitudeOffset];
+}
+
+/**
  * Does this marker render as a native map layer rather than a React annotation?
  *
  * The ordinary saved and recommended pins — the overwhelming majority — are
@@ -163,11 +199,11 @@ function rendersAsLayer(
   popupMarkerId?: string | null,
   disableRecommendedClustering = false,
 ): boolean {
+  // Purple AI recommendations and orange Atlas stops are always native
+  // Mapbox single points. They must never enter the React MarkerView/overlay
+  // tier, even while selected, entering, or pulsing.
+  if (marker.tone === 'recommended' || marker.tone === 'atlas') return true;
   if (marker.renderAsAnnotation) return false;
-  // AI outcome pins always stay in Mapbox's native single-point sources,
-  // including while their action sheet is open. The sheet is an independent
-  // overlay, so a React MarkerView is not needed for selection.
-  if ((marker.tone === 'recommended' || marker.tone === 'atlas') && !marker.entering && !marker.pulsing) return true;
   if (marker.id === selectedMarkerId || marker.id === deletingMarkerId) return false;
   if (popupMarkerId && marker.id === popupMarkerId) return false;
   // Ordinary saved pins use the clustered native source below. Pins that need
@@ -337,6 +373,26 @@ function screenMarkers(markers: ReadonlyArray<RenderMarker>, viewport: MapViewpo
     const y = point[1] - center[1] + height / 2;
     return { marker, x, y, dotRect: { left: x - 10, top: y - 10, right: x + 10, bottom: y + 10 } };
   }).filter((point) => point.x >= -12 && point.x <= width + 12 && point.y >= -12 && point.y <= height + 12);
+}
+
+/**
+ * Keep every Atlas stop as a Mapbox feature, but draw only one owner when
+ * orange glyphs overlap in the current viewport. Unlike a fixed geographic
+ * threshold this adapts to zoom: zooming in restores all stops immediately.
+ */
+function atlasVisibleOwnerIds(markers: ReadonlyArray<MapMarker>, viewport: MapViewport, width: number, height: number): Set<string> {
+  const center = projectToWorld(viewport.center, viewport.zoom);
+  const groups: Array<Array<{ marker: MapMarker; x: number; y: number }>> = [];
+  markers.forEach((marker) => {
+    const point = projectToWorld([marker.longitude, marker.latitude], viewport.zoom);
+    const next = { marker, x: point[0] - center[0] + width / 2, y: point[1] - center[1] + height / 2 };
+    const matchingGroup = groups.find((group) => group.some((item) => Math.hypot(item.x - next.x, item.y - next.y) < 24));
+    if (matchingGroup) matchingGroup.push(next);
+    else groups.push([next]);
+  });
+  return new Set(groups.map((group) => (
+    [...group].sort((left, right) => (left.marker.order ?? 0) - (right.marker.order ?? 0)).at(-1)!.marker.id
+  )));
 }
 
 function canCluster(marker: MapMarker, selectedMarkerId?: string | null, disableRecommendedClustering = false): boolean {
@@ -726,20 +782,16 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     [deletingMarkerId, disableRecommendedClustering, markerPopup?.markerId, renderedMarkers, selectedMarkerId],
   );
   const recommendedLayerMarkers = useMemo(
-    () => disableRecommendedClustering
-      ? layerMarkers.filter((marker) => marker.tone === 'recommended')
-      : [],
-    [disableRecommendedClustering, layerMarkers],
+    () => layerMarkers.filter((marker) => marker.tone === 'recommended'),
+    [layerMarkers],
   );
   const atlasLayerMarkers = useMemo(
     () => layerMarkers.filter((marker) => marker.tone === 'atlas'),
     [layerMarkers],
   );
   const clusteredLayerMarkers = useMemo(
-    () => disableRecommendedClustering
-      ? layerMarkers.filter((marker) => marker.tone !== 'recommended' && marker.tone !== 'atlas')
-      : layerMarkers.filter((marker) => marker.tone !== 'atlas'),
-    [disableRecommendedClustering, layerMarkers],
+    () => layerMarkers.filter((marker) => marker.tone !== 'recommended' && marker.tone !== 'atlas'),
+    [layerMarkers],
   );
   const annotationMarkers = useMemo(
     () => renderedMarkers.filter((marker) => (
@@ -760,18 +812,40 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
     })),
   }), [clusteredLayerMarkers]);
+  const recommendedPointOffsets = useMemo(
+    () => nativePointOffsets(recommendedLayerMarkers),
+    [recommendedLayerMarkers],
+  );
   const recommendedLayerFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
     type: 'FeatureCollection',
     features: recommendedLayerMarkers.map((marker) => ({
       type: 'Feature' as const,
       id: marker.id,
-      properties: { markerId: marker.id, title: marker.title ?? '', tone: 'recommended' },
-      geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
+      properties: {
+        markerId: marker.id,
+        title: marker.title ?? '',
+        tone: 'recommended',
+        offset: recommendedPointOffsets.get(marker.id) ?? [0, 0],
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [
+          marker.longitude + (recommendedPointOffsets.get(marker.id)?.[0] ?? 0),
+          marker.latitude + (recommendedPointOffsets.get(marker.id)?.[1] ?? 0),
+        ],
+      },
     })),
-  }), [recommendedLayerMarkers]);
+  }), [recommendedLayerMarkers, recommendedPointOffsets]);
+  const atlasVisibleIds = useMemo(
+    () => atlasVisibleOwnerIds(atlasLayerMarkers, viewport, width, height),
+    [atlasLayerMarkers, height, viewport, width],
+  );
   const atlasLayerFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
     type: 'FeatureCollection',
-    features: atlasLayerMarkers.map((marker) => ({
+    // One native feature per close-coordinate stack. Keeping lower stops out
+    // of the render source is the only deterministic way to prevent separate
+    // circle and symbol layers from letting route numbers bleed through.
+    features: atlasLayerMarkers.filter((marker) => atlasVisibleIds.has(marker.id)).map((marker) => ({
       type: 'Feature' as const,
       id: marker.id,
       properties: {
@@ -779,10 +853,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         title: marker.title ?? '',
         tone: 'atlas',
         order: String(marker.order ?? ''),
+        stackOrder: marker.order ?? 0,
       },
       geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
     })),
-  }), [atlasLayerMarkers]);
+  }), [atlasLayerMarkers, atlasVisibleIds]);
   // Mapbox keeps the ordinary layers visible throughout a pinch/zoom. The
   // burst state below is the only time those layers yield to a transition.
   const layerVisible = true;
@@ -1249,22 +1324,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 circleOpacityTransition: { duration: 180, delay: 0 },
                 circleStrokeWidth: 3,
                 circleStrokeColor: '#FFFFFF',
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="recommendedPointLabel"
-              style={{
-                textField: ['get', 'title'],
-                textSize: 12,
-                textFont: ['Open Sans SemiBold'],
-                textColor: '#312E4B',
-                textHaloColor: 'rgba(255,255,255,0.98)',
-                textHaloWidth: 2.5,
-                textOffset: [0, -1.25],
-                textAnchor: 'bottom',
-                textOptional: true,
-                textAllowOverlap: false,
-                textIgnorePlacement: false,
+                circleSortKey: ['get', 'stackOrder'],
               }}
             />
           </MapboxGL.ShapeSource>
@@ -1292,6 +1352,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 textColor: '#FFFFFF',
                 textAllowOverlap: true,
                 textIgnorePlacement: true,
+                symbolSortKey: ['get', 'stackOrder'],
               }}
             />
           </MapboxGL.ShapeSource>
@@ -1339,10 +1400,19 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         {/* These are visual-only label views. Pins stay in the GPU layer; the
             labels are capped by the same collision pass and never receive
             touches, so map gestures remain entirely with Mapbox. */}
-        {layerMarkers.filter((marker) => marker.tone !== 'recommended' && layerLabelIds.has(marker.id) && marker.title).map((marker) => (
+        {layerMarkers.filter((marker) => (
+          marker.title
+          && (marker.tone === 'recommended'
+            || (marker.tone === 'atlas' && atlasVisibleIds.has(marker.id))
+            || layerLabelIds.has(marker.id))
+        )).map((marker) => (
           <MapboxGL.MarkerView
             key={`layer-label:${marker.id}`}
-            coordinate={[marker.longitude, marker.latitude]}
+            coordinate={marker.tone === 'recommended'
+              ? offsetCoordinate(marker, recommendedPointOffsets)
+              : marker.tone === 'atlas'
+                ? [marker.longitude, marker.latitude]
+              : [marker.longitude, marker.latitude]}
             style={styles.markerLabelAnnotation}
             allowOverlap
           >
