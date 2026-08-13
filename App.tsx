@@ -10,6 +10,7 @@ import './global.css';
 
 import { isSamePlace, savePlaces } from '@/services/place/placeService';
 import { HomeProvider, useHome } from './src/features/home/HomeContext';
+import type { ChatHistoryItem } from './src/features/home/HomeContext';
 import { AppDialogProvider, useAppDialog } from './src/components/feedback/AppDialog';
 import { signInAnonymously, supabase } from './src/services/supabase/supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -337,6 +338,8 @@ function AppContent() {
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [parseProgressEvents, setParseProgressEvents] = useState<ParseProgressEvent[]>([]);
   const [showChatHistory, setShowChatHistory] = useState(false);
+  const [chatHistoryReturnItem, setChatHistoryReturnItem] = useState<ChatHistoryItem | null>(null);
+  const [chatHistoryExitRequest, setChatHistoryExitRequest] = useState(0);
   const [completedImport, setCompletedImport] = useState<CompletedImport | null>(null);
   const [backgroundImport, setBackgroundImport] = useState<BackgroundImport | null>(null);
   const [completionCelebration, setCompletionCelebration] = useState<string | null>(null);
@@ -358,6 +361,7 @@ function AppContent() {
     addChatHistoryItem,
     replaceChatHistoryItem,
     setActiveHistoryItem,
+    activeHistoryItem,
     setSelectedPlaceCoordinate,
     setSelectedPlaceId,
     setActiveSidekick,
@@ -809,8 +813,12 @@ function AppContent() {
       <MapErrorBoundary>
         <HomeScreen
           onOpenImport={() => setOverlay('import')}
-          onOpenChatHistory={() => setShowChatHistory(true)}
+          onOpenChatHistory={() => {
+            setChatHistoryReturnItem(activeHistoryItem);
+            setShowChatHistory(true);
+          }}
           externalOverlayVisible={overlay !== 'none' || showChatHistory}
+          chatHistoryExitRequest={chatHistoryExitRequest}
         />
       </MapErrorBoundary>
 
@@ -1092,7 +1100,17 @@ function AppContent() {
           {showChatHistory && (
             <AtlasAIHome
               visible={showChatHistory}
-              onClose={() => setShowChatHistory(false)}
+              onBackToChat={() => {
+                setActiveHistoryItem(chatHistoryReturnItem);
+                setActiveSidekick('aiChat');
+                setShowChatHistory(false);
+              }}
+              onClose={() => {
+                setActiveHistoryItem(null);
+                setActiveSidekick('none');
+                setShowChatHistory(false);
+                setChatHistoryExitRequest((request) => request + 1);
+              }}
               onLongPressDebug={() => setHomeOverlay({ kind: 'debug' })}
               onOpenChat={(item) => {
                 setActiveHistoryItem(item);

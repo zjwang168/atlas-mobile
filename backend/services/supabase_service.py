@@ -439,7 +439,7 @@ class SupabaseService:
         return conversations
 
     async def delete_conversation(self, conversation_id: str) -> bool:
-        """Delete a conversation and all related data."""
+        """Delete a conversation and all related data through FK cascades."""
         client = self._get_client()
         if not client:
             return False
@@ -447,28 +447,14 @@ class SupabaseService:
         import asyncio
 
         try:
-            # Delete messages
-            await asyncio.to_thread(
-                lambda: client.table("conversation_messages")
-                    .delete()
-                    .eq("conversation_id", conversation_id)
-                    .execute()
-            )
-            # Delete locations
-            await asyncio.to_thread(
-                lambda: client.table("conversation_locations")
-                    .delete()
-                    .eq("conversation_id", conversation_id)
-                    .execute()
-            )
-            # Delete conversation
-            await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 lambda: client.table("conversations")
                     .delete()
                     .eq("id", conversation_id)
+                    .select("id")
                     .execute()
             )
-            return True
+            return bool(result.data)
         except Exception as e:
             print(f"[SupabaseService] Delete error: {e}")
             return False

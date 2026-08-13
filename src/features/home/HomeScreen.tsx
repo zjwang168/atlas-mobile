@@ -50,6 +50,7 @@ interface HomeScreenProps {
   onOpenImport?: () => void;
   onOpenChatHistory?: () => void;
   externalOverlayVisible?: boolean;
+  chatHistoryExitRequest?: number;
 }
 
 // ---- Helpers ----
@@ -70,12 +71,14 @@ export default function HomeScreen({
   onOpenImport,
   onOpenChatHistory,
   externalOverlayVisible = false,
+  chatHistoryExitRequest = 0,
 }: HomeScreenProps) {
   return (
     <HomeScreenContent
       onOpenImport={onOpenImport}
       onOpenChatHistory={onOpenChatHistory}
       externalOverlayVisible={externalOverlayVisible}
+      chatHistoryExitRequest={chatHistoryExitRequest}
     />
   );
 }
@@ -86,6 +89,7 @@ function HomeScreenContent({
   onOpenImport,
   onOpenChatHistory,
   externalOverlayVisible = false,
+  chatHistoryExitRequest = 0,
 }: HomeScreenProps) {
   const { show: showDialog } = useAppDialog();
   const { height: screenHeight } = useWindowDimensions();
@@ -424,6 +428,9 @@ function HomeScreenContent({
     }).start();
     setActiveTab(tab);
   }, [pagerTranslateX, pagerWidth, tabOrder]);
+  useEffect(() => {
+    if (chatHistoryExitRequest > 0) animateToTab(TAB_PLACES);
+  }, [animateToTab, chatHistoryExitRequest]);
   const handleTabChange = useCallback((tab: string) => {
     animateToTab(tab);
   }, [animateToTab]);
@@ -624,7 +631,6 @@ function HomeScreenContent({
           setChatMapOpen(false);
           setChatPresentationVisible(false);
           setStandaloneChatVisible(false);
-          setActiveHistoryItem(null);
           setActiveSidekick('none');
           onOpenChatHistory?.();
         }}

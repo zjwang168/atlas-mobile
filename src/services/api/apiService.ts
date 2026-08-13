@@ -75,6 +75,18 @@ async function getJson<T>(path: string, signal?: AbortSignal, includeAuth = true
   return response.json();
 }
 
+async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: await authHeaders(),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`API error (${response.status}): ${errorBody || response.statusText}`);
+  }
+  return response.json();
+}
+
 export type ParseProgressEvent = {
   key: string;
   label: string;
@@ -875,4 +887,10 @@ export async function fetchConversations(): Promise<ConversationSummary[]> {
 
 export async function fetchConversation(conversationId: string): Promise<ConversationDetailResponse> {
   return getJson(`/conversations/${conversationId}`);
+}
+
+/** Permanently delete a conversation and its dependent messages, places, and summaries. */
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const result = await deleteJson<{ deleted: boolean }>(`/conversations/${encodeURIComponent(conversationId)}`);
+  if (!result.deleted) throw new Error('Conversation was not deleted.');
 }

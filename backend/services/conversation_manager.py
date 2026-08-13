@@ -315,7 +315,10 @@ class ConversationManager:
         supabase = self._get_supabase()
         if supabase:
             try:
-                return await supabase.delete_conversation(conversation_id)
+                deleted = await supabase.delete_conversation(conversation_id)
+                if deleted:
+                    self.delete_session(conversation_id)
+                return deleted
             except Exception as e:
                 print(f"[ConversationManager] Failed to delete conversation: {e}")
                 return False

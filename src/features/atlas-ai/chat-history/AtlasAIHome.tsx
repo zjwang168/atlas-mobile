@@ -1,5 +1,8 @@
 import BottomSheet from '@expo/ui/community/bottom-sheet';
+import { ArrowLeftIcon } from 'phosphor-react-native/src/icons/ArrowLeft';
 import { ChatCircleIcon } from 'phosphor-react-native/src/icons/ChatCircle';
+import { TrashIcon } from 'phosphor-react-native/src/icons/Trash';
+import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -11,6 +14,8 @@ import {
 
 import { Text } from '@/components/ui/text';
 import TopBlurFade from '@/components/ui/top-blur-fade';
+import { useAppDialog } from '@/components/feedback/AppDialog';
+import { deleteConversation } from '@/services/api/apiService';
 import { loadChatHistory } from '@/services/supabase/supabaseClient';
 import { useHome, type ChatHistoryItem } from '@/features/home/HomeContext';
 
@@ -35,7 +40,9 @@ type AtlasAIHomeProps = {
   onOpenChat: (item: ChatHistoryItem) => void;
   onOpenPlaces: (item: ChatHistoryItem) => void;
   onLongPressDebug: () => void;
-  /** Called when the user taps the close button — caller hides this component. */
+  /** Returns to the AI chat that opened chat history. */
+  onBackToChat?: () => void;
+  /** Exits chat history and returns to My Places. */
   onClose?: () => void;
 };
 
@@ -61,15 +68,20 @@ export default function AtlasAIHome({
   visible = true,
   onOpenChat,
   onLongPressDebug,
+  onBackToChat,
   onClose,
 }: AtlasAIHomeProps) {
   const {
     chatHistory,
     setChatHistory,
+    deleteChatHistoryItem,
     setTabBarVisible,
   } = useHome();
+  const { show: showDialog } = useAppDialog();
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [deleteModeId, setDeleteModeId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const cards = useMemo(() => chatHistory, [chatHistory]);
   const sections = useMemo<HistorySection[]>(() => {
@@ -119,6 +131,38 @@ export default function AtlasAIHome({
     }
   }, [chatHistory, hasMore, loadingMore, setChatHistory]);
 
+  const deleteHistoryItem = useCallback((item: ChatHistoryItem) => {
+    showDialog({
+      title: 'Delete this chat?',
+      message: 'This permanently removes the conversation, its messages, and attached places from chat history.',
+      tone: 'danger',
+      actions: [
+        { label: 'Cancel', variant: 'secondary' },
+        {
+          label: 'Delete',
+          variant: 'destructive',
+          onPress: () => {
+            setDeletingId(item.id);
+            void deleteConversation(item.id)
+              .then(() => {
+                deleteChatHistoryItem(item.id);
+                setDeleteModeId((current) => (current === item.id ? null : current));
+              })
+              .catch((error) => {
+                console.warn('[AtlasAIHome] deleteConversation failed:', error);
+                showDialog({
+                  title: 'Could not delete this chat',
+                  message: 'Nothing has changed. Please try again in a moment.',
+                  tone: 'warning',
+                });
+              })
+              .finally(() => setDeletingId(null));
+          },
+        },
+      ],
+    });
+  }, [deleteChatHistoryItem, showDialog]);
+
   return (
     <BottomSheet
       index={visible ? 0 : -1}
@@ -149,7 +193,16 @@ export default function AtlasAIHome({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`${item.title}, ${getPlacesLabel(item.locationCount ?? 0)}`}
-              onPress={() => onOpenChat(item)}
+              accessibilityHint="Long press to show the delete button"
+              onPress={() => {
+                if (deleteModeId === item.id) {
+                  setDeleteModeId(null);
+                  return;
+                }
+                onOpenChat(item);
+              }}
+              onLongPress={() => setDeleteModeId(item.id)}
+              delayLongPress={500}
               style={({ pressed }) => [
                 styles.historyRow,
                 index < section.data.length - 1 && styles.historyRowSpacing,
@@ -169,6 +222,22 @@ export default function AtlasAIHome({
                   {getPlacesLabel(item.locationCount ?? 0)}
                 </Text>
               </View>
+              {deleteModeId === item.id ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete chat"
+                  disabled={deletingId === item.id}
+                  hitSlop={10}
+                  onPress={() => deleteHistoryItem(item)}
+                  style={({ pressed }) => [styles.deleteButton, pressed && styles.deleteButtonPressed]}
+                >
+                  {deletingId === item.id ? (
+                    <ActivityIndicator size="small" color="#C0392B" />
+                  ) : (
+                    <TrashIcon size={21} weight="regular" color="#C0392B" />
+                  )}
+                </Pressable>
+              ) : null}
             </Pressable>
           )}
           ListEmptyComponent={
@@ -206,6 +275,15 @@ export default function AtlasAIHome({
           style={styles.header}
         >
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Return to AI chat"
+            hitSlop={10}
+            onPress={onBackToChat}
+            style={({ pressed }) => [styles.headerButton, styles.backButton, pressed && styles.headerButtonPressed]}
+          >
+            <ArrowLeftIcon size={21} weight="bold" color={COLOR.foreground} />
+          </Pressable>
+          <Pressable
             onLongPress={onLongPressDebug}
             delayLongPress={700}
             style={styles.titleHitArea}
@@ -213,6 +291,15 @@ export default function AtlasAIHome({
             <Text pointerEvents="none" style={styles.title}>
               Chat history
             </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close chat history and return to My Places"
+            hitSlop={10}
+            onPress={onClose}
+            style={({ pressed }) => [styles.headerButton, styles.closeButton, pressed && styles.headerButtonPressed]}
+          >
+            <XIcon size={21} weight="bold" color={COLOR.foreground} />
           </Pressable>
         </View>
       </View>
@@ -240,6 +327,18 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     backgroundColor: 'transparent',
   },
+  headerButton: {
+    position: 'absolute',
+    top: 7,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 20,
+  },
+  backButton: { left: 12 },
+  closeButton: { right: 12 },
+  headerButtonPressed: { backgroundColor: 'rgba(0, 0, 0, 0.08)' },
   titleHitArea: {
     height: 44,
     paddingHorizontal: 12,
@@ -290,6 +389,15 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     gap: 2,
+  },
+  deleteButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteButtonPressed: {
+    opacity: 0.55,
   },
   historyTitle: {
     width: '100%',
