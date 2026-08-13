@@ -100,7 +100,6 @@ function HomePanel({
       defaultSnapHeight={defaultSnapHeight}
       maxHeight={maxHeight}
       onHeightChange={onHeightChange}
-      compactContent={activeTab === TAB_PLAN ? () => <MyPlan compact /> : undefined}
     >
       {({ reportScrollY, snapTo }) => (
         <View style={{ flex: 1 }}>

@@ -55,15 +55,6 @@ export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapG
       onHidden={() => setPlace(null)}
       zIndex={40}
       onHeightChange={onHeightChange}
-      compactContent={({ snapTo }) =>
-        place ? (
-          <PlaceCompactView
-            place={place}
-            onDismiss={onDismiss}
-            onExpand={() => snapTo('default')}
-          />
-        ) : null
-      }
     >
       {({ reportScrollY, bottomInset }) => {
         if (!place) {

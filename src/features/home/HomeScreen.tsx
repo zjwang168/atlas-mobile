@@ -34,6 +34,9 @@ const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124
 const PANEL_SPRING_SETTLE_DELAY = 380;
 const SHEET_OVERLAY_HANDOFF_DELAY = 360;
 const SHEET_DISMISS_FALLBACK_DELAY = 750;
+const IOS_HOME_SHEET_SHORT_FRACTION = 0.30;
+const IOS_HOME_SHEET_DEFAULT_FRACTION = 0.60;
+const IOS_HOME_SHEET_TALL_FRACTION = 0.94;
 
 // ---- Types ----
 
@@ -280,10 +283,10 @@ function HomeScreenContent({
     (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
   const settledBottomPanelHeight = nativeMainPanelActive
     ? settledPanelSnapState === 'short'
-      ? screenHeight * 0.40
+      ? screenHeight * IOS_HOME_SHEET_SHORT_FRACTION
       : settledPanelSnapState === 'tall'
-        ? screenHeight * 0.94
-        : screenHeight * 0.54
+        ? screenHeight * IOS_HOME_SHEET_TALL_FRACTION
+        : screenHeight * IOS_HOME_SHEET_DEFAULT_FRACTION
     : SNAP_HEIGHTS[settledPanelSnapState];
   const atlasCameraVerticalOffset = atlasMapState?.cameraVerticalOffset ?? 0;
   // Tracks the live panel height without React state — the panel reports it every
