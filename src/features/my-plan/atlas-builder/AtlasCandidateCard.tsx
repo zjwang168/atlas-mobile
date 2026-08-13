@@ -55,15 +55,15 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
       return;
     }
     const pulse = Animated.loop(Animated.sequence([
-      Animated.timing(addGlow, { toValue: 1, duration: 1250, useNativeDriver: true }),
-      Animated.timing(addGlow, { toValue: 0, duration: 1350, useNativeDriver: true }),
+      Animated.timing(addGlow, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      Animated.timing(addGlow, { toValue: 0, duration: 1700, useNativeDriver: true }),
     ]));
     pulse.start();
     return () => pulse.stop();
   }, [addGlow, showFirstAddPrompt]);
   const glowStyle = {
-    opacity: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.1, 0.32] }),
-    transform: [{ scale: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1.08] }) }],
+    opacity: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.04, 0.22] }),
+    transform: [{ scale: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.99, 1.1] }) }],
   };
 
   return <View style={styles.candidateSlot}>

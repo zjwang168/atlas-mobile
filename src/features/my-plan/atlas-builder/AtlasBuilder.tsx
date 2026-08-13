@@ -68,7 +68,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const { savedPlaces } = useHomePlaces();
   const { atlasPlaces, atlases } = useHomeAtlases();
   const { setAtlasMapState, setTabBarVisible } = useHomeOverlayActions();
-  const { userLocation, refreshUserLocation } = useHomeLocation();
+  const { userLocation, isLocationFallback, refreshUserLocation } = useHomeLocation();
   /**
    * The token for the search the user is currently typing. Keystrokes share it
    * — that is what makes them one session rather than one each — and the
@@ -628,27 +628,34 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   useEffect(() => {
     // Preserve the entry camera until its focus bounds have been applied.
-    // Once the automatic green seed is ready, widen its separation from the
-    // GPS puck with a modest, one-time zoom rather than the normal POI-focus
-    // zoom (15), which is too tight for an Atlas focus area.
+    // When the actual GPS fix is part of that entry area, fit it with the
+    // automatic green candidate. Otherwise retain the normal candidate focus.
     if (!focused || !seedAutoSelectedRef.current || seedCameraAdjustedRef.current || mapBounds) return;
     seedCameraAdjustedRef.current = true;
-    const seedVisibleZoom = Math.max(mapZoom, 10.5);
     const seedCoordinate: [number, number] = [focused.longitude, focused.latitude];
+    const deviceIsInEntryArea = !isLocationFallback
+      && Boolean(initialBounds)
+      && isWithinBounds({ longitude: userLocation[0], latitude: userLocation[1] }, initialBounds);
+    const seedBounds = deviceIsInEntryArea
+      ? focusBoundsForSavedPlaces(seedCoordinate, [{ longitude: userLocation[0], latitude: userLocation[1] }])
+      : undefined;
+    const seedVisibleZoom = seedBounds ? zoomForBounds(seedBounds, 10.5) : Math.max(mapZoom, 10.5);
+    if (seedBounds) setMapBounds(seedBounds);
     if (seedVisibleZoom !== mapZoom) setMapZoom(seedVisibleZoom);
     // HomeScreen supplies the bottom-sheet height as Mapbox camera padding.
     // Centering on the candidate here therefore places it at the center of the
     // remaining visible (upper) map viewport, rather than at the full-screen
     // center where the sheet can obscure it.
-    setMapCenter(seedCoordinate);
+    setMapCenter(seedBounds ? centerOfBounds(seedBounds) : seedCoordinate);
     console.info('[AtlasSeed] camera-visibility-focus', {
       name: focused.name,
       previousCenter: mapCenter,
-      center: seedCoordinate,
+      center: seedBounds ? centerOfBounds(seedBounds) : seedCoordinate,
       previousZoom: mapZoom,
       zoom: seedVisibleZoom,
+      includedDeviceLocation: deviceIsInEntryArea,
     });
-  }, [focused, mapBounds, mapCenter, mapZoom]);
+  }, [focused, initialBounds, isLocationFallback, mapBounds, mapCenter, mapZoom, userLocation]);
 
   useEffect(() => {
     if (!focused || !seedAutoSelectedRef.current || seedNoteShownRef.current || items.length > 0) return;
@@ -725,7 +732,39 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setNearbyRecommending(true);
     const [longitude, latitude] = viewportCenterRef.current;
     try {
-      const nearby = await discoverDeepSeekPlaces(`within 20 km of ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`, 5);
+      // Use the same structured Wikidata landmark index as the first default
+      // candidate. Nearby discovery must stay fast and deterministic; it does
+      // not need to wait for an AI recommendation round trip.
+      const landmarks = await getLandmarkSeeds([longitude, latitude], 20);
+      const existingPlaces = [...items, ...recommendedPlaces, ...savedPlaces];
+      const nearby = landmarks.reduce<DraftPlace[]>((places, landmark) => {
+        const candidate: DraftPlace = {
+          id: landmark.id,
+          name: landmark.name,
+          subtitle: 'Landmark',
+          longitude: landmark.longitude,
+          latitude: landmark.latitude,
+          photo_url: null,
+          city: null,
+          region: null,
+          country: null,
+          category: landmark.category,
+          // Keep the established purple recommendation marker treatment.
+          source: 'recommended',
+        };
+        if (
+          places.length >= 5
+          || existingPlaces.some((place) => isMarkerOverlap(place, candidate))
+          || places.some((place) => isMarkerOverlap(place, candidate))
+        ) return places;
+        places.push(candidate);
+        return places;
+      }, []);
+      console.info('[AtlasNearby] wikidata-landmarks', {
+        center: [longitude, latitude],
+        received: landmarks.length,
+        added: nearby.map((place) => place.name),
+      });
       setRecommendedPlaces((current) => {
         const seen = new Set(current.map((place) => place.id));
         return [...current, ...nearby.filter((place) => !seen.has(place.id))];
@@ -743,7 +782,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       setNearbyRecommending(false);
       scheduleNearbyPrompt(viewportCenterRef.current);
     }
-  }, [discoverDeepSeekPlaces, items, nearbyRecommending, recommendedPlaces, scheduleNearbyPrompt]);
+  }, [items, nearbyRecommending, recommendedPlaces, savedPlaces, scheduleNearbyPrompt]);
 
   const handoffToPlan = useCallback((location: string, candidates: DraftPlace[], center?: [number, number], bounds?: FocusArea['bounds']) => {
     setHandoffStarted(true);
@@ -857,6 +896,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const revealInitialCandidate = useCallback((place: DraftPlace) => {
     if (initialPlaceSelected.current) return;
     initialPlaceSelected.current = true;
+    // Search and plan handoffs can supply their first green candidate before
+    // the editor's seed lookup runs. Treat it as the same automatic first
+    // selection so the conditional GPS-inclusive camera policy applies.
+    seedAutoSelectedRef.current = true;
     setFocused(place);
   }, []);
 

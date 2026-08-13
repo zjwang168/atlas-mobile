@@ -80,7 +80,7 @@ export const styles = StyleSheet.create({
   candidateActions: { width: 280, height: 46, position: 'relative', alignSelf: 'center' },
   candidateActionClip: { height: 46, overflow: 'hidden', position: 'absolute', top: 0 },
   candidateAddClip: { left: 0 },
-  candidateAddGlow: { position: 'absolute', left: -5, top: -5, width: 240, height: 56, borderRadius: 28, backgroundColor: '#74E5A9' },
+  candidateAddGlow: { position: 'absolute', left: -8, top: -7, width: 246, height: 60, borderRadius: 30, backgroundColor: '#65D995', shadowColor: '#12C170', shadowOpacity: 0.38, shadowRadius: 13, shadowOffset: { width: 0, height: 0 }, elevation: 1 },
   candidateSaveClip: { right: 216 },
   candidateAskClip: { right: 50 },
   candidateAdd: { width: 230, height: 46, borderRadius: 23, paddingLeft: 17, paddingRight: 8, backgroundColor: '#12C170', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, shadowColor: '#0B8F52', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },

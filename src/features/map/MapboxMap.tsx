@@ -157,9 +157,13 @@ function rendersAsLayer(
   selectedMarkerId?: string | null,
   deletingMarkerId?: string | null,
   popupMarkerId?: string | null,
+  disableRecommendedClustering = false,
 ): boolean {
   if (marker.id === selectedMarkerId || marker.id === deletingMarkerId) return false;
   if (popupMarkerId && marker.id === popupMarkerId) return false;
+  // Atlas AI suggestions stay as individually tappable purple native pins.
+  // Keeping them out of the clustered ShapeSource also preserves their labels.
+  if (disableRecommendedClustering && marker.tone === 'recommended') return false;
   // Both drive Reanimated transitions on the React dot.
   if (marker.entering || marker.pulsing) return false;
   return marker.tone === undefined || marker.tone === 'saved' || marker.tone === 'recommended';
@@ -509,7 +513,7 @@ function MarkerLabel({
       <View style={styles.markerLabelContent}>
         {ai ? <Ionicons name="sparkles" size={12} color="#885CF6" style={styles.markerAiIcon} /> : null}
         <View style={styles.markerLabelCopy}>
-          <Text numberOfLines={2} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelText}>{title}</Text>
           {hint ? <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markerLabelHint}>{hint}</Text> : null}
         </View>
       </View>
@@ -693,7 +697,6 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const cameraFrameRef = useRef<number | null>(null);
   const placeSourceRef = useRef<MapboxGL.ShapeSource>(null);
   const markerPressTimestampRef = useRef(0);
-  const [layerVisible, setLayerVisible] = useState(false);
   const [clusterBurst, setClusterBurst] = useState<ClusterBurst | null>(null);
   const clusterBurstFrameRef = useRef<number | null>(null);
   const handleMapLayout = (event: LayoutChangeEvent) => {
@@ -710,15 +713,15 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   // user pans or zooms, so there is nothing for React to remount.
   const layerMarkers = useMemo(
     () => renderedMarkers.filter((marker) => (
-      rendersAsLayer(marker, selectedMarkerId, deletingMarkerId, markerPopup?.markerId)
+      rendersAsLayer(marker, selectedMarkerId, deletingMarkerId, markerPopup?.markerId, disableRecommendedClustering)
     )),
-    [deletingMarkerId, markerPopup?.markerId, renderedMarkers, selectedMarkerId],
+    [deletingMarkerId, disableRecommendedClustering, markerPopup?.markerId, renderedMarkers, selectedMarkerId],
   );
   const annotationMarkers = useMemo(
     () => renderedMarkers.filter((marker) => (
-      !rendersAsLayer(marker, selectedMarkerId, deletingMarkerId, markerPopup?.markerId)
+      !rendersAsLayer(marker, selectedMarkerId, deletingMarkerId, markerPopup?.markerId, disableRecommendedClustering)
     )),
-    [deletingMarkerId, markerPopup?.markerId, renderedMarkers, selectedMarkerId],
+    [deletingMarkerId, disableRecommendedClustering, markerPopup?.markerId, renderedMarkers, selectedMarkerId],
   );
   const layerFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
     type: 'FeatureCollection',
@@ -733,7 +736,9 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
     })),
   }), [layerMarkers]);
-  const clusterTransitionBucket = Math.floor(viewport.zoom * 4);
+  // Mapbox keeps the ordinary layers visible throughout a pinch/zoom. The
+  // burst state below is the only time those layers yield to a transition.
+  const layerVisible = true;
 
   const clusterBurstFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point> | null>(() => {
     if (!clusterBurst) return null;
@@ -772,14 +777,6 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     };
   }, [clusterBurst]);
 
-  useEffect(() => {
-    // The source keeps Mapbox's cluster identities stable. Briefly fading the
-    // visual layers around a source change gives split/merge transitions a
-    // clear handoff without remounting React MarkerViews during map gestures.
-    setLayerVisible(false);
-    const timer = setTimeout(() => setLayerVisible(true), 40);
-    return () => clearTimeout(timer);
-  }, [clusterTransitionBucket, layerFeatures]);
   useEffect(() => () => {
     if (clusterBurstFrameRef.current !== null) cancelAnimationFrame(clusterBurstFrameRef.current);
   }, []);
@@ -1276,7 +1273,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                   title={marker.title}
                   hint={marker.labelHint}
                   ai={marker.ai}
-                  visible={selectedMarkerId === marker.id || labelIds.has(marker.id)}
+                  visible={marker.tone === 'recommended' || selectedMarkerId === marker.id || labelIds.has(marker.id)}
                   selected={selectedMarkerId === marker.id}
                 />
               ) : null}
