@@ -566,9 +566,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   const [mapLoaded, setMapLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<MapViewport>({ center: cameraCenterCoordinate, zoom: zoomLevel });
+  const [clusterViewport, setClusterViewport] = useState<MapViewport>({ center: cameraCenterCoordinate, zoom: zoomLevel });
+  const hasSettledViewportRef = useRef(false);
   const pendingViewportRef = useRef<MapViewport | null>(null);
+  const pendingViewportSettledRef = useRef(false);
   const cameraFrameRef = useRef<number | null>(null);
-  const lastCameraStateKeyRef = useRef<string | null>(null);
   const markerPressTimestampRef = useRef(0);
   const handleMapLayout = (event: LayoutChangeEvent) => {
     const { width: nextWidth, height: nextHeight } = event.nativeEvent.layout;
@@ -579,13 +581,14 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         : { width: nextWidth, height: nextHeight }
     ));
   };
-  const screenMarkerPoints = useMemo(
-    () => screenMarkers(renderedMarkers, viewport, width, height),
-    [height, renderedMarkers, viewport, width],
+  const effectiveClusterViewport = hasSettledViewportRef.current ? clusterViewport : viewport;
+  const clusterSourceMarkerPoints = useMemo(
+    () => screenMarkers(renderedMarkers, effectiveClusterViewport, width, height),
+    [effectiveClusterViewport, height, renderedMarkers, width],
   );
   const clusteredMarkers = useMemo(
-    () => clusterMarkerPoints(screenMarkerPoints, viewport, selectedMarkerId, deletingMarkerId),
-    [deletingMarkerId, screenMarkerPoints, selectedMarkerId, viewport],
+    () => clusterMarkerPoints(clusterSourceMarkerPoints, effectiveClusterViewport, selectedMarkerId, deletingMarkerId),
+    [clusterSourceMarkerPoints, deletingMarkerId, effectiveClusterViewport, selectedMarkerId],
   );
   const clusteredMarkerPoints = useMemo(
     () => screenMarkers(clusteredMarkers, viewport, width, height),
@@ -639,28 +642,23 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   };
 
   const queueViewportUpdate = (state: CameraState, settled = false) => {
-    if (!settled) {
-      return;
-    }
     const nextViewport = viewportFromCamera(state);
-    // Mapbox can send duplicate camera events after an idle render. Ignore
-    // them so the exact-coordinate cache cannot oscillate with its fallback.
-    const nextCameraStateKey = [
-      ...nextViewport.center.map((value) => value.toFixed(5)),
-      nextViewport.zoom.toFixed(3),
-      ...(nextViewport.bounds ? [...nextViewport.bounds.ne, ...nextViewport.bounds.sw].map((value) => value.toFixed(4)) : []),
-    ].join(':');
-    if (nextCameraStateKey === lastCameraStateKeyRef.current) return;
-    lastCameraStateKeyRef.current = nextCameraStateKey;
     pendingViewportRef.current = nextViewport;
+    pendingViewportSettledRef.current = pendingViewportSettledRef.current || settled;
     if (cameraFrameRef.current !== null) return;
     cameraFrameRef.current = requestAnimationFrame(() => {
       cameraFrameRef.current = null;
       const next = pendingViewportRef.current;
       if (!next) return;
+      const didSettle = pendingViewportSettledRef.current;
       pendingViewportRef.current = null;
+      pendingViewportSettledRef.current = false;
       setViewport(next);
-      onViewportChanged?.(next.center, next.zoom);
+      if (didSettle) {
+        hasSettledViewportRef.current = true;
+        setClusterViewport(next);
+        onViewportChanged?.(next.center, next.zoom);
+      }
     });
   };
 
