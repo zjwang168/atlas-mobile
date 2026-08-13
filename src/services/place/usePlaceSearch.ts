@@ -123,6 +123,9 @@ export function usePlaceSearch({
     async (suggestion: PlaceSuggestion) => {
       setSavingId(suggestion.external_id);
       try {
+        // `/retrieve` ends the session at Mapbox, so this is the last call the
+        // current token may carry. Rotating happens in the `finally` below,
+        // before anything can type the next query onto a spent token.
         const place = await resolvePlace(suggestion, sessionRef.current);
         if (!place) throw new Error('Suggestion resolved to no place');
         // An empty `inserted` means the dedup matched something already saved —
@@ -136,6 +139,11 @@ export function usePlaceSearch({
       } catch (error) {
         console.warn('[usePlaceSearch] save failed:', error);
       } finally {
+        // Unconditional: the retrieve was attempted either way, and Mapbox
+        // warns that reusing a token across sessions bills unpredictably. A
+        // fresh token that never reaches Mapbox costs nothing, so rotating
+        // after a failure is the cheap side of the trade.
+        sessionRef.current = createSearchSession();
         setSavingId(null);
       }
     },
