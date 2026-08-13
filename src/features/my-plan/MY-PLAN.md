@@ -81,6 +81,7 @@ type PlanCardProps = {
 When working on `MyPlan`, these docs cover the two major flows it hosts inline:
 
 - **Create Plan wizard** → `src/features/my-plan/create-plan/CREATE-PLAN.md`
+- **Atlas Builder** → `src/features/my-plan/atlas-builder/ATLAS-BUILDER.md`
 - **Plan Detail overlay** → `src/features/my-plan/plan-detail/PLAN-DETAIL.md`
 - **Add Place overlay** (shared, cross-feature) → `src/features/add-place/ADD-PLACE.md`
 
