@@ -49,7 +49,7 @@ export default function PlaceOverviewSection({ place }: PlaceOverviewSectionProp
               resizeMode="cover"
             />
           ) : (
-            <PlaceCover category={place.category} />
+            <PlaceCover category={place.category} specialRole={place.specialRole} />
           )}
         </View>
       </View>

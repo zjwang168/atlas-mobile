@@ -1275,6 +1275,17 @@ export default function AIChatBox({
     })),
   ], [chatMapCommuteDestination?.role, chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind, chatMapSpecialPlaces]);
 
+  // The map should enter on the AI outcome itself. Device and special-place
+  // markers remain visible context, but must not zoom a single recommendation
+  // out to an unrelated origin.
+  const chatMapOutcomeMarkers = useMemo<MapMarker[]>(() => chatMapPlaces.map((place, index) => ({
+    id: place.markerId,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    tone: chatMapPresentation?.kind === 'atlas_draft' ? 'atlas' as const : 'recommended' as const,
+    order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
+  })), [chatMapPlaces, chatMapPresentation?.kind]);
+
   const selectedChatMapPlace = useMemo(
     () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
     [chatMapPlaces, chatMapSelectedId],
@@ -1474,11 +1485,14 @@ export default function AIChatBox({
     latestChatMapStateKeyRef.current = chatMapStateKey;
     setAtlasMapState({
       markers: chatMapMarkers,
-      centerCoordinate: chatMapOrigin ?? (chatMapMarkers[0] ? [chatMapMarkers[0].longitude, chatMapMarkers[0].latitude] : undefined),
-      bounds: boundsForChatMarkers(chatMapMarkers),
-      zoomLevel: chatMapMarkers.length > 1 ? 13 : 15,
+      centerCoordinate: chatMapOutcomeMarkers[0]
+        ? [chatMapOutcomeMarkers[0].longitude, chatMapOutcomeMarkers[0].latitude]
+        : (chatMapOrigin ?? (chatMapMarkers[0] ? [chatMapMarkers[0].longitude, chatMapMarkers[0].latitude] : undefined)),
+      bounds: boundsForChatMarkers(chatMapOutcomeMarkers),
+      zoomLevel: chatMapOutcomeMarkers.length > 1 ? 13 : 15,
       cameraKey: `chat-map-${chatMapCameraKey}`,
       cameraAnimationDurationMs: 420,
+      disableRecommendedClustering: true,
       routeGeoJSON: chatMapRoute ?? undefined,
       routeVariant: chatMapRouteVariant,
       selectedMarkerId: chatMapSelectedId,
@@ -1488,7 +1502,7 @@ export default function AIChatBox({
       overlay: chatMapOverlay,
       hideChrome: true,
     });
-  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOutcomeMarkers, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
     const requestId = chatMapRouteRequestRef.current + 1;

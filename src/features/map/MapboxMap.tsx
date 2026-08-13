@@ -159,13 +159,16 @@ function rendersAsLayer(
   popupMarkerId?: string | null,
   disableRecommendedClustering = false,
 ): boolean {
+  // AI outcome pins always stay in Mapbox's native single-point sources,
+  // including while their action sheet is open. The sheet is an independent
+  // overlay, so a React MarkerView is not needed for selection.
+  if ((marker.tone === 'recommended' || marker.tone === 'atlas') && !marker.entering && !marker.pulsing) return true;
   if (marker.id === selectedMarkerId || marker.id === deletingMarkerId) return false;
   if (popupMarkerId && marker.id === popupMarkerId) return false;
-  // Recommended and stable Atlas pins get their own non-clustered Mapbox
-  // sources below. They remain native map points, not React MarkerViews.
-  // Both drive Reanimated transitions on the React dot.
+  // Ordinary saved pins use the clustered native source below. Pins that need
+  // animation or special glyphs still fall back to MarkerView.
   if (marker.entering || marker.pulsing) return false;
-  return marker.tone === undefined || marker.tone === 'saved' || marker.tone === 'recommended' || marker.tone === 'atlas';
+  return marker.tone === undefined || marker.tone === 'saved';
 }
 
 function markerTitleKey(marker: MapMarker): string | null {
@@ -544,6 +547,7 @@ function MarkerDot({
   const pulse = useSharedValue(0);
   const selectedProgress = useSharedValue(selected || tone === 'focused' ? 1 : 0);
   const specialPlace = tone === 'home' || tone === 'office' || tone === 'school';
+  const specialPlaceColor = tone === 'home' ? '#4A7FA8' : tone === 'office' ? '#596EAB' : '#3D8B86';
   const hasLocationPulse = pulsing || selected || tone === 'focused';
   const useLocationPulseStyle = tone === 'location' || tone === 'focused';
   useEffect(() => {
@@ -566,7 +570,7 @@ function MarkerDot({
   }, [hasActiveSelection, selected, selectedProgress, tone]);
   const animatedStyle = useAnimatedStyle(() => {
     const atlasPin = tone === 'atlas';
-    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : specialPlace ? '#1F2937' : '#007AFF';
+    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : specialPlace ? specialPlaceColor : '#007AFF';
     // Green is the explicit current-choice state in the editor. AI pins stay
     // purple only while unselected; an orange Atlas pin keeps its route color.
     const selectedColor = tone === 'atlas'
@@ -1239,6 +1243,22 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 circleStrokeColor: '#FFFFFF',
               }}
             />
+            <MapboxGL.SymbolLayer
+              id="recommendedPointLabel"
+              style={{
+                textField: ['get', 'title'],
+                textSize: 12,
+                textFont: ['Open Sans SemiBold'],
+                textColor: '#312E4B',
+                textHaloColor: 'rgba(255,255,255,0.98)',
+                textHaloWidth: 2.5,
+                textOffset: [0, -1.25],
+                textAnchor: 'bottom',
+                textOptional: true,
+                textAllowOverlap: false,
+                textIgnorePlacement: false,
+              }}
+            />
           </MapboxGL.ShapeSource>
         ) : null}
         {atlasLayerMarkers.length > 0 ? (
@@ -1311,7 +1331,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         {/* These are visual-only label views. Pins stay in the GPU layer; the
             labels are capped by the same collision pass and never receive
             touches, so map gestures remain entirely with Mapbox. */}
-        {layerMarkers.filter((marker) => layerLabelIds.has(marker.id) && marker.title).map((marker) => (
+        {layerMarkers.filter((marker) => marker.tone !== 'recommended' && layerLabelIds.has(marker.id) && marker.title).map((marker) => (
           <MapboxGL.MarkerView
             key={`layer-label:${marker.id}`}
             coordinate={[marker.longitude, marker.latitude]}
@@ -1546,7 +1566,13 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    borderWidth: 4,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    shadowColor: '#152238',
+    shadowOpacity: 0.18,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   markerSavingPulse: {
     position: 'absolute',

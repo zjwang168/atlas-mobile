@@ -1,6 +1,9 @@
 import { BedIcon } from 'phosphor-react-native/src/icons/Bed';
+import { BuildingsIcon } from 'phosphor-react-native/src/icons/Buildings';
 import { CameraIcon } from 'phosphor-react-native/src/icons/Camera';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
+import { GraduationCapIcon } from 'phosphor-react-native/src/icons/GraduationCap';
+import { HouseIcon } from 'phosphor-react-native/src/icons/House';
 import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
 import { ShoppingBagIcon } from 'phosphor-react-native/src/icons/ShoppingBag';
 import { TreeIcon } from 'phosphor-react-native/src/icons/Tree';
@@ -13,6 +16,8 @@ export type PlaceCategoryKey =
   | 'shopping'
   | 'lodging'
   | 'neutral';
+
+export type PlaceSpecialRole = 'home' | 'office' | 'school';
 
 /**
  * Keywords that put a place in each bucket, most specific bucket first — the
@@ -59,8 +64,15 @@ const CATEGORY_COVERS: Record<PlaceCategoryKey, { Icon: typeof MapPinIcon; class
     one either way. Icons cannot read CSS variables — see THEME.md. */
 const GLYPH_COLOR = '#fafafa';
 
+const SPECIAL_COVERS: Record<PlaceSpecialRole, { Icon: typeof HouseIcon; backgroundColor: string }> = {
+  home: { Icon: HouseIcon, backgroundColor: '#4A7FA8' },
+  office: { Icon: BuildingsIcon, backgroundColor: '#596EAB' },
+  school: { Icon: GraduationCapIcon, backgroundColor: '#3D8B86' },
+};
+
 type PlaceCoverProps = {
   category?: string | null;
+  specialRole?: PlaceSpecialRole | null;
   iconSize?: number;
 };
 
@@ -71,8 +83,24 @@ type PlaceCoverProps = {
     `alignItems`/`justifyContent` — a `flex: 1` child shrinks to its content
     size instead of stretching when the parent doesn't use the (non-default)
     `alignItems: 'stretch'`. */
-export function PlaceCover({ category, iconSize = 28 }: PlaceCoverProps) {
+export function PlaceCover({ category, specialRole, iconSize = 28 }: PlaceCoverProps) {
+  const specialCover = specialRole ? SPECIAL_COVERS[specialRole] : null;
   const { Icon, className } = CATEGORY_COVERS[placeCategoryKey(category)];
+
+  if (specialCover) {
+    const { Icon: SpecialIcon, backgroundColor } = specialCover;
+    return (
+      <View
+        style={{
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+          backgroundColor,
+        }}
+      >
+        <SpecialIcon size={iconSize} weight="fill" color={GLYPH_COLOR} />
+      </View>
+    );
+  }
 
   return (
     <View

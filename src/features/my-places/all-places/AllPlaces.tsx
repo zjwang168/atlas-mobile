@@ -295,7 +295,7 @@ const PlaceTile = memo(function PlaceTile({ place, onPress }: PlaceTileProps) {
               resizeMode="cover"
             />
           ) : (
-            <PlaceCover category={place.category} iconSize={28} />
+            <PlaceCover category={place.category} specialRole={place.specialRole} iconSize={28} />
           )}
           <View pointerEvents="none" style={styles.imageTint} />
           <CategoryChip category={place.category} />
@@ -351,7 +351,7 @@ const SavedPlaceListItem = memo(function SavedPlaceListItem({
               resizeMode="cover"
             />
           ) : (
-            <PlaceCover category={place.category} iconSize={22} />
+            <PlaceCover category={place.category} specialRole={place.specialRole} iconSize={22} />
           )}
         </View>
       </View>

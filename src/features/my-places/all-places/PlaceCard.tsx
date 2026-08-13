@@ -122,11 +122,7 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
           </View>
           {specialRole ? (
             <View style={styles.specialPlaceThumbnail}>
-              <Ionicons
-                name={specialRole === 'home' ? 'home' : specialRole === 'office' ? 'business' : 'school'}
-                size={30}
-                color="#FFFFFF"
-              />
+              <PlaceCover specialRole={specialRole} iconSize={34} />
             </View>
           ) : (
             <View style={styles.detailImageButton}>
@@ -260,9 +256,6 @@ const styles = StyleSheet.create({
     width: 86,
     height: 86,
     borderRadius: 16,
-    backgroundColor: '#1F2937',
-    alignItems: 'center',
-    justifyContent: 'center',
     flexShrink: 0,
   },
   cardShell: {
