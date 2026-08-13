@@ -4,11 +4,17 @@ import { MinusIcon } from 'phosphor-react-native/src/icons/Minus';
 import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { ActivityIndicator, Animated, Image, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Animated, FlatList, Image, Linking, Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { Text } from '@/components/ui/text';
 import type { AtlasChatPresentation, AtlasTransportMode } from '@/services/api/apiService';
+
+type ItineraryPlace = AtlasChatPresentation['places'][number];
+
+function itineraryKeyExtractor(place: ItineraryPlace, index: number): string {
+  return place.external_id || `${place.name}-${index}`;
+}
 
 const GOOGLE_MAPS_ICON = require('../../../../assets/icons/google-maps2.png');
 
@@ -117,6 +123,30 @@ export function AtlasChatMapControls({ topInset, onReturn, onClose, placePopup, 
 
 /** Read-only Atlas detail surface for an unconfirmed chat draft. */
 export function AtlasChatMapItinerary({ presentation }: { presentation: AtlasChatPresentation }) {
+  const places = presentation.places;
+  const renderItem = useCallback(({ item: place, index }: { item: ItineraryPlace; index: number }) => {
+    const transport = place.transport ? TRANSPORT_PRESENTATION[place.transport] : null;
+    const nextPlace = places[index + 1];
+    const nextTransport = nextPlace?.transport ? TRANSPORT_PRESENTATION[nextPlace.transport] : null;
+    return <View style={styles.itineraryEntry}>
+      <View style={styles.itineraryEntryRow}>
+        <View style={styles.itineraryNumber}><Text style={styles.itineraryNumberText}>{index + 1}</Text></View>
+        <View style={styles.itineraryEntryCopy}>
+          {(place.timeline_time || transport) ? <View style={styles.itineraryMeta}>
+            {place.timeline_time ? <View style={styles.timeTag}><Ionicons name="time-outline" size={12} color="#2677B5" /><Text style={styles.timeTagText}>{place.timeline_day ? `Day ${place.timeline_day} · ` : ''}{place.timeline_time}</Text></View> : null}
+            {transport ? <View accessibilityLabel={transport.label} style={styles.transportTag}><Ionicons name={transport.icon} size={12} color="#64748B" /><Text style={styles.transportTagText}>{transport.label}</Text></View> : null}
+          </View> : null}
+          <Text numberOfLines={1} style={styles.itineraryPlaceName}>{place.name}</Text>
+          {place.full_address ? <Text numberOfLines={1} style={styles.itineraryAddress}>{place.full_address}</Text> : null}
+        </View>
+      </View>
+      {nextPlace && (nextTransport || nextPlace.travel_duration_minutes != null) ? <View style={styles.itineraryLeg}>
+        <View style={styles.itineraryLegLine} />
+        <Text style={styles.itineraryLegText}>{nextTransport?.label ?? 'Travel'}{nextPlace.travel_duration_minutes != null ? ` · ${nextPlace.travel_duration_minutes} min` : ''} to next stop</Text>
+      </View> : null}
+    </View>;
+  }, [places]);
+
   if (presentation.kind !== 'atlas_draft' || !presentation.places.length) return null;
   return <View accessibilityLabel={`${presentation.title} itinerary`} style={styles.itineraryPanel}>
     <View style={styles.itineraryHandle} />
@@ -127,30 +157,13 @@ export function AtlasChatMapItinerary({ presentation }: { presentation: AtlasCha
       </View>
     </View>
     {presentation.planning_note ? <Text numberOfLines={2} style={styles.planningNote}>{presentation.planning_note}</Text> : null}
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.itineraryList}>
-      {presentation.places.map((place, index) => {
-        const transport = place.transport ? TRANSPORT_PRESENTATION[place.transport] : null;
-        const nextPlace = presentation.places[index + 1];
-        const nextTransport = nextPlace?.transport ? TRANSPORT_PRESENTATION[nextPlace.transport] : null;
-        return <View key={place.external_id || `${place.name}-${index}`} style={styles.itineraryEntry}>
-          <View style={styles.itineraryEntryRow}>
-            <View style={styles.itineraryNumber}><Text style={styles.itineraryNumberText}>{index + 1}</Text></View>
-            <View style={styles.itineraryEntryCopy}>
-              {(place.timeline_time || transport) ? <View style={styles.itineraryMeta}>
-                {place.timeline_time ? <View style={styles.timeTag}><Ionicons name="time-outline" size={12} color="#2677B5" /><Text style={styles.timeTagText}>{place.timeline_day ? `Day ${place.timeline_day} · ` : ''}{place.timeline_time}</Text></View> : null}
-                {transport ? <View accessibilityLabel={transport.label} style={styles.transportTag}><Ionicons name={transport.icon} size={12} color="#64748B" /><Text style={styles.transportTagText}>{transport.label}</Text></View> : null}
-              </View> : null}
-              <Text numberOfLines={1} style={styles.itineraryPlaceName}>{place.name}</Text>
-              {place.full_address ? <Text numberOfLines={1} style={styles.itineraryAddress}>{place.full_address}</Text> : null}
-            </View>
-          </View>
-          {nextPlace && (nextTransport || nextPlace.travel_duration_minutes != null) ? <View style={styles.itineraryLeg}>
-            <View style={styles.itineraryLegLine} />
-            <Text style={styles.itineraryLegText}>{nextTransport?.label ?? 'Travel'}{nextPlace.travel_duration_minutes != null ? ` · ${nextPlace.travel_duration_minutes} min` : ''} to next stop</Text>
-          </View> : null}
-        </View>;
-      })}
-    </ScrollView>
+    <FlatList
+      data={places}
+      keyExtractor={itineraryKeyExtractor}
+      renderItem={renderItem}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.itineraryList}
+    />
   </View>;
 }
 

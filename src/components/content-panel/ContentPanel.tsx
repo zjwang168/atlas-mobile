@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, PanResponder, View } from 'react-native';
+import { Animated, Dimensions, View } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useContentPanelSnapGroup } from './ContentPanelSnapProvider';
 
@@ -415,13 +416,13 @@ export default function ContentPanel({
       translateY.setValue(40);
       opacity.setValue(0);
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 0, duration: 260, useNativeDriver: false }),
-        Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: false }),
+        Animated.timing(translateY, { toValue: 0, duration: 260, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: true }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 40, duration: 260, useNativeDriver: false }),
-        Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: false }),
+        Animated.timing(translateY, { toValue: 40, duration: 260, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: true }),
       ]).start(({ finished }) => {
         if (finished) onHidden?.();
       });
@@ -475,25 +476,31 @@ export default function ContentPanel({
 
   // The panel only moves from its explicit handle. Content can therefore own
   // vertical gestures (lists, maps, inputs) without accidentally resizing it.
-  const handlePanResponder = useMemo(
+  // Recognized by gesture-handler's native gesture recognizer rather than
+  // PanResponder's JS touch responder system, so the drag stays responsive
+  // even under JS-thread load; runOnJS(true) is required because dragToHeight/
+  // resolveSnap write to a classic Animated.Value (panelHeight), which is a
+  // JS-thread-only API, not something a UI-thread worklet can call directly.
+  const handleGesture = useMemo(
     () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
+      Gesture.Pan()
+        .runOnJS(true)
+        .minDistance(0)
+        .onBegin(() => {
           isDragging.current = true;
           gestureStartHeight.current = currentPanelHeight.current;
-        },
-        onPanResponderMove: (_, gs) => dragToHeightRef.current(gs.dy),
-        onPanResponderRelease: (_, gs) => {
+        })
+        .onUpdate((event) => dragToHeightRef.current(event.translationY))
+        .onEnd((event) => {
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
-        },
-        onPanResponderTerminate: (_, gs) => {
+          resolveSnapRef.current(event.translationY);
+        })
+        .onFinalize((event) => {
+          // Only handles cancellation — a normal release is already resolved by onEnd.
+          if (!isDragging.current) return;
           isDragging.current = false;
-          resolveSnapRef.current(gs.dy);
-        },
-      }),
+          resolveSnapRef.current(event.translationY);
+        }),
     [],
   );
 
@@ -556,15 +563,14 @@ export default function ContentPanel({
 
         {/* Drag handle — the 24px area is always the drag hotspot, but the
             visible bar only shows at full screen. */}
-        <View
-          className="h-5 items-center justify-start pt-2"
-          {...handlePanResponder.panHandlers}
-        >
-          <View
-            className="h-1 w-12 rounded-sm bg-handle"
-            style={{ opacity: showHandle ? 1 : 0 }}
-          />
-        </View>
+        <GestureDetector gesture={handleGesture}>
+          <View className="h-5 items-center justify-start pt-2">
+            <View
+              className="h-1 w-12 rounded-sm bg-handle"
+              style={{ opacity: showHandle ? 1 : 0 }}
+            />
+          </View>
+        </GestureDetector>
 
         {/* Always mount children so internal state is preserved across compact/default transitions.
             Both layers overlap absolutely and crossfade off panelHeight so the swap stays in
