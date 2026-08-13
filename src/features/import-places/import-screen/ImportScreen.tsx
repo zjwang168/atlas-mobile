@@ -44,6 +44,7 @@ type ImageMode = Extract<ImportMode, 'findTextPlaces' | 'findImagePlaces'>;
 
 type ImportScreenProps = {
   onClose: () => void;
+  onSearchLocationManually?: () => void;
   onSubmit: (text: string, mode: ImportMode, webSearch?: boolean) => void;
   onSubmitImageScan?: (imagesBase64: string[], mode?: ImportMode, imageUris?: string[]) => void;
   onScanResult?: (result: unknown) => void;
@@ -74,29 +75,38 @@ const COLOR = {
 const MENU_CARDS: MenuCard[] = [
   {
     key: 'social',
-    title: 'Social media',
-    subtitle: 'Reddit and social videos',
+    title: 'From social media',
+    subtitle: 'TikTok, Instagram, Reddit, and more',
     icon: 'social',
   },
   {
     key: 'images',
-    title: 'Image recognition',
-    subtitle: 'Photos and screenshots',
+    title: 'From photos',
+    subtitle: 'Photos, images, and screenshots',
     icon: 'images',
   },
   {
     key: 'text',
-    title: 'Paste text',
-    subtitle: 'Notes, itineraries, and lists',
+    title: 'From texts',
+    subtitle: 'Notes, itineraries, lists, and more',
     icon: 'text',
   },
   {
     key: 'links',
-    title: 'Any other links',
+    title: 'From any links',
     subtitle: 'Articles, blogs, and webpages',
     icon: 'links',
   },
 ];
+
+const MENU_ILLUSTRATIONS = {
+  social: require('../../../../assets/images/import-places/from-social-media.png'),
+  images: require('../../../../assets/images/import-places/from-photos.png'),
+  text: require('../../../../assets/images/import-places/from-text.png'),
+  links: require('../../../../assets/images/import-places/from-any-links.png'),
+} as const;
+
+const MANUAL_SEARCH_ILLUSTRATION = require('../../../../assets/images/import-places/search-location-manually.png');
 
 function looksLikeUrl(value: string): boolean {
   return /^(https?:\/\/|www\.)\S+$/i.test(value.trim());
@@ -242,53 +252,24 @@ function LinkPreviewLoading() {
 }
 
 function MenuCardIcon({ type }: { type: MenuCard['icon'] }) {
-  if (type === 'social') {
-    return (
-      <View style={styles.socialIconGroup}>
-        <View style={[styles.brandIconBubble, styles.redditIconBubble]}>
-          <Ionicons name="logo-reddit" size={17} color="#FF4500" />
-        </View>
-        <View style={[styles.brandIconBubble, styles.youtubeIconBubble]}>
-          <Ionicons name="logo-youtube" size={17} color="#FF0000" />
-        </View>
-        <View style={[styles.brandIconBubble, styles.tiktokIconBubble]}>
-          <Ionicons name="logo-tiktok" size={17} color="#161616" />
-        </View>
-        <View style={[styles.brandIconBubble, styles.instagramIconBubble]}>
-          <Ionicons name="logo-instagram" size={17} color="#D62976" />
-        </View>
-        <View style={[styles.brandIconBubble, styles.facebookIconBubble]}>
-          <Ionicons name="logo-facebook" size={17} color="#1877F2" />
-        </View>
-      </View>
-    );
-  }
-
-  const iconName =
-    type === 'images'
-      ? 'images-outline'
-      : type === 'text'
-        ? 'document-text-outline'
-        : 'link-outline';
-
-  const bubbleStyle =
-    type === 'images'
-      ? styles.imageMenuIconBubble
-      : type === 'text'
-        ? styles.textMenuIconBubble
-        : styles.linkMenuIconBubble;
-  const iconColor =
-    type === 'images' ? '#1686E8' : type === 'text' ? '#E99A08' : COLOR.primary;
-
   return (
-    <View style={[styles.menuIconBubble, bubbleStyle]}>
-      <Ionicons name={iconName} size={24} color={iconColor} />
+    <View style={styles.menuIllustrationSlot}>
+      <Image
+        source={MENU_ILLUSTRATIONS[type]}
+        resizeMode="contain"
+        style={[
+          styles.menuIllustration,
+          type === 'social' && styles.menuIllustrationSocial,
+          type === 'links' && styles.menuIllustrationLinks,
+        ]}
+      />
     </View>
   );
 }
 
 export default function ImportScreen({
   onClose,
+  onSearchLocationManually,
   onSubmit,
   onSubmitImageScan,
 }: ImportScreenProps) {
@@ -318,7 +299,7 @@ export default function ImportScreen({
   const snapPoints = useMemo(
     () =>
       section === 'menu'
-        ? [Math.ceil(windowHeight * 0.58)]
+        ? [Math.ceil(windowHeight * 0.64)]
         : [Math.ceil(windowHeight * 0.58), '92%'],
     [section, windowHeight],
   );
@@ -792,30 +773,55 @@ export default function ImportScreen({
       <View style={styles.menuToolbar}>
         <Text style={styles.menuTitle}>Add places</Text>
       </View>
-      <View style={styles.menuGrid}>
-        {[MENU_CARDS.slice(0, 2), MENU_CARDS.slice(2, 4)].map(
-          (row, rowIndex) => (
-            <View key={`menu-row-${rowIndex}`} style={styles.menuRow}>
-              {row.map((card) => (
-                <Pressable
-                  key={card.key}
-                  accessibilityRole="button"
-                  onPress={() => openSection(card.key)}
-                  style={({ pressed }) => [
-                    styles.menuCard,
-                    pressed && styles.menuCardPressed,
-                  ]}
-                >
-                  <MenuCardIcon type={card.icon} />
-                  <View style={styles.menuCardCopy}>
-                    <Text style={styles.menuCardTitle}>{card.title}</Text>
-                    <Text style={styles.menuCardSubtitle}>{card.subtitle}</Text>
-                  </View>
-                </Pressable>
-              ))}
+      <View style={styles.menuBody}>
+        <View style={styles.menuGrid}>
+          {[MENU_CARDS.slice(0, 2), MENU_CARDS.slice(2, 4)].map(
+            (row, rowIndex) => (
+              <View key={`menu-row-${rowIndex}`} style={styles.menuRow}>
+                {row.map((card) => (
+                  <Pressable
+                    key={card.key}
+                    accessibilityRole="button"
+                    onPress={() => openSection(card.key)}
+                    style={({ pressed }) => [
+                      styles.menuCard,
+                      pressed && styles.menuCardPressed,
+                    ]}
+                  >
+                    <MenuCardIcon type={card.icon} />
+                    <View style={styles.menuCardCopy}>
+                      <Text style={styles.menuCardTitle}>{card.title}</Text>
+                      <Text style={styles.menuCardSubtitle}>{card.subtitle}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ),
+          )}
+        </View>
+        <View style={styles.menuDivider} />
+        <View style={styles.manualSearchContainer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Search location manually"
+            onPress={onSearchLocationManually}
+            disabled={!onSearchLocationManually}
+            style={({ pressed }) => [
+              styles.manualSearchCard,
+              pressed && styles.menuCardPressed,
+            ]}
+          >
+            <Image
+              source={MANUAL_SEARCH_ILLUSTRATION}
+              resizeMode="contain"
+              style={styles.manualSearchIllustration}
+            />
+            <View style={styles.manualSearchCopy}>
+              <Text style={styles.menuCardTitle}>Search location manually</Text>
+              <Text style={styles.menuCardSubtitle}>Find more places on map</Text>
             </View>
-          ),
-        )}
+          </Pressable>
+        </View>
       </View>
     </BottomSheetView>
   );
@@ -934,7 +940,10 @@ export default function ImportScreen({
         android_keyboardInputMode="adjustPan"
         backdropComponent={renderBackdrop}
         handleIndicatorStyle={styles.handleIndicator}
-        backgroundStyle={styles.sheetBackground}
+        backgroundStyle={[
+          styles.sheetBackground,
+          section === 'menu' && styles.menuSheetBackground,
+        ]}
       >
         {section === 'menu' ? renderMenu() : renderDetail()}
       </BottomSheet>
@@ -949,6 +958,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 36,
     borderTopRightRadius: 36,
   },
+  menuSheetBackground: {
+    backgroundColor: '#F7F7F7',
+  },
   handleIndicator: {
     backgroundColor: COLOR.grabber,
     width: 36,
@@ -957,6 +969,7 @@ const styles = StyleSheet.create({
   },
   menuContent: {
     paddingTop: 0,
+    backgroundColor: '#F7F7F7',
   },
   menuToolbar: {
     height: 38,
@@ -968,97 +981,105 @@ const styles = StyleSheet.create({
     color: COLOR.textPrimary,
     letterSpacing: -0.17,
   },
+  menuBody: {
+    gap: 20,
+    paddingTop: 8,
+    paddingBottom: 24,
+  },
   menuGrid: {
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingTop: 4,
+    gap: 12,
+    paddingHorizontal: 16,
   },
   menuRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
   },
   menuCard: {
     flex: 1,
-    height: 146,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    borderRadius: 24,
+    height: 158,
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
     borderCurve: 'continuous',
     backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(60,60,67,0.08)',
-    justifyContent: 'space-between',
-    boxShadow: '0 8px 26px rgba(0,0,0,0.07)',
+    borderWidth: 0.5,
+    borderColor: '#EBEBEB',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    boxShadow: '0 7px 14px rgba(0,0,0,0.03)',
   },
   menuCardPressed: {
     backgroundColor: '#F7F7F7',
     transform: [{ scale: 0.985 }],
   },
   menuCardCopy: {
-    gap: 3,
+    gap: 4,
+    width: '100%',
   },
   menuCardTitle: {
     fontSize: 16,
-    lineHeight: 21,
+    lineHeight: 22,
     fontWeight: '600',
     color: COLOR.textPrimary,
-    letterSpacing: -0.25,
+    letterSpacing: -0.16,
   },
   menuCardSubtitle: {
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '400',
     color: COLOR.textSecondary,
+    letterSpacing: -0.14,
   },
-  menuIconBubble: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
-    borderCurve: 'continuous',
+  menuIllustrationSlot: {
+    width: 56,
+    height: 56,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  imageMenuIconBubble: {
-    backgroundColor: '#E7F4FF',
+  menuIllustration: {
+    width: 56,
+    height: 56,
   },
-  textMenuIconBubble: {
-    backgroundColor: '#FFF3D6',
+  menuIllustrationSocial: {
+    width: 60,
+    height: 60,
   },
-  linkMenuIconBubble: {
-    backgroundColor: '#E8F9EF',
+  menuIllustrationLinks: {
+    width: 54,
+    height: 54,
   },
-  socialIconGroup: {
-    width: 102,
-    height: 66,
+  menuDivider: {
+    height: 1,
+    marginHorizontal: 24,
+    backgroundColor: '#E3E3E3',
+  },
+  manualSearchContainer: {
+    paddingHorizontal: 16,
+  },
+  manualSearchCard: {
+    minHeight: 80,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignContent: 'flex-start',
-    gap: 4,
-  },
-  brandIconBubble: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    borderCurve: 'continuous',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 0.5,
+    borderColor: '#EBEBEB',
+    overflow: 'hidden',
+    boxShadow: '0 7px 14px rgba(0,0,0,0.03)',
   },
-  redditIconBubble: {
-    backgroundColor: '#FFF0EA',
+  manualSearchIllustration: {
+    width: 56,
+    height: 56,
   },
-  youtubeIconBubble: {
-    backgroundColor: '#FFF0F0',
-  },
-  tiktokIconBubble: {
-    backgroundColor: '#F1F1F1',
-  },
-  instagramIconBubble: {
-    backgroundColor: '#FFF0F7',
-  },
-  facebookIconBubble: {
-    backgroundColor: '#EDF5FF',
+  manualSearchCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
   },
   linkPreviewInstagramFallback: {
     backgroundColor: '#FFF0F7',
