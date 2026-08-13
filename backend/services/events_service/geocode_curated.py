@@ -33,7 +33,14 @@ DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
                          "dmv_signature_events.json")
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-USER_AGENT = "AtlasTravelApp/1.0 (curated-events-geocoder; zijinwang97@gmail.com)"
+
+# Nominatim's usage policy requires a User-Agent that identifies the
+# application and gives them a way to reach whoever is running it. A project
+# URL satisfies that, so the default carries no individual's address — set
+# NOMINATIM_CONTACT to an email if you would rather they mail a person.
+DEFAULT_CONTACT = "https://github.com/zjwang168/atlas-mobile"
+CONTACT = os.environ.get("NOMINATIM_CONTACT") or DEFAULT_CONTACT
+USER_AGENT = f"AtlasTravelApp/1.0 (curated-events-geocoder; {CONTACT})"
 
 # Nominatim's policy is one request per second for automated clients.
 DELAY_S = 1.1

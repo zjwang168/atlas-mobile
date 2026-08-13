@@ -102,6 +102,8 @@ python3 -m backend.services.events_service.geocode_curated --write
 
 It geocodes against OpenStreetMap rather than Mapbox because the result is stored in a file we redistribute, which the Mapbox Geocoding terms do not permit. Entries that fail to resolve are left without coordinates and are skipped at load time with a warning.
 
+Nominatim's usage policy requires the request to identify who is running it. The script sends the project's repository URL by default; set `NOMINATIM_CONTACT` to an email to be reachable as a person instead. Nothing at runtime reads it — this is a one-off script, not a server dependency.
+
 ### Provider quirks worth knowing before debugging
 
 - **USDA returns a bare 403 to non-browser user agents** — identical with a valid key, an invalid one, or none, so a working key looks rejected. A normal browser UA is sent for this reason. Absent fields arrive as the string `'None'`, and coordinates arrive as strings.
