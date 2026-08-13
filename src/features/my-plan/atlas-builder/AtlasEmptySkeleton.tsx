@@ -11,8 +11,8 @@ function TypewriterCharacter({ character, index, progress }: { character: string
   return <Reanimated.View style={animatedStyle}><Text style={styles.emptyAtlasHint}>{character}</Text></Reanimated.View>;
 }
 
-function TypewriterHint() {
-  const characters = 'Now, add your first pin.'.split('');
+function TypewriterHint({ text = 'Tap a pin, and add it.' }: { text?: string }) {
+  const characters = text.split('');
   const progress = useSharedValue(0);
   useEffect(() => {
     progress.value = withRepeat(withTiming(characters.length + 0.5, { duration: 2500 }), -1, false);
@@ -50,7 +50,10 @@ export function AtlasEmptySkeleton() {
         <View style={styles.emptyAtlasCopy}>
           {index === 0 ? <>
             <TypewriterHint />
-            <Text style={styles.emptyAtlasHintSub}>Tap a pin or search, then add it here.</Text>
+            <Text style={styles.emptyAtlasHintSub}>Now, add your first pin.</Text>
+          </> : index === 1 ? <>
+            <TypewriterHint text="Or search a pin, and add it." />
+            <View style={[styles.emptyAtlasLine, styles.emptyAtlasLineShort]} />
           </> : <>
             <View style={styles.emptyAtlasLine} />
             <View style={[styles.emptyAtlasLine, styles.emptyAtlasLineShort]} />

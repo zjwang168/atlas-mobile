@@ -161,9 +161,8 @@ function rendersAsLayer(
 ): boolean {
   if (marker.id === selectedMarkerId || marker.id === deletingMarkerId) return false;
   if (popupMarkerId && marker.id === popupMarkerId) return false;
-  // Atlas AI suggestions stay as individually tappable purple native pins.
-  // Keeping them out of the clustered ShapeSource also preserves their labels.
-  if (disableRecommendedClustering && marker.tone === 'recommended') return false;
+  // Recommended pins get their own non-clustered Mapbox source below. They
+  // remain native map points, not React MarkerViews.
   // Both drive Reanimated transitions on the React dot.
   if (marker.entering || marker.pulsing) return false;
   return marker.tone === undefined || marker.tone === 'saved' || marker.tone === 'recommended';
@@ -717,6 +716,18 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     )),
     [deletingMarkerId, disableRecommendedClustering, markerPopup?.markerId, renderedMarkers, selectedMarkerId],
   );
+  const recommendedLayerMarkers = useMemo(
+    () => disableRecommendedClustering
+      ? layerMarkers.filter((marker) => marker.tone === 'recommended')
+      : [],
+    [disableRecommendedClustering, layerMarkers],
+  );
+  const clusteredLayerMarkers = useMemo(
+    () => disableRecommendedClustering
+      ? layerMarkers.filter((marker) => marker.tone !== 'recommended')
+      : layerMarkers,
+    [disableRecommendedClustering, layerMarkers],
+  );
   const annotationMarkers = useMemo(
     () => renderedMarkers.filter((marker) => (
       !rendersAsLayer(marker, selectedMarkerId, deletingMarkerId, markerPopup?.markerId, disableRecommendedClustering)
@@ -725,7 +736,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
   );
   const layerFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
     type: 'FeatureCollection',
-    features: layerMarkers.map((marker) => ({
+    features: clusteredLayerMarkers.map((marker) => ({
       type: 'Feature' as const,
       id: marker.id,
       properties: {
@@ -735,7 +746,16 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       },
       geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
     })),
-  }), [layerMarkers]);
+  }), [clusteredLayerMarkers]);
+  const recommendedLayerFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
+    type: 'FeatureCollection',
+    features: recommendedLayerMarkers.map((marker) => ({
+      type: 'Feature' as const,
+      id: marker.id,
+      properties: { markerId: marker.id, title: marker.title ?? '', tone: 'recommended' },
+      geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
+    })),
+  }), [recommendedLayerMarkers]);
   // Mapbox keeps the ordinary layers visible throughout a pinch/zoom. The
   // burst state below is the only time those layers yield to a transition.
   const layerVisible = true;
@@ -1182,6 +1202,27 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             }}
           />
         </MapboxGL.ShapeSource>
+        {recommendedLayerMarkers.length > 0 ? (
+          <MapboxGL.ShapeSource
+            id="recommendedPoints"
+            shape={recommendedLayerFeatures}
+            cluster={false}
+            onPress={handleLayerPress}
+          >
+            <MapboxGL.CircleLayer
+              id="recommendedPointCircle"
+              style={{
+                circleColor: '#885CF6',
+                circleRadius: 7,
+                circleOpacity: layerVisible ? 1 : 0,
+                circleRadiusTransition: { duration: 220, delay: 0 },
+                circleOpacityTransition: { duration: 180, delay: 0 },
+                circleStrokeWidth: 3,
+                circleStrokeColor: '#FFFFFF',
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        ) : null}
         {clusterBurstFeatures ? (
           <MapboxGL.ShapeSource id="placeClusterBurst" shape={clusterBurstFeatures}>
             <MapboxGL.CircleLayer
