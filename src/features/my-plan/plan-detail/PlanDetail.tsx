@@ -6,7 +6,6 @@ import { Text } from '@/components/ui/text';
 import ContentPanel from '../../../components/content-panel/ContentPanel';
 import { findSavedPlan } from '../create-plan/savePlan';
 import type { SavedPlan } from '../create-plan/savePlan';
-import PlanCompactView from './PlanCompactView';
 import PlanScheduleSection from './plan-detail-sections/PlanScheduleSection';
 
 // ---------------------------------------------------------------------------
@@ -133,15 +132,6 @@ export default function PlanDetail({ planId, onDismiss }: PlanDetailProps) {
         onDismiss();
       }}
       zIndex={40}
-      compactContent={({ snapTo }) =>
-        plan ? (
-          <PlanCompactView
-            plan={plan}
-            onDismiss={() => setIsVisible(false)}
-            onExpand={() => snapTo('default')}
-          />
-        ) : null
-      }
     >
       {({ reportScrollY, bottomInset }) => {
         if (!plan) return null;

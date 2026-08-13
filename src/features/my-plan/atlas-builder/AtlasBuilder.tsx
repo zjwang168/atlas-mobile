@@ -1,349 +1,66 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { NotePencilIcon } from 'phosphor-react-native/src/icons/NotePencil';
 import { useAppDialog } from '@/components/feedback/AppDialog';
+import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import { discoverAtlasPlaces, geocodeAtlasArea, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
-import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace, type AtlasPlaceSnapshot } from '@/services/atlas/atlasPlacesService';
-import { decodeAtlasPlaceMetadata, encodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/atlas/atlasPlaceMetadata';
+import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
+import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
 import { createSearchSession, isAbortError, resolvePlace, suggestPlaces } from '@/services/place/placeSearchService';
-import type { SavedPlace } from '@/services/place/placeService';
-import type { AtlasPlace } from '@/types/place';
 import type { GeocodedLocation } from '@/types/route';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
-  Image,
   LayoutAnimation,
   Modal,
-  PanResponder,
   Platform,
-  Pressable,
   ScrollView,
-  StyleSheet,
   TextInput,
   TouchableOpacity,
   UIManager,
   View,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Reanimated, { Extrapolation, FadeInDown, FadeOutUp, Layout, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import Reanimated, { FadeInDown, FadeOutUp, Layout } from 'react-native-reanimated';
 import * as Location from 'expo-location';
 
-export type DraftPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url' | 'city' | 'region' | 'country' | 'category'> & {
-  source?: 'saved' | 'recommended' | 'search';
-  provisional?: boolean;
-  confidence?: number | null;
-  aiDescription?: string | null;
-  note?: string | null;
-  timeline_day?: number | null;
-  timeline_time?: string | null;
-  transport?: TransportMode | null;
-  joinId?: string;
-};
+import { AtlasCandidateCard } from './AtlasCandidateCard';
+import { AtlasEmptySkeleton } from './AtlasEmptySkeleton';
+import { AtlasItem } from './AtlasItem';
+import { CONTINENTAL_US_CENTER, CONTINENTAL_US_ZOOM, EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y, FOCUS_SAVED_PLACES_RADIUS_KM, SEARCH_DEBOUNCE_MS, type TransportMode } from './constants';
+import { FocusAreas } from './FocusAreas';
+import { TimeInsert, TransportInsert } from './InsertControls';
+import { atlasPlaceSnapshot, toDraft, toDraftFromRow } from './mappers';
+import { styles } from './styles';
+import { TimePickerModal } from './TimePickerModal';
+import { TransportPickerModal } from './TransportPickerModal';
+import type { AtlasBuilderProps, DraftPlace, FocusArea, SearchResult } from './types';
+import {
+  acceptAiDescription,
+  boundsFromPolygon,
+  boundsFromRadius,
+  buildAtlasTitle,
+  centerOfBounds,
+  clusterLocationNames,
+  deriveFocusAreas,
+  expandBounds,
+  focusBoundsForSavedPlaces,
+  isLocalMatch,
+  isMarkerOverlap,
+  isNearCoordinate,
+  isWithinBounds,
+  normalize,
+  savedPlacesMatchingAdministrativeFocus,
+  timeOfDayRank,
+  timeRank,
+  uniquePlaces,
+  waitForFirstAtlasPaint,
+  zoomForBounds,
+} from './utils';
 
-export type AtlasSavedMapView = {
-  title: string;
-  centerCoordinate: [number, number];
-  zoomLevel: number;
-  markers: MapMarker[];
-  routeGeoJSON?: AtlasRouteResponse['route'];
-  places: DraftPlace[];
-};
-
-type TransportMode = AtlasTransportMode;
-
-const TRANSPORT_OPTIONS: Array<{ mode: TransportMode; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
-  { mode: 'walk', label: 'Walk', icon: 'walk-outline' },
-  { mode: 'bike', label: 'Bike', icon: 'bicycle-outline' },
-  { mode: 'drive', label: 'Drive', icon: 'car-outline' },
-  { mode: 'taxi', label: 'Taxi', icon: 'car-sport-outline' },
-  { mode: 'bus', label: 'Bus', icon: 'bus-outline' },
-  { mode: 'coach', label: 'Coach', icon: 'bus-outline' },
-  { mode: 'subway', label: 'Subway', icon: 'train-outline' },
-  { mode: 'train', label: 'Train', icon: 'train-outline' },
-  { mode: 'ferry', label: 'Ferry', icon: 'boat-outline' },
-  { mode: 'flight', label: 'Flight', icon: 'airplane-outline' },
-];
-
-type SearchResult =
-  | { kind: 'saved'; place: SavedPlace }
-  | { kind: 'remote'; externalId: string; name: string; subtitle: string; featureType?: string; coordinate?: [number, number]; bounds?: { ne: [number, number]; sw: [number, number] } };
-
-type FocusArea = {
-  label: string;
-  scope: 'city' | 'region' | 'country';
-  coordinate: [number, number];
-  count: number;
-  photoUrl?: string | null;
-  places: SavedPlace[];
-  bounds: { ne: [number, number]; sw: [number, number] };
-};
-
-type AtlasBuilderProps = {
-  onClose: () => void;
-  onSaved: (atlasId: string, askAI: boolean, mapView?: AtlasSavedMapView) => void;
-  atlasId?: string;
-  initialCandidates?: DraftPlace[];
-  initialItems?: DraftPlace[];
-  initialCenter?: [number, number];
-  initialBounds?: { ne: [number, number]; sw: [number, number] };
-  initialLocation?: string;
-  started?: boolean;
-  autoFocusCreateSearch?: boolean;
-  onItemsChange?: (items: DraftPlace[]) => void;
-  onFirstPlaceAdded?: () => void;
-  onBuildPlan?: (location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => void;
-  onReturnToCreateSearch?: () => void;
-};
-
-const PLANNING_HOURS = Array.from({ length: 17 }, (_, index) => {
-  const value = index + 7;
-  const hour = value % 12 || 12;
-  return `${hour}${value < 12 ? 'am' : 'pm'}`;
-});
-
-// The default Atlas overview intentionally uses an explicit camera instead of
-// a rectangular fit. Adjust this zoom to widen/tighten the mainland-US view.
-// A slightly northern center moves the mainland south on screen, clear of the
-// Atlas search field, while this zoom leaves the entire lower 48 in view.
-const CONTINENTAL_US_CENTER = [-98.5, 46.0] as [number, number];
-const CONTINENTAL_US_ZOOM = 1.9;
-const FOCUS_SAVED_PLACES_RADIUS_KM = 65;
-const SEARCH_DEBOUNCE_MS = 350;
-
-function boundsFromPolygon(polygon: Array<[number, number]>, padding = 0.06) {
-  const minLng = Math.min(...polygon.map(([lng]) => lng));
-  const maxLng = Math.max(...polygon.map(([lng]) => lng));
-  const minLat = Math.min(...polygon.map(([, lat]) => lat));
-  const maxLat = Math.max(...polygon.map(([, lat]) => lat));
-  return { ne: [maxLng + padding, maxLat + padding] as [number, number], sw: [minLng - padding, minLat - padding] as [number, number] };
-}
-
-function boundsFromRadius([longitude, latitude]: [number, number], radiusKm: number) {
-  const latitudeRadius = radiusKm / 110.574;
-  const longitudeRadius = radiusKm / Math.max(0.01, 111.320 * Math.cos((latitude * Math.PI) / 180));
-  return {
-    ne: [longitude + longitudeRadius, latitude + latitudeRadius] as [number, number],
-    sw: [longitude - longitudeRadius, latitude - latitudeRadius] as [number, number],
-  };
-}
-
-function expandBounds(bounds: { ne: [number, number]; sw: [number, number] }, fraction = 0.1) {
-  const longitudeSpan = Math.max(0.05, Math.abs(bounds.ne[0] - bounds.sw[0]));
-  const latitudeSpan = Math.max(0.05, Math.abs(bounds.ne[1] - bounds.sw[1]));
-  return {
-    ne: [Math.min(180, bounds.ne[0] + longitudeSpan * fraction), Math.min(85, bounds.ne[1] + latitudeSpan * fraction)] as [number, number],
-    sw: [Math.max(-180, bounds.sw[0] - longitudeSpan * fraction), Math.max(-85, bounds.sw[1] - latitudeSpan * fraction)] as [number, number],
-  };
-}
-
-function zoomForBounds(bounds: { ne: [number, number]; sw: [number, number] }, minimumZoom = 1.9) {
-  const longitudeSpan = Math.max(0.05, Math.abs(bounds.ne[0] - bounds.sw[0]));
-  const latitudeSpan = Math.max(0.05, Math.abs(bounds.ne[1] - bounds.sw[1]));
-  const widthZoom = Math.log2((360 * 390) / (512 * longitudeSpan));
-  const heightZoom = Math.log2((170 * 360) / (512 * latitudeSpan));
-  return Math.max(minimumZoom, Math.min(14, Math.min(widthZoom, heightZoom) - 0.25));
-}
-
-function acceptAiDescription(value?: string | null) {
-  const description = value?.trim();
-  if (!description || description.split(/\s+/).length > 4) return null;
-  return description;
-}
-
-// Create an Atlas stays at the original camera position; editing an existing
-// Atlas shifts its map content down by about 2 cm above the editing sheet.
-const EDIT_ATLAS_CAMERA_SCREEN_OFFSET_Y = 80;
-
-const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-const timeRank = (day: number, time: string) => day * 24 + Math.max(0, PLANNING_HOURS.indexOf(time) + 7);
-const timeOfDayRank = (time: string) => Math.max(0, PLANNING_HOURS.indexOf(time));
-// Let the editor commit its initial UI and Mapbox markers before kicking off
-// location services or recommendation work on the native/JS bridge.
-const waitForFirstAtlasPaint = () => new Promise<void>((resolve) => {
-  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-});
-
-function toDraft(place: SavedPlace, row?: AtlasPlace): DraftPlace {
-  const metadata = decodeAtlasPlaceMetadata(row?.note);
-  const hasSnapshotCoordinates = row?.latitude != null && row.longitude != null;
-  return {
-    id: place.id,
-    name: row?.place_name ?? place.name,
-    subtitle: row?.place_subtitle ?? place.subtitle,
-    latitude: hasSnapshotCoordinates ? row.latitude! : place.latitude,
-    longitude: hasSnapshotCoordinates ? row.longitude! : place.longitude,
-    photo_url: row?.photo_url ?? place.photo_url,
-    city: row?.city ?? place.city,
-    region: row?.region ?? place.region,
-    country: row?.country ?? place.country,
-    category: place.category,
-    source: 'saved',
-    note: metadata.note,
-    timeline_day: row?.timeline_day,
-    timeline_time: row?.timeline_time,
-    transport: metadata.transport,
-    joinId: row?.id,
-  };
-}
-
-function atlasPlaceSnapshot(place: DraftPlace): AtlasPlaceSnapshot {
-  return {
-    place_name: place.name,
-    place_subtitle: place.subtitle,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    photo_url: place.photo_url ?? null,
-    city: place.city ?? null,
-    region: place.region ?? null,
-    country: place.country ?? null,
-  };
-}
-
-function toDraftFromRow(row: AtlasPlace, saved?: SavedPlace): DraftPlace | null {
-  if (saved) return toDraft(saved, row);
-  if (row.latitude == null || row.longitude == null || !row.place_name) return null;
-  const metadata = decodeAtlasPlaceMetadata(row.note);
-  return {
-    id: row.external_place_id ?? row.id,
-    name: row.place_name,
-    subtitle: row.place_subtitle ?? '',
-    latitude: row.latitude,
-    longitude: row.longitude,
-    photo_url: row.photo_url ?? null,
-    city: row.city ?? null,
-    region: row.region ?? null,
-    country: row.country ?? null,
-    category: null,
-    source: 'search',
-    note: metadata.note,
-    timeline_day: row.timeline_day,
-    timeline_time: row.timeline_time,
-    transport: metadata.transport,
-    joinId: row.id,
-  };
-}
-
-function isLocalMatch(place: SavedPlace, query: string) {
-  const terms = normalize(query).split(' ').filter(Boolean);
-  if (!terms.length) return false;
-  const haystack = normalize([place.name, place.subtitle, place.city, place.region, place.country].filter(Boolean).join(' '));
-  if (terms.length > 1) return haystack.includes(terms.join(' '));
-  return haystack.split(' ').some((word) => word === terms[0] || (terms[0].length >= 3 && word.startsWith(terms[0])));
-}
-
-function isNearCoordinate(place: { latitude: number; longitude: number }, center: [number, number]) {
-  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
-  const latitudeDelta = toRadians(place.latitude - center[1]);
-  const longitudeDelta = toRadians(place.longitude - center[0]);
-  const a = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(toRadians(center[1])) * Math.cos(toRadians(place.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
-  const distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return distanceKm <= FOCUS_SAVED_PLACES_RADIUS_KM;
-}
-
-function centerOfBounds(bounds: { ne: [number, number]; sw: [number, number] }): [number, number] {
-  return [(bounds.ne[0] + bounds.sw[0]) / 2, (bounds.ne[1] + bounds.sw[1]) / 2];
-}
-
-function focusBoundsForSavedPlaces(center: [number, number], places: Array<{ latitude: number; longitude: number }>) {
-  const coordinates = [center, ...places.map((place) => [place.longitude, place.latitude] as [number, number])];
-  const longitudeSpan = Math.max(...coordinates.map(([longitude]) => longitude)) - Math.min(...coordinates.map(([longitude]) => longitude));
-  const latitudeSpan = Math.max(...coordinates.map(([, latitude]) => latitude)) - Math.min(...coordinates.map(([, latitude]) => latitude));
-  // The breathing room grows with the true footprint. This keeps a local
-  // collection useful while allowing country-scale collections to zoom out.
-  const padding = Math.max(0.06, Math.min(3, Math.max(longitudeSpan, latitudeSpan) * 0.12));
-  return boundsFromPolygon(coordinates, padding);
-}
-
-function uniquePlaces(places: SavedPlace[]) {
-  return [...new Map(places.map((place) => [place.id, place])).values()];
-}
-
-function clusterLocationNames(places: SavedPlace[]) {
-  return new Set(
-    places.map((place) => normalize(place.city ?? place.region ?? place.country ?? '')).filter(Boolean),
-  );
-}
-
-function savedPlacesMatchingAdministrativeFocus(place: DraftPlace, savedPlaces: SavedPlace[], featureType?: string) {
-  const administrativeField = featureType === 'country' ? 'country' : 'region';
-  const focusTerm = normalize(
-    administrativeField === 'country'
-      ? place.country ?? place.name
-      : place.region ?? place.name,
-  );
-  if (!focusTerm) return [];
-  return savedPlaces.filter((savedPlace) => (
-    normalize(savedPlace[administrativeField] ?? '') === focusTerm
-  ));
-}
-
-function isWithinBounds(place: { latitude: number; longitude: number }, bounds?: { ne: [number, number]; sw: [number, number] }) {
-  if (!bounds) return true;
-  const [east, north] = bounds.ne;
-  const [west, south] = bounds.sw;
-  const withinLatitude = place.latitude >= south && place.latitude <= north;
-  const withinLongitude = west <= east
-    ? place.longitude >= west && place.longitude <= east
-    : place.longitude >= west || place.longitude <= east;
-  return withinLatitude && withinLongitude;
-}
-
-function isMarkerOverlap(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) {
-  const latitudeDistance = (a.latitude - b.latitude) * 111_320;
-  const longitudeDistance = (a.longitude - b.longitude) * 111_320 * Math.cos((a.latitude + b.latitude) * Math.PI / 360);
-  return Math.hypot(latitudeDistance, longitudeDistance) < 48;
-}
-
-function deriveFocusAreas(places: SavedPlace[]): FocusArea[] {
-  const areas = new Map<string, SavedPlace[]>();
-  places.forEach((place) => {
-    const label = [place.city, place.region, place.country].find((value) => value?.trim());
-    if (!label) return;
-    const key = normalize(label);
-    areas.set(key, [...(areas.get(key) ?? []), place]);
-  });
-  return [...areas.values()]
-    .map((group) => {
-      const first = group[0];
-      const scope: FocusArea['scope'] = first.city?.trim() ? 'city' : first.region?.trim() ? 'region' : 'country';
-      const coordinate: [number, number] = [
-        group.reduce((sum, place) => sum + place.longitude, 0) / group.length,
-        group.reduce((sum, place) => sum + place.latitude, 0) / group.length,
-      ];
-      return {
-        label: first.city || first.region || first.country || '',
-        scope,
-        photoUrl: group.find((place) => Boolean(place.photo_url))?.photo_url,
-        places: group,
-        coordinate,
-        count: group.length,
-        bounds: focusBoundsForSavedPlaces(coordinate, group),
-      };
-    })
-    .filter((area) => Boolean(area.label))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-}
-
-function buildAtlasTitle(items: DraftPlace[]) {
-  const categories = items.map((item) => normalize(item.category ?? item.name)).join(' ');
-  const location = items.find((item) => item.city || item.region || item.country);
-  const place = location?.city ?? location?.region ?? location?.country ?? items[0]?.name ?? 'Your Atlas';
-  const slogan = /museum|gallery|art/.test(categories)
-    ? 'Art Around Every Corner'
-    : /park|trail|garden|nature/.test(categories)
-      ? 'Wild At Heart'
-      : /restaurant|cafe|food|bakery/.test(categories)
-        ? 'Taste The Town'
-        : 'Made To Wander';
-  return `${place}: ${slogan}`;
-}
+export type { AtlasSavedMapView, DraftPlace } from './types';
 
 export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
@@ -1497,7 +1214,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   const mapSearchOverlay = useMemo(() => <Animated.View pointerEvents="box-none" style={[styles.mapSearchLayer, { opacity: searchAppear, transform: [{ translateX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) }, { scaleX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }) }] }]}>
     <View pointerEvents="auto" style={styles.mapSearchBox}>
-      <Ionicons name={focusSearchActive ? 'locate-outline' : 'search'} size={18} color={focusSearchActive ? '#0F766E' : '#6B7280'} />
+      <Ionicons name={focusSearchActive ? 'locate-outline' : 'search'} size={18} color={focusSearchActive ? '#12C170' : '#6B7280'} />
       <TextInput ref={inputRef} value={query} onChangeText={handleQueryChange} placeholder={focusSearchActive ? 'Search an area' : 'Search places'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={focusSearchActive ? openFullSearch : undefined} />
       {searching ? <ActivityIndicator size="small" color="#2563EB" /> : focusSearchActive ? <TouchableOpacity accessibilityLabel="Focus search area" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity> : null}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
@@ -1567,19 +1284,19 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text style={[styles.heading, styles.atlasHeadingSafe]}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
-          
+
           {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
         </View>
         <View style={styles.headerRight}>
           {atlasId ? <TouchableOpacity accessibilityLabel={`Rename ${atlasTitle || existingAtlas?.title || 'Atlas'}`} onPress={renameAtlas} style={styles.focusAreaButton}><Text numberOfLines={1} style={styles.focusAreaButtonText}>{atlasTitle || existingAtlas?.title || 'Atlas'}</Text><Ionicons name="pencil-outline" size={15} color="#6A6A70" /></TouchableOpacity> : (started && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={onReturnToCreateSearch ? returnToCreateSearch : openFocusSearch} style={styles.focusAreaButton}><Ionicons name="location-sharp" size={23} color="#303033" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null)}
-          <TouchableOpacity accessibilityLabel="Close Atlas editor" onPress={closeEditor} style={styles.headerIcon}><Ionicons name="close" size={19} color="#26262A" /></TouchableOpacity>
+          <Button accessibilityLabel="Close Atlas editor" onPress={closeEditor} size="icon" variant="ghost" className="h-9 w-9 rounded-xl bg-muted"><Ionicons name="close" size={19} color="#1A1A1A" /></Button>
         </View>
       </View>
 
       {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} onAdd={() => { if (focused) addPlace(focused); }} /> : null}
 
       {!atlasId && items.length === 0 && !started && !handoffStarted ? <View style={styles.createLanding}>
-        <View style={styles.simpleStartHero}><TouchableOpacity onPress={simpleStart} style={styles.simpleStartHeroButton}><View style={styles.simpleStartHeroTop}><View style={styles.simpleStartHeroIcon}><Ionicons name="map-outline" size={26} color="#0F766E" /></View><Ionicons name="arrow-forward" size={21} color="#0F766E" /></View><View style={styles.simpleStartHeroCopy}><Text style={styles.simpleStartHeroTitle}>Simple Start</Text><Text style={styles.simpleStartHeroSubtitle}>Build an atlas from scratch</Text></View></TouchableOpacity></View>
+        <View style={styles.simpleStartHero}><TouchableOpacity onPress={simpleStart} style={styles.simpleStartHeroButton}><View style={styles.simpleStartHeroTop}><View style={styles.simpleStartHeroIcon}><Ionicons name="map-outline" size={26} color="#12C170" /></View><Ionicons name="arrow-forward" size={21} color="#12C170" /></View><View style={styles.simpleStartHeroCopy}><Text style={styles.simpleStartHeroTitle}>Simple Start</Text><Text style={styles.simpleStartHeroSubtitle}>Build an atlas from scratch</Text></View></TouchableOpacity></View>
         <View style={styles.planListSection}><FocusAreas areas={focusAreas} onFocus={focusArea} /></View>
       </View> : items.length === 0 ? <AtlasEmptySkeleton /> : <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
         {items.map((item, index) => <Reanimated.View key={item.id} entering={FadeInDown.duration(340)} exiting={FadeOutUp.duration(260)} layout={Layout.duration(260)}>
@@ -1591,10 +1308,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </Reanimated.View>)}
       </ScrollView>}
 
-      {items.length > 0 ? <View style={styles.footer}><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(false)} style={styles.secondarySave}>{savingKind === 'atlas' ? <ActivityIndicator color="#1F3938" /> : <><Ionicons name="bookmark-outline" size={16} color="#1F3938" /><Text style={styles.secondarySaveText}>Save</Text></>}</TouchableOpacity><TouchableOpacity disabled={savingKind !== null} onPress={() => persist(true)} style={styles.primarySave}>{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</TouchableOpacity></View> : null}
+      {items.length > 0 ? <View style={styles.footer}><Button disabled={savingKind !== null} onPress={() => persist(false)} variant="secondary" className="h-[50px] flex-[0.82] rounded-[18px] bg-muted">{savingKind === 'atlas' ? <ActivityIndicator color="#1A1A1A" /> : <><Ionicons name="bookmark-outline" size={16} color="#1A1A1A" /><Text style={styles.secondarySaveText}>Save</Text></>}</Button><Button disabled={savingKind !== null} onPress={() => persist(true)} className="h-[50px] flex-[1.45] rounded-[18px] bg-primary">{savingKind === 'ai' ? <ActivityIndicator color="#FFF" /> : <><Ionicons name="sparkles" size={16} color="#FFF" /><Text style={styles.primarySaveText}>Save and Ask AI</Text></>}</Button></View> : null}
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} dayLocked={undefinedDayLocked} hasExisting={timeModalIndex !== null && Boolean(items[timeModalIndex]?.timeline_time)} validationMessage={timeConflictMessage} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => { setTimeConflictMessage(null); setTimeModalIndex(null); }} onRemove={() => { if (timeModalIndex === null) return; const existing = items[timeModalIndex]; commitItems(items.map((entry, index) => index === timeModalIndex ? { ...entry, timeline_day: null, timeline_time: null } : entry)); if (existing?.joinId) updateAtlasPlace(existing.joinId, { timeline_day: null, timeline_time: null }).catch(console.warn); setTimeModalIndex(null); }} onSave={saveTimeDivider} />
       <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={saveTransport} onRemove={() => saveTransport(null)} onClose={() => setTransportModalIndex(null)} />
-      <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)} style={styles.headerIcon}><Ionicons name={focusSearchActive ? 'close' : 'chevron-back'} size={20} color="#26262A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>{focusSearchActive ? 'Choose an area' : 'Search results'}</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={!focusSearchActive && addingResult === key} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultAdd(result); }} style={focusSearchActive ? styles.focusResultButton : styles.addResultButton}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
+      <Modal visible={fullResults !== null} animationType="slide" onRequestClose={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)}><View style={styles.fullSearch}><View style={styles.fullSearchHeader}><TouchableOpacity onPress={() => focusSearchActive ? closeFocusSearch() : setFullResults(null)} style={styles.headerIcon}><Ionicons name={focusSearchActive ? 'close' : 'chevron-back'} size={20} color="#1A1A1A" /></TouchableOpacity><Text style={styles.fullSearchTitle}>{focusSearchActive ? 'Choose an area' : 'Search results'}</Text><View style={styles.headerIcon} /></View><ScrollView contentContainerStyle={styles.fullResults}>{fullResults?.map((result) => { const key = result.kind === 'saved' ? result.place.id : result.externalId; return <View key={key} style={styles.fullResultRow}><TouchableOpacity style={styles.resultCopy} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultFocus(result); }}><Text style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text><Text style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></TouchableOpacity><TouchableOpacity disabled={!focusSearchActive && addingResult === key} onPress={() => { setFullResults(null); focusSearchActive ? focusAreaResult(result) : handleResultAdd(result); }} style={focusSearchActive ? styles.focusResultButton : styles.addResultButton}>{!focusSearchActive && addingResult === key ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name={focusSearchActive ? 'locate-outline' : 'add'} size={18} color="#FFF" />}</TouchableOpacity></View>; })}</ScrollView></View></Modal>
     </View>
   );
 }

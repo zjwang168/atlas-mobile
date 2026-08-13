@@ -10,8 +10,9 @@ we sort results by distance rather than by city.
 
 **Almost nothing gives you usable coordinates.** That is the finding that
 shapes the whole design, and it is the opposite of what the field list
-suggests. Two sources return real lat/lng you can trust. One of them is
-farmers markets. The other forbids commercial use.
+suggests. Three sources return real lat/lng you can trust: farmers markets
+(USDA), park events (NPS — added in the second pass, see §6), and Ticketmaster,
+which forbids commercial use.
 
 Everything else gives you a venue name and, if you are lucky, a street
 address. **Budget for a geocoding pass as a first-class part of this feature,
@@ -146,22 +147,29 @@ platform, not verified feeds.
 |---|---|---|---|
 | **The Anthem** | Live Nation → Ticketmaster Discovery | Yes, via TM | inference |
 | **Fillmore Silver Spring** | Live Nation → Ticketmaster Discovery | Yes, via TM | inference |
-| **9:30 Club** | I.M.P., own ticketing — not Live Nation | Unknown | unverified |
+| **9:30 Club** | **Dead end — see below** | — | **probed** |
 | **Kennedy Center** | Own box office; no public API found | Unknown | unverified |
 | **Strathmore** | Own box office | Unknown | unverified |
-| **Wolf Trap** | Own box office | Unknown | unverified |
+| **Wolf Trap** | **Covered by NPS — see §6** | **Yes** | **probed** |
 
-Two things worth knowing before spending time here:
+### I.M.P. — settled, do not re-open
 
-- **9:30 Club, The Anthem, and Lincoln Theatre are all I.M.P.** If any one of
-  them has a feed, the same shape probably covers the other two. That makes
-  9:30 Club the highest-value single site to check by hand.
-- Venue pages of this kind very often carry **`schema.org/Event` JSON-LD** in
-  the page source for SEO, including `startDate`, `location`, and sometimes
-  `geo`. That is a legitimate, stable-ish extraction path that is not
-  scraping the rendered DOM. Checking for a `<script type="application/ld+json">`
-  block on each venue's event page is the fastest next step and would settle
-  four of these six rows.
+The earlier draft called 9:30 Club "the highest-value single site to check by
+hand" because 9:30 Club, The Anthem, and Lincoln Theatre share an operator.
+**Checked. It does not pay off.**
+
+- Both `930.com` and `theanthemdc.com` are WordPress with `/wp-json/` open.
+- 9:30 Club exposes a custom post type `930_event` at
+  `/wp-json/wp/v2/930_event` — and it returns `x-wp-total: 0`. Not restricted,
+  not paginated wrong: empty.
+- The Anthem exposes no custom post type at all.
+- The `schema.org` JSON-LD idea does not rescue it either. Both sites carry
+  exactly one `ld+json` block and it is Yoast's `WebPage`/`BreadcrumbList`/
+  `WebSite` graph. **No `Event` node on either site.** The 600KB homepage
+  contains no inline event JSON, so the calendar is rendered client-side.
+
+Getting I.M.P. listings means a headless browser, with everything that
+implies. The JSON-LD shortcut is not available here.
 
 ---
 
@@ -172,7 +180,8 @@ Two things worth knowing before spending time here:
 | **Events DC** | No developer feed found | — | unverified |
 | **Montgomery County** | Open data portal + GIS hub (ArcGIS: GeoServices/WMS/WFS) | GIS layers yes; **events feed not found** | docs |
 | **Arlington County** | Open data portal `data.arlingtonva.us` | Not found for events | docs |
-| **Smithsonian** | `si.edu/events` is a rendered page; Insider RSS is *news*, not events | — | unverified |
+| **Smithsonian** | `si.edu/events` returns **403 to automated requests**, no `ld+json` | — | **probed — dead** |
+| **Destination DC** (`washington.org`) | Simpleview CMS; **zero `@type: Event`** in the page | — | **probed — dead** |
 | **Libraries** (DCPL, MCPL, Arlington) | Not probed | — | unverified |
 
 Notes that matter:
@@ -301,30 +310,101 @@ value.
 
 ---
 
+## 6. National Park Service — missed by the first pass
+
+**This survey originally had no NPS row at all, and that was its biggest
+omission.** It is the second-best source here after USDA, and unlike USDA it
+carries real dated events.
+
+| Field | Value |
+|---|---|
+| Endpoint | `https://developer.nps.gov/api/v1/events` |
+| Format | JSON REST — `{"total", "data": [...]}` |
+| Key | Required, free, instant self-service signup |
+| Commercial | Federal open data, no restriction |
+| **Coords** | **Yes on ~66%; the rest fill from `/parks` by `sitecode`** |
+| **Dates** | **Yes — `dates[]` expands recurrences into concrete days, plus `times[]`** |
+| Confidence | probed — 233 unique DMV events fetched |
+
+Why it matters for a travel app: it covers the National Mall, Rock Creek,
+Great Falls, Harpers Ferry, Antietam, Fort McHenry, and Wolf Trap — the civic
+and outdoor tier nothing else in this survey reaches. Real examples pulled
+during the probe: a Netherlands Carillon concert, a Big Band and swing dance
+at Fort Hunt, a square dance at Peirce Mill, stargazing in Rock Creek, and
+250th-anniversary programming.
+
+43 fields per event. `images[]` (58% populated) are site-relative paths needing
+an `nps.gov` prefix. `isfree` is populated on 90%.
+
+### The pagination bug — the thing that will waste your afternoon
+
+**`/events` silently ignores the `start` parameter.** A
+`stateCode=DC,MD,VA` query reports `total: 423` and returns the same first 50
+rows for every value of `start`. Paging looks like it works and quietly gives
+you duplicates.
+
+The way round it is **one request per `parkCode`**. No single DMV park unit has
+more than a page of events, so per-park queries retrieve everything: 233 unique
+against the 50 a state query can reach. Chunking several parks per request is
+not enough — a six-park chunk hit the cap too.
+
+`stateCode` is a bad filter for a distance-first app anyway: Virginia reaches
+Blue Ridge Parkway and Cumberland Gap, five hours out. Enumerate the park codes.
+
+### Second quirk: `/parks` does not decode `%2C`
+
+A comma-separated `parkCode` list must reach the host as a literal comma. Most
+HTTP clients percent-encode it, and the host then treats the whole string as
+one park code and returns **a single record**. Verified: 16 codes with literal
+commas returns 16 parks; the same request with `%2C` returns 1. It looks like a
+working request that found little, not like an error.
+
+`/parks` is worth the trouble — it carries `images[]` on 100% of parks, which
+covers the 40% of events that ship no photo of their own.
+
+### Quality caveat
+
+Roughly two thirds are `Regular Event` — routine ranger programming, some of it
+daily ("Chicken Feeding"). `category == "Special Event"` is the provider's own
+editorial signal and is the right thing to surface. Also note that expanding
+`dates[]` into every occurrence lets one daily programme fill a list; take the
+next occurrence per series instead.
+
+---
+
 ## Recommendation
 
-**Tier 1 — start here.** Localist at GWU and Howard, plus USDA. No key needed
-for Localist, free key for USDA, permissive enough to build on, and between
-them they exercise both hard parts of the problem: partial coordinates
-(Localist) and recurring schedules (USDA).
+**Tier 1 — start here.** USDA plus **NPS**. Both are US federal open data with
+free keys and no commercial restriction, and between them they exercise both
+hard parts of the problem: recurring schedules with no hours (USDA) and partial
+coordinates with real dates (NPS).
 
-**Tier 2 — one manual hour each, highest expected value.** 9:30 Club JSON-LD
-(unlocks three I.M.P. venues), Smithsonian, and whichever library system runs
-LibCal. Also finish the four unresolved university feeds — Georgetown's
-LiveWhale is likely 20 minutes of work since the platform is confirmed.
+**Localist is Tier 1 on paper only.** GWU and Howard serve clean, keyless JSON,
+but the content is campus orientation and internal programming — the 22%
+coordinate coverage is the smaller problem. Not useful for a travel app.
+
+**No free feed carries DMV festivals.** The Renaissance Festival, Cherry
+Blossom, Fiesta DC, Artscape — each lives only on its own client-rendered site.
+A curated file is the honest answer for that tier, and it is what
+`backend/services/events_service/data/dmv_signature_events.json` is.
+
+**Tier 2 — remaining unknowns.** Whichever library system runs LibCal, and
+Georgetown's LiveWhale (likely 20 minutes since the platform is confirmed).
 
 **Tier 3 — decide the licence before the code.** Ticketmaster. It is the only
-source that solves the venue tier properly and the only one whose terms say
-you may not make money from it. That is a product decision, not an
+source that solves the commercial venue tier properly and the only one whose
+terms say you may not make money from it. That is a product decision, not an
 engineering one, and it should be made before anyone wires it up.
 
 **Do not pursue.** Eventbrite discovery — it does not exist. DICE without a
-partner relationship.
+partner relationship. I.M.P. and Smithsonian without a headless browser.
 
 ## Open questions for the next pass
 
 1. Does LiveWhale carry coordinates? Settles Georgetown.
-2. Do the venue sites carry `schema.org/Event` JSON-LD? Settles four rows.
+2. ~~Do the venue sites carry `schema.org/Event` JSON-LD?~~ **Answered: no.**
+   9:30 Club, The Anthem, Smithsonian, and washington.org were all checked and
+   none carries an `Event` node. See §3 and §4.
 3. Can building-level geocoding lift Localist's coordinate coverage to
    something usable? This determines whether campus events are viable at all.
    Measured at 26% over a 7-day window, and the gap is not geocodable from the
@@ -336,7 +416,9 @@ partner relationship.
    Not surveyed.
 
 Settled since the first draft, do not re-open: USDA has no opening hours by
-any route, and the data.gov exports are dead (2014, 404).
+any route; the data.gov exports are dead (2014, 404); I.M.P. and Smithsonian
+carry no `Event` JSON-LD and need a headless browser; and NPS `/events` cannot
+be paged with `start` — query one `parkCode` at a time.
 
 ## Sources
 

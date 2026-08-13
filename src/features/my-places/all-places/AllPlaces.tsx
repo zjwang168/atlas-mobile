@@ -14,7 +14,6 @@ import { CaretRightIcon } from 'phosphor-react-native/src/icons/CaretRight';
 import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
-import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -83,6 +82,14 @@ type VisibleLocation = Pick<
   DistancePlaceItem,
   'locationLabel' | 'locationCount' | 'dateLabel'
 >;
+
+function placeListKeyExtractor(item: DistancePlaceItem): string {
+  return item.place.id;
+}
+
+function atlasListKeyExtractor(atlas: { id: string }): string {
+  return atlas.id;
+}
 
 function toRadians(value: number): number {
   return (value * Math.PI) / 180;
@@ -201,8 +208,6 @@ function sortPlacesByDate(
 
 function CategoryChip({ category }: { category?: string }) {
   const label = category || 'Place';
-  const isRestaurant = /restaurant|food|dining|café|cafe/i.test(label);
-  const Icon = isRestaurant ? ForkKnifeIcon : MapPinIcon;
   return (
     <BlurView
       tint="light"
@@ -210,8 +215,7 @@ function CategoryChip({ category }: { category?: string }) {
       style={styles.chipOuter}
     >
       <View style={styles.chipBg} />
-      <Icon size={13} weight="fill" color="#D4940A" />
-      <Text style={styles.chipLabel}>{label}</Text>
+      <Text numberOfLines={1} style={styles.chipLabel}>{label}</Text>
     </BlurView>
   );
 }
@@ -735,6 +739,14 @@ function AllPlaces({
     setOverlay({ kind: 'atlasDetail', atlasId });
   }, [setOverlay]);
 
+  const renderPlaceItem = useCallback(({ item }: { item: DistancePlaceItem }) => (
+    <SavedPlaceListItem place={item.place} onPress={handlePlacePress} />
+  ), [handlePlacePress]);
+
+  const renderAtlasItem = useCallback(({ item }: { item: AtlasPreview }) => (
+    <AtlasRow atlas={item} onPress={handleAtlasPress} />
+  ), [handleAtlasPress]);
+
   const showPlaces = filter === 'all' || filter === 'places';
   const showAtlases = filter === 'all' || filter === 'atlas';
   if (filter === 'places') {
@@ -783,10 +795,8 @@ function AllPlaces({
             key="saved-places-list"
             ref={placesListRef}
             data={sortedPlaces}
-            keyExtractor={(item) => item.place.id}
-            renderItem={({ item }) => (
-              <SavedPlaceListItem place={item.place} onPress={handlePlacePress} />
-            )}
+            keyExtractor={placeListKeyExtractor}
+            renderItem={renderPlaceItem}
             scrollEnabled={verticalScrollEnabled}
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={[
@@ -879,10 +889,8 @@ function AllPlaces({
           <FlatList
             key="saved-atlas-list"
             data={sortedAtlasPreviews}
-            keyExtractor={(atlas) => atlas.id}
-            renderItem={({ item }) => (
-              <AtlasRow atlas={item} onPress={handleAtlasPress} />
-            )}
+            keyExtractor={atlasListKeyExtractor}
+            renderItem={renderAtlasItem}
             scrollEnabled={verticalScrollEnabled}
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={[
@@ -1189,8 +1197,9 @@ const styles = StyleSheet.create({
   },
   chipOuter: {
     position: 'absolute',
-    top: 8,
+    bottom: 8,
     left: 8,
+    maxWidth: CARD_SIZE - 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
@@ -1210,6 +1219,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.8)',
   },
   chipLabel: {
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: '500',
     lineHeight: 18,

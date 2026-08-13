@@ -10,6 +10,7 @@ import { useContentPanelSnapGroup } from '../../components/content-panel/Content
 import AddPlace from '../add-place/AddPlace';
 import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
+import { EventDetail } from '../event-detail/EventDetail';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
 import AtlasDetail from '../my-places/atlas/atlas-detail/AtlasDetail';
@@ -34,6 +35,9 @@ const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124
 const PANEL_SPRING_SETTLE_DELAY = 380;
 const SHEET_OVERLAY_HANDOFF_DELAY = 360;
 const SHEET_DISMISS_FALLBACK_DELAY = 750;
+const IOS_HOME_SHEET_SHORT_FRACTION = 0.30;
+const IOS_HOME_SHEET_DEFAULT_FRACTION = 0.60;
+const IOS_HOME_SHEET_TALL_FRACTION = 0.94;
 
 // ---- Types ----
 
@@ -274,16 +278,16 @@ function HomeScreenContent({
   // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
   // drives the same padding-tracking path.
   const mainPanelActive = Platform.OS === 'ios' ? mainSheetVisible : panelVisible;
-  const bottomPanelActive = mainPanelActive || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  const bottomPanelActive = mainPanelActive || overlay.kind === 'placeDetail' || overlay.kind === 'eventDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
   const nativeMainPanelActive =
     Platform.OS === 'ios' &&
     (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
   const settledBottomPanelHeight = nativeMainPanelActive
     ? settledPanelSnapState === 'short'
-      ? screenHeight * 0.40
+      ? screenHeight * IOS_HOME_SHEET_SHORT_FRACTION
       : settledPanelSnapState === 'tall'
-        ? screenHeight * 0.94
-        : screenHeight * 0.54
+        ? screenHeight * IOS_HOME_SHEET_TALL_FRACTION
+        : screenHeight * IOS_HOME_SHEET_DEFAULT_FRACTION
     : SNAP_HEIGHTS[settledPanelSnapState];
   const atlasCameraVerticalOffset = atlasMapState?.cameraVerticalOffset ?? 0;
   const lockAtlasCameraToScreen = Boolean(atlasMapState?.lockCameraToScreen);
@@ -519,7 +523,6 @@ function HomeScreenContent({
               onTabChange={handleTabChange}
               onAddPress={handleAddPress}
               onChatPress={handleChatPress}
-              bottomOffset={0}
             />
           ) : undefined}
         />
@@ -635,6 +638,13 @@ function HomeScreenContent({
         }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
+      />
+
+      <EventDetail
+        event={overlay.kind === 'eventDetail' ? overlay.event : null}
+        onDismiss={() => setOverlay(overlay.kind === 'eventDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'eventDetail' ? handlePanelHeightChange : undefined}
       />
 
       <PlanDetail

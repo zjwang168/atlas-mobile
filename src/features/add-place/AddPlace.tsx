@@ -14,7 +14,7 @@ import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import ContentPanel from '@/components/content-panel/ContentPanel';
 import { PlaceCover } from '@/components/place-cover/PlaceCover';
-import { useHome } from '@/features/home/HomeContext';
+import { useHomePlaces } from '@/features/home/HomeContext';
 import { toPlaceDetail } from '@/services/place/placeService';
 import type { PlaceDetail } from '@/types/place';
 
@@ -79,7 +79,7 @@ type AddPlaceProps = {
 };
 
 export default function AddPlace({ visible, onDismiss, onSelect, snapGroup, onHeightChange, excludeIds }: AddPlaceProps) {
-  const { savedPlaces } = useHome();
+  const { savedPlaces } = useHomePlaces();
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<string | null>('Recommended');
   const [selected, setSelected] = useState<Set<string>>(new Set());

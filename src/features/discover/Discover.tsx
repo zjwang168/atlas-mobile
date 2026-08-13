@@ -3,88 +3,55 @@ import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { SaveAffordance } from '@/components/save-affordance/SaveAffordance';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import { useHomeLocation, useHomeOverlay, useHomePlaces } from '@/features/home/HomeContext';
 import { MIN_QUERY_LENGTH } from '@/services/place/placeSearchService';
 import { usePlaceSearch } from '@/services/place/usePlaceSearch';
+import type { EventCategory, LocalEvent } from '@/types/event';
 import type { PlaceSaveOutcome } from '@/types/place';
 import type { PlaceSuggestion } from '@/types/route';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ArrowsDownUpIcon } from 'phosphor-react-native/src/icons/ArrowsDownUp';
 import { CaretDownIcon } from 'phosphor-react-native/src/icons/CaretDown';
-import { CaretRightIcon } from 'phosphor-react-native/src/icons/CaretRight';
-import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
-import { ParkIcon } from 'phosphor-react-native/src/icons/Park';
-import { ShoppingBagIcon } from 'phosphor-react-native/src/icons/ShoppingBag';
-import { StarIcon } from 'phosphor-react-native/src/icons/Star';
-import { TreeIcon } from 'phosphor-react-native/src/icons/Tree';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Image,
   Keyboard,
   Pressable,
   StyleSheet,
   TextInput,
   View,
-  type ImageSourcePropType,
 } from 'react-native';
+import {
+  EventCard,
+  FEATURED_CARD_WIDTH,
+  FeaturedEventCard,
+} from './EventCard';
+import { useLocalEvents, type EventTimeframe } from './useLocalEvents';
 
-// -- Fake data ----------------------------------------------------------
+type DiscoverCategoryFilter = 'all' | EventCategory;
 
-type DiscoverPlace = {
-  id: string;
-  name: string;
-  category: string;
-  categoryIcon: 'park' | 'shopping' | 'cafe' | 'tree';
-  rating: number;
-  distanceKm: number;
-  trending: boolean;
-  thumbnailSource?: ImageSourcePropType;
+/** Filter-button labels. The menu spells each option out in full; the button
+    shows the current one, so both maps are the short form. */
+const CATEGORY_LABELS: Record<DiscoverCategoryFilter, string> = {
+  all: 'Category',
+  festival: 'Festivals',
+  market: 'Markets',
+  music: 'Music',
+  arts: 'Arts',
+  outdoors: 'Outdoors',
+  history: 'History',
+  community: 'Community',
 };
 
-const FAKE_PLACES: DiscoverPlace[] = [
-  { id: '1', name: 'Newcastle Beach Park', category: 'Parks', categoryIcon: 'tree', rating: 4.1, distanceKm: 0.8, trending: true, thumbnailSource: require('../../../assets/images/discover/park.jpg') },
-  { id: '2', name: 'City Center Mall', category: 'Shopping', categoryIcon: 'shopping', rating: 4.5, distanceKm: 1.2, trending: true, thumbnailSource: require('../../../assets/images/discover/mall.jpg') },
-  { id: '3', name: 'Riverfront Cafe', category: 'Cafe', categoryIcon: 'cafe', rating: 4.3, distanceKm: 1.7, trending: false, thumbnailSource: require('../../../assets/images/discover/cafe.jpg') },
-  { id: '4', name: 'Green Valley Trail', category: 'Parks', categoryIcon: 'park', rating: 4.7, distanceKm: 2.1, trending: true, thumbnailSource: require('../../../assets/images/discover/fallback.jpg') },
-  { id: '5', name: 'Pike Place Market', category: 'Shopping', categoryIcon: 'shopping', rating: 4.6, distanceKm: 2.8, trending: true, thumbnailSource: require('../../../assets/images/discover/mall.jpg') },
-  { id: '6', name: 'Lighthouse Coffee', category: 'Cafe', categoryIcon: 'cafe', rating: 4.2, distanceKm: 3.4, trending: false, thumbnailSource: require('../../../assets/images/discover/cafe.jpg') },
-];
-
-type DiscoverSortMode = 'distance' | 'rating';
-type DiscoverCategory = 'all' | 'Parks' | 'Shopping' | 'Cafe';
-
-// -- Category icon mapping ------------------------------------------------
-
-const CATEGORY_ICONS = {
-  park: { Icon: ParkIcon, color: '#4CAF50' },
-  shopping: { Icon: ShoppingBagIcon, color: '#E91E8E' },
-  cafe: { Icon: CoffeeBeanIcon, color: '#FF6259' },
-  tree: { Icon: TreeIcon, color: '#4CAF50' },
-} as const;
+const TIMEFRAME_LABELS: Record<EventTimeframe, string> = {
+  weekend: 'This weekend',
+  week: 'Next 7 days',
+  month: 'Next 30 days',
+};
 
 // -- Components -----------------------------------------------------------
-
-function CategoryChip({ category, iconKey }: { category: string; iconKey: DiscoverPlace['categoryIcon'] }) {
-  const { Icon, color } = CATEGORY_ICONS[iconKey];
-  return (
-    <View style={styles.chip}>
-      <Icon size={13} weight="fill" color={color} />
-      <Text style={styles.chipLabel}>{category}</Text>
-    </View>
-  );
-}
-
-function RatingChip({ rating }: { rating: number }) {
-  return (
-    <View style={styles.chip}>
-      <StarIcon size={13} weight="fill" color="#F5A000" />
-      <Text style={styles.chipLabel}>{rating}</Text>
-    </View>
-  );
-}
 
 /** Hoisted so it keeps one identity — an inline separator would remount every
     row's neighbour on each render and defeat the cards' memo. */
@@ -92,45 +59,23 @@ function CardGap() {
   return <View style={styles.cardGap} />;
 }
 
-const DiscoverPlaceCard = memo(function DiscoverPlaceCard({
-  place,
-}: {
-  place: DiscoverPlace;
-}) {
-  return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={place.name}
-      onPress={() => {}}
-      scaleTo={0.985}
-      style={styles.card}
-    >
-      <View style={styles.cardThumbnail}>
-        {place.thumbnailSource ? (
-          <Image
-            source={place.thumbnailSource}
-            style={StyleSheet.absoluteFill}
-            resizeMode="cover"
-          />
-        ) : (
-          <PlaceCover category={place.category} iconSize={22} />
-        )}
-      </View>
+/** Module scope for the same reason the separators are: one identity for the
+    whole app rather than one per mounted pane. */
+function suggestionKeyExtractor(item: PlaceSuggestion): string {
+  return item.external_id;
+}
 
-      <View style={styles.cardContent}>
-        <Text numberOfLines={1} style={styles.cardTitle}>
-          {place.name}
-        </Text>
-        <View style={styles.cardChips}>
-          <CategoryChip category={place.category} iconKey={place.categoryIcon} />
-          <RatingChip rating={place.rating} />
-        </View>
-      </View>
+function eventKeyExtractor(item: LocalEvent): string {
+  return item.id;
+}
 
-      <CaretRightIcon size={16} weight="bold" color="#C7C7C7" />
-    </PressableScale>
-  );
-});
+/** Same reason as CardGap, for the horizontal featured strip. The width is
+    shared with the strip's snap interval, so a card always lands flush. */
+const FEATURED_GAP = 10;
+
+function FeaturedGap() {
+  return <View style={styles.featuredGap} />;
+}
 
 function formatDistance(metres: number | null | undefined): string | null {
   if (metres == null) return null;
@@ -254,13 +199,16 @@ function Discover({
   active = true,
   snapTo,
 }: DiscoverProps) {
-  const [sortMode, setSortMode] = useState<DiscoverSortMode>('distance');
-  const [category, setCategory] = useState<DiscoverCategory>('all');
-  const [trendingOnly, setTrendingOnly] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
   const onViewableItemsChanged = useRef(() => {}).current;
 
-  const { userLocation, refreshSavedPlaces, savedPlaces } = useHome();
+  // Two narrow hooks rather than useHome(): this pane reads only location and
+  // places, and its subtree — an image-carrying featured strip over a long
+  // event list — is expensive enough that re-rendering it when chat history
+  // syncs is worth avoiding. See HOME.md on the domain split.
+  const { userLocation } = useHomeLocation();
+  const { overlay, setOverlay } = useHomeOverlay();
+  const { refreshSavedPlaces, savedPlaces } = useHomePlaces();
   const { query, setQuery, suggestions, status, savingId, outcomeFor, pick, reset } =
     usePlaceSearch({
       proximity: userLocation,
@@ -289,35 +237,42 @@ function Discover({
   // the moment the user commits to searching, so take the height then.
   const handleSearchFocus = useCallback(() => snapTo?.('tall'), [snapTo]);
 
-  const visiblePlaces = useMemo(() => (
-    FAKE_PLACES
-      .filter((place) => (
-        (category === 'all' || place.category === category)
-        && (!trendingOnly || place.trending)
-      ))
-      .sort((a, b) => (
-        sortMode === 'distance'
-          ? a.distanceKm - b.distanceKm
-          : b.rating - a.rating
-      ))
-  ), [category, sortMode, trendingOnly]);
+  const {
+    status: eventsStatus,
+    events,
+    featured,
+    outOfCoverage,
+    degradedSources,
+    timeframe,
+    setTimeframe,
+    category,
+    setCategory,
+    sortMode,
+    setSortMode,
+    reload: reloadEvents,
+  } = useLocalEvents({ coordinate: userLocation, active });
 
-  const distanceActions = useMemo<MenuAction[]>(() => [
-    { id: 'distance', title: 'Distance', state: sortMode === 'distance' ? 'on' : 'off' },
-    { id: 'rating', title: 'Highest rated', state: sortMode === 'rating' ? 'on' : 'off' },
+  const sortActions = useMemo<MenuAction[]>(() => [
+    { id: 'distance', title: 'Nearest', state: sortMode === 'distance' ? 'on' : 'off' },
+    { id: 'soonest', title: 'Soonest', state: sortMode === 'soonest' ? 'on' : 'off' },
   ], [sortMode]);
 
   const categoryActions = useMemo<MenuAction[]>(() => [
     { id: 'all', title: 'All categories', state: category === 'all' ? 'on' : 'off' },
-    { id: 'Parks', title: 'Parks', state: category === 'Parks' ? 'on' : 'off' },
-    { id: 'Shopping', title: 'Shopping', state: category === 'Shopping' ? 'on' : 'off' },
-    { id: 'Cafe', title: 'Cafe', state: category === 'Cafe' ? 'on' : 'off' },
+    { id: 'festival', title: 'Festivals', state: category === 'festival' ? 'on' : 'off' },
+    { id: 'market', title: 'Markets', state: category === 'market' ? 'on' : 'off' },
+    { id: 'music', title: 'Music', state: category === 'music' ? 'on' : 'off' },
+    { id: 'arts', title: 'Arts', state: category === 'arts' ? 'on' : 'off' },
+    { id: 'outdoors', title: 'Outdoors', state: category === 'outdoors' ? 'on' : 'off' },
+    { id: 'history', title: 'History', state: category === 'history' ? 'on' : 'off' },
+    { id: 'community', title: 'Community', state: category === 'community' ? 'on' : 'off' },
   ], [category]);
 
-  const trendingActions = useMemo<MenuAction[]>(() => [
-    { id: 'all', title: 'All places', state: !trendingOnly ? 'on' : 'off' },
-    { id: 'trending', title: 'Trending', state: trendingOnly ? 'on' : 'off' },
-  ], [trendingOnly]);
+  const timeframeActions = useMemo<MenuAction[]>(() => [
+    { id: 'weekend', title: 'This weekend', state: timeframe === 'weekend' ? 'on' : 'off' },
+    { id: 'week', title: 'Next 7 days', state: timeframe === 'week' ? 'on' : 'off' },
+    { id: 'month', title: 'Next 30 days', state: timeframe === 'month' ? 'on' : 'off' },
+  ], [timeframe]);
 
   const renderSuggestion = useCallback(({ item }: { item: PlaceSuggestion }) => (
     <SuggestionCard
@@ -328,12 +283,32 @@ function Discover({
     />
   ), [outcomeFor, pick, savingId]);
 
-  const renderSample = useCallback(({ item }: { item: DiscoverPlace }) => (
-    <DiscoverPlaceCard place={item} />
-  ), []);
+  /** Opens the event's own panel. `returnTo` is this pane's current overlay so
+      dismissing the detail comes back to Discover rather than the home screen. */
+  const openEvent = useCallback((event: LocalEvent) => {
+    setOverlay({ kind: 'eventDetail', event, returnTo: overlay });
+  }, [setOverlay, overlay]);
 
-  const suggestionKey = useCallback((item: PlaceSuggestion) => item.external_id, []);
-  const sampleKey = useCallback((item: DiscoverPlace) => item.id, []);
+  const renderEvent = useCallback(({ item }: { item: LocalEvent }) => (
+    <EventCard event={item} onPress={openEvent} />
+  ), [openEvent]);
+
+  const renderFeatured = useCallback(({ item }: { item: LocalEvent }) => (
+    <FeaturedEventCard event={item} onPress={openEvent} />
+  ), [openEvent]);
+
+
+  const eventsEmptyState = useMemo(() => {
+    if (eventsStatus === 'loading' || eventsStatus === 'idle') return null;
+    if (eventsStatus === 'error') {
+      return 'Could not load events right now. Pull to try again.';
+    }
+    if (outOfCoverage) {
+      return 'Local events cover the DC, Maryland, and Virginia area for now — nothing to show at your location yet.';
+    }
+    if (category !== 'all') return 'No events in this category. Try another one.';
+    return 'No events found nearby in this timeframe.';
+  }, [eventsStatus, outOfCoverage, category]);
 
   const searchEmptyState = useMemo(() => {
     if (status === 'searching') return null;
@@ -344,6 +319,72 @@ function Discover({
     }
     return null;
   }, [status, trimmedQuery, suggestions.length]);
+
+  /** Memoized because it hosts the featured strip: an image-carrying
+      horizontal list has no business re-rendering every time this pane does. */
+  const eventsHeader = useMemo(() => (
+    <View>
+      {/* The strip only earns its height when there is something in it, and it
+          is hidden under a category filter because a filtered list is a
+          deliberate search, not a browse. */}
+      {featured.length > 0 && category === 'all' ? (
+        <View style={styles.featuredSection}>
+          <Text style={styles.sectionTitle}>Worth a trip</Text>
+          <FlatList
+            horizontal
+            data={featured}
+            keyExtractor={eventKeyExtractor}
+            renderItem={renderFeatured}
+            showsHorizontalScrollIndicator={false}
+            ItemSeparatorComponent={FeaturedGap}
+            // The strip sits inside the vertical list's header, so it must not
+            // try to own the vertical gesture.
+            nestedScrollEnabled
+            snapToInterval={FEATURED_CARD_WIDTH + FEATURED_GAP}
+            decelerationRate="fast"
+            contentContainerStyle={styles.featuredContent}
+          />
+        </View>
+      ) : null}
+
+      {degradedSources.length > 0 ? (
+        <Text style={styles.degradedNote}>
+          Some event sources are unavailable — this list may be incomplete.
+        </Text>
+      ) : null}
+
+      <View style={styles.filtersRow}>
+        <FilterButton
+          label={sortMode === 'distance' ? 'Nearest' : 'Soonest'}
+          showIcon
+          actions={sortActions}
+          onSelect={(id) => {
+            if (id === 'distance' || id === 'soonest') setSortMode(id);
+          }}
+        />
+        <FilterButton
+          label={CATEGORY_LABELS[category]}
+          actions={categoryActions}
+          onSelect={(id) => setCategory(id as DiscoverCategoryFilter)}
+        />
+        <FilterButton
+          label={TIMEFRAME_LABELS[timeframe]}
+          actions={timeframeActions}
+          onSelect={(id) => setTimeframe(id as EventTimeframe)}
+        />
+      </View>
+
+      {eventsStatus === 'loading' && events.length === 0 ? (
+        <View style={styles.listLoading}>
+          <ActivityIndicator size="small" />
+        </View>
+      ) : null}
+    </View>
+  ), [
+    featured, category, renderFeatured, degradedSources.length,
+    sortMode, sortActions, setSortMode, categoryActions, setCategory,
+    timeframe, timeframeActions, setTimeframe, eventsStatus, events.length,
+  ]);
 
   const listProps = {
     scrollEnabled: verticalScrollEnabled,
@@ -394,7 +435,7 @@ function Discover({
         <FlatList
           key="discover-search-results"
           data={suggestions}
-          keyExtractor={suggestionKey}
+          keyExtractor={suggestionKeyExtractor}
           renderItem={renderSuggestion}
           {...listProps}
           ListEmptyComponent={searchEmptyState ? (
@@ -411,43 +452,27 @@ function Discover({
         />
       ) : (
         <FlatList
-          key="discover-places-list"
-          data={visiblePlaces}
-          keyExtractor={sampleKey}
-          renderItem={renderSample}
+          key="discover-events-list"
+          data={events}
+          keyExtractor={eventKeyExtractor}
+          renderItem={renderEvent}
           {...listProps}
           onViewableItemsChanged={onViewableItemsChanged}
-          ListEmptyComponent={(
+          onRefresh={reloadEvents}
+          refreshing={eventsStatus === 'loading' && events.length > 0}
+          ListEmptyComponent={eventsEmptyState ? (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>No places match these filters.</Text>
+              <Text style={styles.emptyStateText}>{eventsEmptyState}</Text>
             </View>
-          )}
-          ListHeaderComponent={
-            <View style={styles.filtersRow}>
-              <FilterButton
-                label={sortMode === 'distance' ? 'Distance' : 'Rating'}
-                showIcon
-                actions={distanceActions}
-                onSelect={(id) => {
-                  if (id === 'distance' || id === 'rating') setSortMode(id);
-                }}
-              />
-              <FilterButton
-                label={category === 'all' ? 'Category' : category}
-                actions={categoryActions}
-                onSelect={(id) => {
-                  if (id === 'all' || id === 'Parks' || id === 'Shopping' || id === 'Cafe') {
-                    setCategory(id);
-                  }
-                }}
-              />
-              <FilterButton
-                label="Trending"
-                actions={trendingActions}
-                onSelect={(id) => setTrendingOnly(id === 'trending')}
-              />
+          ) : null}
+          ListFooterComponent={events.length > 0 ? (
+            <View style={styles.attribution}>
+              <Text style={styles.attributionText}>
+                Farmers markets © USDA · Park events © NPS · © OpenStreetMap
+              </Text>
             </View>
-          }
+          ) : null}
+          ListHeaderComponent={eventsHeader}
         />
       )}
     </View>
@@ -514,6 +539,35 @@ const styles = StyleSheet.create({
     color: '#717171',
     fontSize: 14,
     fontWeight: '600',
+  },
+
+  // Featured strip
+  featuredSection: {
+    paddingBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 22,
+    color: '#1A1A1A',
+    paddingBottom: 10,
+  },
+  featuredContent: {
+    // Cancels the list's own horizontal padding so the strip can bleed to the
+    // screen edge and the last card is not clipped by it.
+    paddingRight: 16,
+  },
+  featuredGap: {
+    width: FEATURED_GAP,
+  },
+  degradedNote: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#8A8A8A',
+    paddingBottom: 8,
+  },
+  listLoading: {
+    paddingVertical: 32,
   },
 
   // List

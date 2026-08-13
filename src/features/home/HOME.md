@@ -31,16 +31,37 @@ App.tsx (HomeProvider)
 
 ## API
 
+`HomeContext` is split into five domain contexts (Overlay, Location, Places, Atlases, ChatHistory), each with its own `useMemo`'d value, so a consumer that reads only one domain doesn't re-render when an unrelated domain changes (e.g. a `PlaceCard` reading only `useHomeOverlay()`/`useHomePlaces()` doesn't re-render when chat history syncs). `useHome()` composes all five into one object for consumers that genuinely span multiple domains (e.g. `HomeScreen`, `AllPlaces`) — prefer the narrower hook when a component only needs one domain.
+
 ```ts
 // src/features/home/HomeContext.tsx
-function useHome(): {
+function useHomeOverlay(): {
   overlay: Overlay; setOverlay: (o: Overlay) => void;              // active full-screen overlay
   tabBarVisible: boolean; setTabBarVisible: (v: boolean) => void;  // fades the native tab bar
+  atlasMapState: AtlasMapState; setAtlasMapState: (s: AtlasMapState) => void;  // temporary map ownership for the map-first Atlas editor
+  activeSidekick: 'none' | 'aiChat' | 'places'; setActiveSidekick: (s) => void;  // 'aiChat' shows AIChatBox
+  importNotification: { visible: boolean; title: string; places: ParsedPlace[] } | null;
+  setImportNotification: (n) => void;                               // import completion toast payload
+};
+
+function useHomeLocation(): {
+  userLocation: [number, number];                                   // device position, or DEFAULT_MAP_CENTER when permission is refused or the fix fails
+  locationStatus: 'undetermined' | 'granted' | 'denied';            // gates the map's location puck
+  isLocationFallback: boolean;                                      // true when userLocation is the default centre, not a real fix
+  refreshUserLocation: () => Promise<[number, number]>;             // re-reads position, prompting on first call; resolves to the fallback rather than rejecting
+};
+
+function useHomePlaces(): {
   parsedPlaces: ParsedPlace[]; setParsedPlaces: (p: ParsedPlace[]) => void;  // in-progress import results, drive map markers
   savedPlaces: SavedPlace[]; setSavedPlaces: (p: SavedPlace[]) => void;     // places persisted to Supabase
   refreshSavedPlaces: () => Promise<void>;                          // re-fetches savedPlaces
   deleteSavedPlace: (id: string) => Promise<void>;                  // deletes a saved place
   updateSavedPlaceNote: (id: string, note: string) => Promise<void>; // updates a saved place's note; local cache first, syncs to Supabase
+  selectedPlaceCoordinate: [number, number] | null; setSelectedPlaceCoordinate: (c) => void;  // centers the map when set
+  selectedPlaceId: string | null; setSelectedPlaceId: (id) => void;  // highlights the map marker; set on every place-row tap (not a toggle) — My Places rows have no selected-state styling, but the chat-history places panel highlights its own row
+};
+
+function useHomeAtlases(): {
   atlases: Atlas[];                                                 // atlases persisted to Supabase, local-cache-backed
   refreshAtlases: () => Promise<void>;                              // re-fetches atlases
   createAtlas: (title: string) => Promise<Atlas | null>;            // optimistic local create, syncs to Supabase; null on failure
@@ -48,6 +69,9 @@ function useHome(): {
   atlasPlaces: AtlasPlace[];                                        // every atlas_places row for every atlas; filter by atlas_id for one atlas
   addPlacesToAtlas: (atlasId: string, placeIds: string[]) => Promise<void>;  // optimistic local insert, syncs to Supabase; skips places already in the atlas; alerts on failure
   removePlaceFromAtlas: (joinRowId: string) => Promise<void>;       // removes by atlas_places row id (not place id); local cache first, syncs to Supabase; alerts on failure
+};
+
+function useHomeChatHistory(): {
   chatHistory: ChatHistoryItem[]; setChatHistory: (i: ChatHistoryItem[]) => void;  // cached past import/chat sessions (max 50)
   deletedChatHistory: ChatHistoryItem[];                            // soft-deleted items
   activeHistoryItem: ChatHistoryItem | null; setActiveHistoryItem: (i: ChatHistoryItem | null) => void;  // session shown by AIChatBox
@@ -55,16 +79,10 @@ function useHome(): {
   replaceChatHistoryItem: (tempId: string, item: ChatHistoryItem) => void;  // swap optimistic entry once Supabase confirms
   deleteChatHistoryItem: (id: string) => void;                      // soft delete
   restoreChatHistoryItem: (id: string) => void;                     // undo soft delete
-  selectedPlaceCoordinate: [number, number] | null; setSelectedPlaceCoordinate: (c) => void;  // centers the map when set
-  selectedPlaceId: string | null; setSelectedPlaceId: (id) => void;  // highlights the map marker; set on every place-row tap (not a toggle) — My Places rows have no selected-state styling, but the chat-history places panel highlights its own row
-  importNotification: { visible: boolean; title: string; places: ParsedPlace[] } | null;
-  setImportNotification: (n) => void;                               // import completion toast payload
-  activeSidekick: 'none' | 'aiChat' | 'places'; setActiveSidekick: (s) => void;  // 'aiChat' shows AIChatBox
-  userLocation: [number, number];                                   // device position, or DEFAULT_MAP_CENTER when permission is refused or the fix fails
-  locationStatus: 'undetermined' | 'granted' | 'denied';            // gates the map's location puck
-  isLocationFallback: boolean;                                      // true when userLocation is the default centre, not a real fix
-  refreshUserLocation: () => Promise<[number, number]>;             // re-reads position, prompting on first call; resolves to the fallback rather than rejecting
 };
+
+function useHome(): ReturnType<typeof useHomeOverlay> & ReturnType<typeof useHomeLocation>
+  & ReturnType<typeof useHomePlaces> & ReturnType<typeof useHomeAtlases> & ReturnType<typeof useHomeChatHistory>;  // composes all five domains
 
 type Overlay =
   | { kind: 'none' }
@@ -74,6 +92,7 @@ type Overlay =
   | { kind: 'planDetail'; planId: string }
   | { kind: 'atlasDetail'; atlasId: string }
   | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }  // excludeIds hides already-selected places (e.g. AtlasDetail passes places already in the atlas); omit to allow duplicates (e.g. the plan flow). returnTo is the overlay to restore on dismiss/confirm — the caller's own overlay state (e.g. `{ kind: 'atlasDetail', atlasId }`); omit to fall back to `{ kind: 'none' }`
+  | { kind: 'eventDetail'; event: LocalEvent; returnTo?: Overlay }  // carries the event itself, not an id — a Discover event is not persisted until the user saves it, so there is nothing to look up
   | { kind: 'createPlan' };
 
 // src/features/home/HomeTabBar.tsx
@@ -87,3 +106,4 @@ const TAB_ADD: string;     // not a pager page — triggers onAddPress instead
 - [CHAT-HISTORY.md](../atlas-ai/chat-history/CHAT-HISTORY.md) — `AtlasAIHome` / `HistoryPlacesPanel`, currently unmounted
 - [AI-CHAT.md](../atlas-ai/ai-chat/AI-CHAT.md) — `AIChatBox`, mounted directly by `HomeScreen`
 - [ADD-PLACE.md](../add-place/ADD-PLACE.md) — `AddPlace` overlay, opened via the `addPlace` `Overlay` variant
+- [EVENT-DETAIL.md](../event-detail/EVENT-DETAIL.md) — `EventDetail` overlay, opened via the `eventDetail` `Overlay` variant

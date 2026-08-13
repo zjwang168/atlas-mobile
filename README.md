@@ -333,6 +333,10 @@ OPENAI_BASE_URL_MANGO=
 
 Depending on the enabled import modes, also configure the relevant keys such as `GLM_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` for the photo-vision service, `APIFY_TOKEN`, `GROQ_API_KEY`, `TAVILY_API_KEY`, and geocoding-provider keys.
 
+Discover's local events need `USDA_API_KEY` and `NPS_API_KEY`, both free self-service signups. Neither is required to boot: `GET /events` still answers without them and reports the missing source as `not_configured` rather than failing.
+
+[`.env.example`](.env.example) lists every variable the project reads, grouped by the feature that needs it — copy it to `.env` as a starting point.
+
 ### Database Setup
 
 Run the base Supabase schema before using persistence features:

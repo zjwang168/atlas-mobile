@@ -9,6 +9,9 @@ import { StyleSheet, TouchableOpacity, View } from 'react-native';
 
 const LIQUID_GLASS_AVAILABLE =
   isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
+// Matches --color-primary in src/theme/THEME.md's token table — same value in
+// light and dark, so no useColorScheme() branch is needed here.
+const PRIMARY_COLOR = '#12C170';
 
 type LeftNavProps = {
   onNavigatePress?: () => void;
@@ -60,7 +63,7 @@ export default function LeftNav({ onNavigatePress }: LeftNavProps) {
           />
         )}
         <View style={blurStyle}>
-          <NavigationArrowIcon size={24} weight="regular" color="#175CFF" />
+          <NavigationArrowIcon size={24} weight="fill" color={PRIMARY_COLOR} />
         </View>
       </TouchableOpacity>
     </View>

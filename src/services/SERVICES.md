@@ -46,6 +46,45 @@ export async function parseInput(input: string): Promise<ParseResult>
 
 `parseInput()` routes to the appropriate backend flow and adapts the response into the import screens' `ParseResult` shape, including backend-filled `photo_url` as the place `imageUri`.
 
+### `events/eventsService.ts`
+
+Local events near a coordinate, from the backend's `GET /events`.
+
+Coverage is the DMV only, so an empty result is far more likely to mean "you are not in that area" than "nothing is on" — `isEmptyAwayFromCoverage()` distinguishes the two so a caller can say which. A source that fails while others succeed does not fail the request; `failedSources()` names them for a "may be incomplete" note.
+
+```ts
+export const DEFAULT_RADIUS_KM: number
+export const DEFAULT_WINDOW_DAYS: number
+
+export type EventsQuery = {
+  coordinate: [number, number];   // [lng, lat], matching HomeContext.userLocation
+  radiusKm?: number;
+  windowDays?: number;            // how far ahead to look for dated events
+  categories?: EventCategory[];
+  sort?: 'distance' | 'soonest';
+  limit?: number;
+};
+
+/** Throws on transport failure or a non-2xx; aborts on either the caller's signal or its own timeout. */
+export async function fetchEvents(query: EventsQuery, signal?: AbortSignal): Promise<EventsResult>
+export function isAbortError(error: unknown): boolean
+export function isEmptyAwayFromCoverage(result: EventsResult): boolean  // succeeded, but found nothing
+export function failedSources(result: EventsResult): string[]           // sources that errored
+```
+
+`EventsResult` and `LocalEvent` are defined in `src/types/event.ts`. See `backend/services/events_service/EVENTS-SERVICE.md` for the source behaviour behind them.
+
+### `events/eventPlaceAdapter.ts`
+
+Adapts a `LocalEvent` into the `ParsedPlace` shape `savePlaces()` accepts, so an event can be saved with no new table and no new sync path.
+
+Writes `externalId`/`externalSource`, which is what makes saving idempotent: `isSamePlace()` matches on the provider id alone, so saving the same event twice reports a duplicate instead of creating a second row. A stock category image is deliberately dropped rather than carried onto the saved place — see `EVENT-DETAIL.md`.
+
+```ts
+export const EVENT_PLACE_SOURCE: string   // stored in places.external_source
+export function eventToParsedPlace(event: LocalEvent): ParsedPlace
+```
+
 ### `location/locationService.ts`
 
 Device location via `expo-location`. Every call resolves to a usable coordinate, falling back to `DEFAULT_MAP_CENTER` when permission is refused, location services are off, or the fix fails — it never throws and never returns null, so callers don't each reimplement the fallback.

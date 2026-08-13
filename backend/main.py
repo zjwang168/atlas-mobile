@@ -7,6 +7,7 @@ Endpoints:
   POST /parse_link          — Accept a URL, extract locations via agent pipeline, plan a route.
   GET  /places/search       — Typeahead place suggestions (no coordinates) via Mapbox Search Box.
   GET  /places/retrieve/{id}— Resolve one suggestion into saveable places.
+  GET  /events              — Local events near a point, distance-sorted.
   POST /chat                — Continue conversation with the AI agent.
   GET  /sessions            — List all active sessions.
   POST /sessions/{id}/save  — Persist a session to Supabase.
@@ -65,6 +66,7 @@ from backend.services.place_image_service.place_image_service import (
     fetch_photos_for_places,
     get_or_build_response,
 )
+from backend.services import events_service
 from backend.services import place_search_service
 from backend.services.link_preview import build_link_preview
 from backend.services.translation import translate_to_english
@@ -337,6 +339,49 @@ class PlaceRetrieveResponse(BaseModel):
     # Reuses LocationItem so the client adapts these exactly like parse results.
     locations: list[LocationItem]
     attribution: str
+
+
+class EventItem(BaseModel):
+    id: str
+    source: str                          # "usda" | "nps" | "curated"
+    title: str
+    category: str                        # one of events_service.CATEGORIES
+    # A dated event fills starts_at; a recurring one (a market, a season-long
+    # festival) leaves it null and fills schedule_text instead. Clients branch
+    # on which is present, not on `source`.
+    starts_at: Optional[str] = None
+    ends_at: Optional[str] = None
+    schedule_text: Optional[str] = None
+    location_name: Optional[str] = None
+    address: Optional[str] = None
+    # Never null: a row a source could not place is dropped upstream.
+    latitude: float
+    longitude: float
+    distance_km: float
+    url: Optional[str] = None
+    image_url: Optional[str] = None
+    image_attribution: Optional[str] = None   # e.g. "NPS"; null for stock imagery
+    image_is_stock: bool = False              # generic category photo, not of this event
+    blurb: Optional[str] = None
+    is_free: Optional[bool] = None
+    featured: bool = False               # signature event; protected from `limit`
+
+
+class EventSourceStatus(BaseModel):
+    id: str
+    status: str                          # "ok" | "unavailable" | "not_configured"
+    count: int
+    detail: Optional[str] = None
+
+
+class EventsResponse(BaseModel):
+    events: list[EventItem]
+    # Per-source outcome, so a client can say which feed is missing rather than
+    # showing a short list as if it were complete.
+    sources: list[EventSourceStatus]
+    attribution: str
+    radius_km: float
+    window_days: int
 
 
 # ---- Endpoints ----
@@ -1152,6 +1197,53 @@ async def places_retrieve(
     return PlaceRetrieveResponse(
         locations=[LocationItem(**item) for item in locations],
         attribution=place_search_service.ATTRIBUTION,
+    )
+
+
+@app.get("/events", response_model=EventsResponse,
+         responses={422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
+async def list_events(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude to search around"),
+    lng: float = Query(..., ge=-180, le=180, description="Longitude to search around"),
+    radius_km: float = Query(
+        events_service.DEFAULT_RADIUS_KM, gt=0, le=events_service.MAX_RADIUS_KM
+    ),
+    window_days: int = Query(
+        events_service.DEFAULT_WINDOW_DAYS, ge=1, le=events_service.MAX_WINDOW_DAYS,
+        description="How far ahead to look for dated events",
+    ),
+    categories: Optional[str] = Query(
+        None,
+        description=f"Comma-separated subset of: {', '.join(events_service.CATEGORIES)}",
+    ),
+    sort: str = Query("distance", description='"distance" or "soonest"'),
+    limit: int = Query(events_service.DEFAULT_LIMIT, ge=1, le=events_service.MAX_LIMIT),
+) -> EventsResponse:
+    """Local events near a point, distance-sorted.
+
+    Every returned event carries coordinates — rows a source could not place
+    are dropped rather than shown at an invented location. A source that fails
+    is reported in `sources` with the others still served, so a partial answer
+    is normal and is not an error.
+    """
+    try:
+        result = await events_service.get_events(
+            lat, lng,
+            radius_km=radius_km,
+            window_days=window_days,
+            categories=categories.split(",") if categories else None,
+            sort=sort,
+            limit=limit,
+        )
+    except events_service.EventsUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return EventsResponse(
+        events=[EventItem(**item) for item in result["events"]],
+        sources=[EventSourceStatus(**item) for item in result["sources"]],
+        attribution=result["attribution"],
+        radius_km=result["radius_km"],
+        window_days=result["window_days"],
     )
 
 

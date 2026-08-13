@@ -7,7 +7,7 @@ import { createPlanCache, type DateRange } from '../createPlanState';
 import { DndProvider } from './dnd/DndProvider';
 import FlexiblePlaceField from './flexible-place-field/FlexiblePlaceField';
 import DateRangeField from './date-range-field/DateRangeField';
-import { useHome } from '../../../home/HomeContext';
+import { useHomeOverlay } from '../../../home/HomeContext';
 import { type PlacesState, type SlotKey, type PlannedPlace, type TimeSlot, newPlannedPlace } from './types';
 import { savePlan, type SavedPlan } from '../savePlan';
 
@@ -42,7 +42,7 @@ function formatRangeSummary(location: string, range: DateRange): string {
 }
 
 export default function PlanPlace({ onBack, onConfirm, location, range, reportScrollY, inline }: PlanPlaceProps) {
-  const { setOverlay } = useHome();
+  const { setOverlay } = useHomeOverlay();
   const insets = useSafeAreaInsets();
   const [places, setPlaces] = useState<PlacesState>(() => createPlanCache.places);
   const addPlaceReturnTo = inline ? ({ kind: 'none' } as const) : ({ kind: 'createPlan' } as const);

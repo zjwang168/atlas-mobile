@@ -7,8 +7,8 @@ import { BlurView } from 'expo-blur';
 import type { Icon } from 'phosphor-react-native';
 import { MapPinLineIcon } from 'phosphor-react-native/src/icons/MapPinLine';
 import { ChatTeardropIcon } from 'phosphor-react-native/src/icons/ChatTeardrop';
+import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { PlusIcon } from 'phosphor-react-native/src/icons/Plus';
-import { SuitcaseSimpleIcon } from 'phosphor-react-native/src/icons/SuitcaseSimple';
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
@@ -64,7 +64,7 @@ const TAB_ITEMS: TabItem[] = [
   {
     key: TAB_PLAN,
     label: 'My Plan',
-    icon: SuitcaseSimpleIcon,
+    icon: MapTrifoldIcon,
   },
   {
     key: TAB_CHAT,

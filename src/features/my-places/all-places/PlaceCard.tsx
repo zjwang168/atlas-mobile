@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { PlaceCover } from '@/components/place-cover/PlaceCover';
 import { Text } from '@/components/ui/text';
-import { useHome } from '@/features/home/HomeContext';
+import { useHomeOverlay, useHomePlaces } from '@/features/home/HomeContext';
 import { typography } from '@/theme/typography';
 import { PlaceDetail } from '@/types/place';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -49,7 +49,8 @@ export const PlaceCard = memo(function PlaceCard({ item, selected = false, onPre
   const swipeableRef = useRef<SwipeableMethods>(null);
   const [failedImageUri, setFailedImageUri] = useState<string | null>(null);
   const [locallySelected, setLocallySelected] = useState(false);
-  const { overlay, setOverlay, selectedPlaceId } = useHome();
+  const { overlay, setOverlay } = useHomeOverlay();
+  const { selectedPlaceId } = useHomePlaces();
   const specialRole = item.specialRole;
   const displayName = specialRole ? specialRole[0].toUpperCase() + specialRole.slice(1) : item.name;
 

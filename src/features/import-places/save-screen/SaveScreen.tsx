@@ -6,23 +6,23 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  FlatList,
   Image,
-  PanResponder,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import TopBlurFade from '../../../components/ui/top-blur-fade';
-import { type ParseResult } from '../../../services/import/importService';
+import { type ParsedPlace, type ParseResult } from '../../../services/import/importService';
 import { isSamePlace } from '../../../services/place/placeService';
 import { typography } from '../../../theme/typography';
-import { useHome } from '../../home/HomeContext';
+import { useHomePlaces } from '../../home/HomeContext';
 import MapboxMap, { type MapboxMapHandle, type MapMarker } from '../../map/MapboxMap';
 import PlaceDetail from '../../place-detail/PlaceDetail';
 
@@ -46,6 +46,16 @@ type SaveScreenProps = {
   onSave: (selectedIds: string[]) => void;
   onSaveAndAskAI: (selectedIds: string[]) => void;
 };
+
+function sentimentLabel(sentiment?: string | null) {
+  if (sentiment === 'positive') return 'Recommended';
+  if (sentiment === 'negative') return 'Not recommended';
+  return 'Neutral';
+}
+
+function keyExtractor(place: ParsedPlace): string {
+  return place.id;
+}
 
 function PlaceThumbnail({ uri }: { uri?: string }) {
   const [failedUri, setFailedUri] = useState<string | null>(null);
@@ -71,7 +81,7 @@ function PlaceThumbnail({ uri }: { uri?: string }) {
 export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSaveAndAskAI }: SaveScreenProps) {
   const insets = useSafeAreaInsets();
   const { height: screenH } = useWindowDimensions();
-  const { savedPlaces } = useHome();
+  const { savedPlaces } = useHomePlaces();
 
   const isPlaceAlreadySaved = useCallback(
     (place: { name: string; latitude: number; longitude: number }) =>
@@ -114,9 +124,9 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
     [result.places, selectedPlace]
   );
 
-  const toggleOne = (id: string) => {
+  const toggleOne = useCallback((id: string) => {
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
+  }, []);
   const toggleAll = () =>
     setSelected((prev) => ({
       ...prev,
@@ -151,14 +161,14 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
     ? [selectedPlace.longitude, selectedPlace.latitude] as [number, number]
     : result.centerCoordinate;
 
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlatList<ParsedPlace>>(null);
   const rowOffsetsRef = useRef<Record<string, number>>({});
   const [measuredRows, setMeasuredRows] = useState(0);
 
   useEffect(() => {
     if (!selectedPlaceId) return;
     const offset = rowOffsetsRef.current[selectedPlaceId];
-    if (offset !== undefined) scrollRef.current?.scrollTo({ y: offset, animated: true });
+    if (offset !== undefined) scrollRef.current?.scrollToOffset({ offset, animated: true });
   }, [measuredRows, selectedPlaceId]);
 
   const mapZoom = selectedPlaceId ? 15 : 12;
@@ -184,34 +194,82 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
     }).start();
   }, [screenTransition, selectedIds]);
 
-  const panResponder = useMemo(
+  // Recognized by gesture-handler's native gesture recognizer rather than
+  // PanResponder's JS touch responder system; runOnJS(true) is required
+  // because the handlers below write to a classic Animated.Value
+  // (animatedPanelHeight) and call an imperative native method, neither of
+  // which a UI-thread worklet can do directly.
+  const dragGesture = useMemo(
     () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
+      Gesture.Pan()
+        .runOnJS(true)
+        .minDistance(0)
+        .onBegin(() => {
           startPanelHeight.current = currentPanelHeight.current;
-        },
-        onPanResponderMove: (_, gesture) => {
+        })
+        .onUpdate((event) => {
           const nextHeight = Math.max(
             minPanelHeight,
-            Math.min(maxPanelHeight, startPanelHeight.current - gesture.dy),
+            Math.min(maxPanelHeight, startPanelHeight.current - event.translationY),
           );
           currentPanelHeight.current = nextHeight;
           animatedPanelHeight.setValue(nextHeight);
           mapRef.current?.setPaddingBottom(nextHeight);
-        },
-        onPanResponderRelease: () => setMapPaddingBottom(currentPanelHeight.current),
-        onPanResponderTerminate: () => setMapPaddingBottom(currentPanelHeight.current),
-      }),
+        })
+        .onEnd(() => setMapPaddingBottom(currentPanelHeight.current))
+        .onFinalize(() => setMapPaddingBottom(currentPanelHeight.current)),
     [animatedPanelHeight, maxPanelHeight, minPanelHeight],
   );
 
-  const sentimentLabel = (sentiment?: string | null) => {
-    if (sentiment === 'positive') return 'Recommended';
-    if (sentiment === 'negative') return 'Not recommended';
-    return 'Neutral';
-  };
+  const renderItem = useCallback(({ item: place, index: i }: { item: ParsedPlace; index: number }) => (
+    <Pressable
+      style={[
+        styles.row,
+        i > 0 && styles.rowDivider,
+        selectedPlaceId === place.id && styles.rowActive,
+      ]}
+      onPress={() => setSelectedPlaceId(place.id)}
+      onLayout={(event) => {
+        const offset = event.nativeEvent.layout.y;
+        if (rowOffsetsRef.current[place.id] === offset) return;
+        rowOffsetsRef.current[place.id] = offset;
+        setMeasuredRows((count) => count + 1);
+      }}
+    >
+      <PlaceThumbnail uri={place.imageUri} />
+      <View style={styles.rowText}>
+        <Text style={styles.rowName} numberOfLines={1}>
+          {place.name}
+        </Text>
+        <Text style={styles.rowSubtitle} numberOfLines={2}>
+          {place.subtitle}
+        </Text>
+        <View style={[
+          styles.sentimentChip,
+          place.sentiment === 'positive' && styles.sentimentPositive,
+          place.sentiment === 'negative' && styles.sentimentNegative,
+        ]}>
+          <Text style={styles.sentimentText}>{sentimentLabel(place.sentiment)}</Text>
+        </View>
+      </View>
+      <View style={styles.checkWrap}>
+        {isPlaceAlreadySaved(place) ? (
+          <View style={styles.savedBadge}>
+            <Text style={styles.savedBadgeText}>Saved</Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            onPress={() => toggleOne(place.id)}
+            hitSlop={10}
+            activeOpacity={0.7}
+            style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
+          >
+            {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+          </TouchableOpacity>
+        )}
+      </View>
+    </Pressable>
+  ), [selectedPlaceId, isPlaceAlreadySaved, selected, toggleOne]);
 
   return (
     <Animated.View style={[styles.container, { opacity: screenTransition }]}>
@@ -255,9 +313,11 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
         ]}
       >
         <Animated.View style={[styles.panelContent, { height: animatedPanelHeight }]}>
-          <View style={styles.dragHandleWrap} {...panResponder.panHandlers}>
-            <View style={styles.dragHandle} />
-          </View>
+          <GestureDetector gesture={dragGesture}>
+            <View style={styles.dragHandleWrap}>
+              <View style={styles.dragHandle} />
+            </View>
+          </GestureDetector>
           <View style={styles.header}>
             <Text style={styles.title}>Save places</Text>
             <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.7}>
@@ -274,63 +334,15 @@ export default function SaveScreen({ result, sessionTheme, onClose, onSave, onSa
             </TouchableOpacity>
           </View>
 
-          <ScrollView
+          <FlatList
             ref={scrollRef}
             style={styles.list}
+            data={result.places}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
             contentContainerStyle={{ paddingBottom: 150 }}
             showsVerticalScrollIndicator={false}
-          >
-            {result.places.map((place, i) => (
-              <Pressable
-                key={place.id}
-                style={[
-                  styles.row,
-                  i > 0 && styles.rowDivider,
-                  selectedPlaceId === place.id && styles.rowActive,
-                ]}
-                onPress={() => setSelectedPlaceId(place.id)}
-                onLayout={(event) => {
-                  const offset = event.nativeEvent.layout.y;
-                  if (rowOffsetsRef.current[place.id] === offset) return;
-                  rowOffsetsRef.current[place.id] = offset;
-                  setMeasuredRows((count) => count + 1);
-                }}
-              >
-                <PlaceThumbnail uri={place.imageUri} />
-                <View style={styles.rowText}>
-                  <Text style={styles.rowName} numberOfLines={1}>
-                    {place.name}
-                  </Text>
-                  <Text style={styles.rowSubtitle} numberOfLines={2}>
-                    {place.subtitle}
-                  </Text>
-                  <View style={[
-                    styles.sentimentChip,
-                    place.sentiment === 'positive' && styles.sentimentPositive,
-                    place.sentiment === 'negative' && styles.sentimentNegative,
-                  ]}>
-                    <Text style={styles.sentimentText}>{sentimentLabel(place.sentiment)}</Text>
-                  </View>
-                </View>
-                <View style={styles.checkWrap}>
-                  {isPlaceAlreadySaved(place) ? (
-                    <View style={styles.savedBadge}>
-                      <Text style={styles.savedBadgeText}>Saved</Text>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      onPress={() => toggleOne(place.id)}
-                      hitSlop={10}
-                      activeOpacity={0.7}
-                      style={[styles.check, selected[place.id] ? styles.checkOn : styles.checkOff]}
-                    >
-                      {selected[place.id] ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </Pressable>
-            ))}
-          </ScrollView>
+          />
 
           {/* Bottom gradient-blur fade behind the buttons. */}
           <MaskedView
