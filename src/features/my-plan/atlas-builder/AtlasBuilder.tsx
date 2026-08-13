@@ -63,6 +63,11 @@ import {
 
 export type { AtlasSavedMapView, DraftPlace } from './types';
 
+// Roughly 1 cm on the iPhone 17 Pro Max display. This is applied as extra
+// bottom camera padding, which moves the visible country/map upward while
+// preserving Mapbox's fitted country bounds and the editor panel layout.
+const CREATE_ATLAS_CAMERA_VERTICAL_OFFSET = 38;
+
 export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces } = useHomePlaces();
@@ -1575,7 +1580,9 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useLayoutEffect(() => {
     setAtlasMapState({
       markers: mapMarkers,
-      cameraVerticalOffset: 0,
+      // The empty Create screen receives a small extra upward offset, keeping
+      // the GPS-country view comfortably above its lower editor sheet.
+      cameraVerticalOffset: isCreateAtlasLanding ? CREATE_ATLAS_CAMERA_VERTICAL_OFFSET : 0,
       // The editor sheet occupies the lower screen. Let HomeScreen pass its
       // measured height as camera padding so both a GPS-country camera and an
       // Edit Atlas focus area center in the remaining upper map viewport.

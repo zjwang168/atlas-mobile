@@ -42,7 +42,7 @@ export default {
     },
     plugins: [
       'expo-font',
-      'expo-notifications',
+      
       ['expo-media-library', { photosPermission: 'Allow OurAtlas to save your shared atlas image.' }],
       'expo-sharing',
       ['expo-audio', { microphonePermission: 'Allow OurAtlas to use your microphone for voice input.' }],
