@@ -86,6 +86,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [fullResults, setFullResults] = useState<SearchResult[] | null>(null);
   const [items, setItems] = useState<DraftPlace[]>(initialItems ?? []);
   const [focused, setFocused] = useState<DraftPlace | null>(null);
+  const [searchCandidateVisible, setSearchCandidateVisible] = useState(false);
   const seedAttemptedRef = useRef(false);
   const seedUserInteractedRef = useRef(false);
   const seedRequestIdRef = useRef(0);
@@ -139,6 +140,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const aiRecommendationSessionId = useRef(`atlas-edit-${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
   const aiRecommendedNamesRef = useRef(new Set((initialCandidates ?? []).map((place) => normalize(place.name)).filter(Boolean)));
   const [cameraKey, setCameraKey] = useState(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const [searchCandidateBottom, setSearchCandidateBottom] = useState(0);
   const initialPlaceSelected = useRef(false);
   const timeConflictTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Saving hands the shared map directly to the completed Atlas. Its unmount
@@ -440,6 +442,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     inputRef.current?.blur();
     setResults([]);
     setFocused(null);
+    setSearchCandidateVisible(false);
   }, []);
 
   const handleQueryChange = useCallback((nextQuery: string) => {
@@ -458,7 +461,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
   }, []);
 
-  const focus = useCallback((place: DraftPlace, bounds?: { ne: [number, number]; sw: [number, number] }) => {
+  const focus = useCallback((place: DraftPlace, bounds?: { ne: [number, number]; sw: [number, number] }, showSearchCandidate = false) => {
     seedUserInteractedRef.current = true;
     if (seedNoteTimerRef.current) clearTimeout(seedNoteTimerRef.current);
     setSeedNoteVisible(false);
@@ -466,6 +469,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setMapCenter([place.longitude, place.latitude]);
     setMapBounds(bounds);
     setMapZoom(bounds ? zoomForBounds(bounds) : 15);
+    setSearchCandidateVisible(showSearchCandidate);
   }, []);
 
   const openFocusSearch = useCallback(() => {
@@ -1069,6 +1073,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // Once added, clear the candidate action bar so the next map selection
     // is visibly a fresh place to add rather than the already-added name.
     setFocused(null);
+    setSearchCandidateVisible(false);
     setSaveActionsOpen(false);
     setQuery('');
     setResults([]);
@@ -1082,7 +1087,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const handleResultFocus = useCallback(async (result: SearchResult) => {
     try {
       const place = await resolveResult(result);
-      if (place) focus(place);
+      if (place) focus(place, undefined, true);
       inputRef.current?.blur();
       setResults([]);
     } catch (error) {
@@ -1472,8 +1477,13 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     !savingKind ? <>
       {mapSearchOverlay}
       {localMustSeesVisible ? <Animated.View pointerEvents="none" style={[styles.localMustSeesToast, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text></Animated.View> : null}
+      {searchCandidateVisible && focused ? <View pointerEvents="box-none" style={[styles.searchCandidateLayer, { bottom: searchCandidateBottom }]}><View pointerEvents="auto" style={styles.searchCandidateCard}><View style={styles.searchCandidateCopy}><Text numberOfLines={1} style={styles.searchCandidateName}>{focused.name}</Text><Text numberOfLines={1} style={styles.searchCandidateAddress}>{focused.subtitle}</Text></View><TouchableOpacity accessibilityLabel={`Add ${focused.name} to Atlas`} onPress={() => addPlace(focused)} style={styles.searchCandidateAdd}><Ionicons name="add" size={19} color="#FFFFFF" /></TouchableOpacity></View></View> : null}
     </> : null
-  ), [localMustSeesOpacity, localMustSeesVisible, mapSearchOverlay, savingKind]);
+  ), [addPlace, focused, localMustSeesOpacity, localMustSeesVisible, mapSearchOverlay, savingKind, searchCandidateBottom, searchCandidateVisible]);
+
+  const handlePanelHeightChange = useCallback((height: number) => {
+    setSearchCandidateBottom(Math.max(0, height + 12));
+  }, []);
 
   useLayoutEffect(() => {
     setAtlasMapState({
@@ -1497,6 +1507,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       routeGeoJSON: route?.route,
       deletingMarkerId: removingPlace?.id,
       onMarkerPress: (marker) => {
+        setSearchCandidateVisible(false);
         const atlasItem = items.find((item) => item.id === marker.id);
         const recommended = recommendedPlaces.find((item) => item.id === marker.id);
         if (atlasItem) focus(atlasItem);
@@ -1512,6 +1523,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         viewportZoomRef.current = zoom;
         scheduleNearbyPrompt(center);
       },
+      onPanelHeightChange: handlePanelHeightChange,
       // Bounds are a one-shot fit command, not a permanent camera lock.
       // Leaving them in shared state makes unrelated editor updates re-own
       // the native map camera and blocks later pan/zoom gestures.
@@ -1520,7 +1532,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       hideTopSearchButton: true,
       markerPopup: null,
     });
-  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, hideTransientUI, isCreateAtlasLanding, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
+  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, isCreateAtlasLanding, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
 
   useEffect(() => () => {
     if (!preserveMapOnUnmountRef.current) setAtlasMapState(null);
