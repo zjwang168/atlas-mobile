@@ -387,6 +387,14 @@ function Discover({
   ]);
 
   const listProps = {
+    // The default window is 21 screens, so a 200-row list keeps roughly 170
+    // rows mounted — and every event now carries a photo, so that is 170 live
+    // image decodes. Five screens is still two above and two below the
+    // viewport, which is ample for a flick.
+    windowSize: 5,
+    maxToRenderPerBatch: 6,
+    initialNumToRender: 8,
+    updateCellsBatchingPeriod: 50,
     scrollEnabled: verticalScrollEnabled,
     contentContainerStyle: [styles.listContent, { paddingBottom: bottomInset + 44 }],
     showsVerticalScrollIndicator: false,
