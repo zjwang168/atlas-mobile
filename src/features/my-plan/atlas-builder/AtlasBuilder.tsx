@@ -318,7 +318,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setLocalMustSeesVisible(true);
     localMustSeesOpacity.stopAnimation();
     Animated.timing(localMustSeesOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
-    const timeout = setTimeout(hideLocalMustSees, 10_000);
+    const timeout = setTimeout(hideLocalMustSees, 3_000);
     return () => clearTimeout(timeout);
   }, [hideLocalMustSees, hideNearbyPrompt, localMustSeesOpacity, localMustSeesPending]);
 
@@ -583,9 +583,27 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // This is only for a newly opened focus area with no saved-pin candidate.
     // An existing Atlas hydrates its persisted items asynchronously and must
     // never receive an unsolicited seed point.
-    if (!started || atlasId || seedAttemptedRef.current || initialCandidates?.length || items.length > 0 || focused) return;
+    if (!started || atlasId || seedAttemptedRef.current || items.length > 0 || focused) return;
     const center = initialCenter ?? mapCenter;
     const bounds = mapBounds ?? initialBounds;
+    const savedCandidate = savedPlaces
+      .filter((place) => bounds ? isWithinBounds(place, bounds) : isNearCoordinate(place, center))
+      .sort((left, right) => {
+        const leftDistance = (left.longitude - center[0]) ** 2 + (left.latitude - center[1]) ** 2;
+        const rightDistance = (right.longitude - center[0]) ** 2 + (right.latitude - center[1]) ** 2;
+        return leftDistance - rightDistance;
+      })[0];
+    if (savedCandidate) {
+      seedAttemptedRef.current = true;
+      seedAutoSelectedRef.current = true;
+      console.info('[AtlasSeed] saved-place-selected', {
+        name: savedCandidate.name,
+        coordinate: [savedCandidate.longitude, savedCandidate.latitude],
+        source: 'seed-effect',
+      });
+      setFocused(toDraft(savedCandidate));
+      return;
+    }
     seedAttemptedRef.current = true;
     const requestId = ++seedRequestIdRef.current;
     console.info('[AtlasSeed] effect-start', { requestId, center, bounds, savedPlaces: savedPlaces.length });
@@ -604,7 +622,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       // that context update recreates resolveFocusSeed and used to strand the
       // one-shot seed before Mapbox retrieve could run.
     };
-  }, [atlasId, focused, initialBounds, initialCandidates?.length, initialCenter, initialLocation, items.length, mapBounds, mapCenter, resolveFocusSeed, savedPlaces.length, started]);
+  }, [atlasId, focused, initialBounds, initialCenter, initialLocation, items.length, mapBounds, mapCenter, resolveFocusSeed, savedPlaces, started]);
 
   useEffect(() => {
     // Mapbox Search Box can return generic POIs from another region for broad
@@ -1435,12 +1453,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const mapSearchOverlay = useMemo(() => <Animated.View pointerEvents="box-none" style={[styles.mapSearchLayer, { opacity: searchAppear, transform: [{ translateX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [-34, 0] }) }, { scaleX: searchAppear.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }) }] }]}>
     <View pointerEvents="auto" style={styles.mapSearchBox}>
       <Ionicons name={focusSearchActive ? 'locate-outline' : 'search'} size={18} color={focusSearchActive ? '#12C170' : '#6B7280'} />
-      <TextInput ref={inputRef} value={query} onChangeText={handleQueryChange} placeholder={focusSearchActive ? 'Search an area' : 'Search places'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={focusSearchActive ? openFullSearch : undefined} />
+      <TextInput ref={inputRef} value={query} onChangeText={handleQueryChange} placeholder={focusSearchActive ? 'Search an area' : 'Building Atlas in...'} placeholderTextColor="#8E8E93" style={styles.searchInput} returnKeyType="search" onSubmitEditing={focusSearchActive ? openFullSearch : undefined} />
       {searching ? <ActivityIndicator size="small" color="#2563EB" /> : focusSearchActive ? <TouchableOpacity accessibilityLabel="Focus search area" onPress={openFullSearch} style={styles.searchSubmit}><Ionicons name="arrow-forward" size={17} color="#2563EB" /></TouchableOpacity> : null}
       {focusSearchActive ? <TouchableOpacity accessibilityLabel="Close focus search" onPress={closeFocusSearch} style={styles.searchClose}><Ionicons name="close" size={16} color="#64748B" /></TouchableOpacity> : null}
     </View>
     {seedNoteVisible ? <Animated.View pointerEvents="none" style={[styles.seedNote, { opacity: seedNoteOpacity }]}><Text style={styles.seedNoteText}>Tap any point on the map or search to choose a different place to add.</Text></Animated.View> : null}
-    {localMustSeesVisible ? <Animated.View pointerEvents="box-none" style={[styles.localMustSeesNoteRow, { opacity: localMustSeesOpacity }]}><View pointerEvents="auto" style={styles.localMustSeesNote}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text><TouchableOpacity accessibilityLabel="Dismiss local must-sees note" onPress={hideLocalMustSees} style={styles.localMustSeesClose}><Ionicons name="close" size={13} color="#5E6070" /></TouchableOpacity></View></Animated.View> : null}
     {nearbyPromptVisible ? <Animated.View pointerEvents="box-none" style={[styles.nearbyPromptRow, { opacity: nearbyPromptOpacity }]}><View pointerEvents="auto" style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
     {results.length > 0 ? <View pointerEvents="auto" style={styles.results}><ScrollView nestedScrollEnabled showsVerticalScrollIndicator style={styles.searchResultsScroll}>{results.map((result) => {
       const key = result.kind === 'saved' ? result.place.id : result.externalId;
@@ -1452,8 +1469,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   </Animated.View>, [addingResult, beginAtlasFromSearchResult, closeFocusSearch, focusAreaResult, focusSearchActive, handleQueryChange, handleResultAdd, handleResultFocus, hideLocalMustSees, isCreateAtlasLanding, localMustSeesOpacity, localMustSeesVisible, nearbyPromptOpacity, nearbyPromptVisible, nearbyRecommending, openFullSearch, query, recommendNearby, recommendedPlaces.length, results, searchAppear, searching]);
 
   const atlasMapOverlay = useMemo(() => (
-    !savingKind ? mapSearchOverlay : null
-  ), [mapSearchOverlay, savingKind]);
+    !savingKind ? <>
+      {mapSearchOverlay}
+      {localMustSeesVisible ? <Animated.View pointerEvents="none" style={[styles.localMustSeesToast, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text></Animated.View> : null}
+    </> : null
+  ), [localMustSeesOpacity, localMustSeesVisible, mapSearchOverlay, savingKind]);
 
   useLayoutEffect(() => {
     setAtlasMapState({

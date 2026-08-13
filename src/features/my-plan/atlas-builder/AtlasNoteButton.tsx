@@ -36,7 +36,6 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
   const transcribeRecording = useCallback(async () => {
     setRecording(false);
     setTranscribing(true);
-    setVisible(true);
     try {
       await recorder.stop();
       if (!recorder.uri) throw new Error('No recording was created');
@@ -44,17 +43,25 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
       const transcript = result.text.trim();
       if (!transcript) {
         setError('No speech was detected. Try again or type your note.');
+        setVisible(true);
         return;
       }
-      setNote((current) => current.trim() ? `${current.trim()} ${transcript}` : transcript);
+      const existingNote = initialNote?.trim();
+      const savedNote = existingNote ? `${existingNote} ${transcript}` : transcript;
+      // A voice note is complete on release: save its transcript immediately
+      // instead of opening the text editor for an extra confirmation step.
+      setNote(savedNote);
+      onSave(savedNote);
+      setVisible(false);
     } catch (cause) {
       console.warn('[AtlasNote] transcription failed', cause);
       setError('Voice input was not available. You can type your note instead.');
+      setVisible(true);
     } finally {
       await resetAudioMode();
       setTranscribing(false);
     }
-  }, [recorder, resetAudioMode]);
+  }, [initialNote, onSave, recorder, resetAudioMode]);
 
   const stopAndTranscribe = useCallback(() => {
     if (!recording) return;
