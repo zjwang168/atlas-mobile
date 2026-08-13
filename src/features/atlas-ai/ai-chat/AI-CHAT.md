@@ -34,7 +34,8 @@ type AIChatBoxProps = {
 - Gives the composer its own native Liquid Glass surface with a light white frost wash; unsupported platforms fall back to `systemMaterialLight`.
 - Matches the two Figma composer states: an empty 56 pt single-row composer (28 pt side/bottom inset, 32 pt radius), and an animated content composer (12 pt side inset, 28 pt bottom inset, 24 pt radius).
 - Keeps one persistent multiline `TextInput` mounted across both composer states; entering the first character changes layout without replacing the native input or dropping keyboard focus.
-- Displays ordinary model text. Historical action markers are stripped from the visible transcript for compatibility, but they cannot create buttons or mutate places.
+- Renders assistant replies as native Markdown with an iOS reading hierarchy: headings, semibold emphasis, paragraphs, lists, quotes, links, inline code, fenced code, and compact tables. Common LaTex notation is converted into readable native symbols; a web math renderer is deliberately not used in the native message path.
+- Historical action markers are stripped from the visible transcript for compatibility, but they cannot create buttons or mutate places.
 - `Home`, `Office`, and `School` are sensitive system places. The mobile client supplies only saved role coordinates for each chat request; the agent can produce a preview-only create/update/delete proposal, while the client performs the actual write only after the user confirms the card.
 - A result that searches between two system places includes both role pins on the map. System-place map pins use their semantic icon and role label rather than the default blue saved-place pin.
 - Adds a bold 16 pt feedback row beneath every assistant response: local like/dislike selection, clipboard copy, native share, and a compact overflow action sheet.

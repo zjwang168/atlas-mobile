@@ -141,6 +141,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const aiRecommendedNamesRef = useRef(new Set((initialCandidates ?? []).map((place) => normalize(place.name)).filter(Boolean)));
   const [cameraKey, setCameraKey] = useState(`atlas-builder-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const [searchCandidateBottom, setSearchCandidateBottom] = useState(0);
+  // Country bounds can resolve before the editor sheet has reported its real
+  // height. Hold one correction so the GPS-country camera is always fitted
+  // against the upper, unobscured map viewport rather than the full screen.
+  const pendingCreateCountryBoundsRef = useRef<{ ne: [number, number]; sw: [number, number] } | null>(null);
+  const createCountryBoundsAlignedRef = useRef(false);
+  const panelHeightRef = useRef(0);
   const initialPlaceSelected = useRef(false);
   const timeConflictTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Saving hands the shared map directly to the completed Atlas. Its unmount
@@ -230,6 +236,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         const countryBounds = expandBounds(resolvedCountry.bounds, 0.12);
         viewportCenterRef.current = centerOfBounds(countryBounds);
         viewportZoomRef.current = zoomForBounds(countryBounds, 1.1);
+        pendingCreateCountryBoundsRef.current = countryBounds;
+        // If the sheet has already reported, this first fit already receives
+        // its current padding. Otherwise `handlePanelHeightChange` below
+        // replays the bounds when the panel becomes measurable.
+        createCountryBoundsAlignedRef.current = panelHeightRef.current > 0;
+        if (createCountryBoundsAlignedRef.current) pendingCreateCountryBoundsRef.current = null;
         setMapCenter(viewportCenterRef.current);
         setMapBounds(countryBounds);
         setMapZoom(viewportZoomRef.current);
@@ -1545,8 +1557,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   ), [addPlace, focused, localMustSeesOpacity, localMustSeesVisible, mapSearchOverlay, savingKind, searchCandidateBottom, searchCandidateVisible]);
 
   const handlePanelHeightChange = useCallback((height: number) => {
+    panelHeightRef.current = height;
     setSearchCandidateBottom(Math.max(0, height + 12));
-  }, []);
+    const pendingCountryBounds = pendingCreateCountryBoundsRef.current;
+    if (!isCreateAtlasLanding || height <= 0 || !pendingCountryBounds || createCountryBoundsAlignedRef.current) return;
+
+    // Mapbox may have received the country bounds while the shared panel was
+    // still transitioning from its previous detent. Re-submit those bounds
+    // after the first measured height so its padding centers the country in
+    // the top map area on every entry path.
+    createCountryBoundsAlignedRef.current = true;
+    pendingCreateCountryBoundsRef.current = null;
+    setMapBounds(pendingCountryBounds);
+    setCameraKey(`atlas-country-panel-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  }, [isCreateAtlasLanding]);
 
   useLayoutEffect(() => {
     setAtlasMapState({
@@ -1610,7 +1634,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         <View style={styles.headerCopy}>
           <Text style={[styles.heading, styles.atlasHeadingSafe]}>{atlasId || started || handoffStarted ? 'Edit atlas' : 'Create an atlas'}</Text>
 
-          {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a place to explore</Text> : null}
+          {items.length === 0 && !started && !handoffStarted && !atlasId ? <Text style={styles.landingLabel}>Pick a focus area to start</Text> : null}
         </View>
         <View style={styles.headerRight}>
           {atlasId ? <TouchableOpacity accessibilityLabel={`Rename ${atlasTitle || existingAtlas?.title || 'Atlas'}`} onPress={renameAtlas} style={styles.focusAreaButton}><Text numberOfLines={1} style={styles.focusAreaButtonText}>{atlasTitle || existingAtlas?.title || 'Atlas'}</Text><Ionicons name="pencil-outline" size={15} color="#6A6A70" /></TouchableOpacity> : (started && focusLabel ? <TouchableOpacity accessibilityLabel={`Change focus area, currently ${focusLabel}`} onPress={onReturnToCreateSearch ? returnToCreateSearch : openFocusSearch} style={styles.focusAreaButton}><Ionicons name="location-sharp" size={23} color="#303033" /><Text numberOfLines={1} style={styles.focusAreaButtonText}>{focusLabel}</Text></TouchableOpacity> : null)}

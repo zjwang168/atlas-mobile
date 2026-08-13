@@ -26,6 +26,7 @@
     "expo-dev-client": "~56.0.21",
     "expo-font": "~56.0.7",
     "expo-glass-effect": "~56.0.4",
+    "expo-image-manipulator": "~56.0.24",
     "expo-image-picker": "~56.0.23",
     "expo-linear-gradient": "~56.0.4",
     "expo-location": "~56.0.23",

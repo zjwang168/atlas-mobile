@@ -735,7 +735,6 @@ function HomeScreenContent({
           setOverlay({ kind: 'none' });
           animateToTab(TAB_PLACES);
         }}
-        snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'atlasDetail' ? handlePanelHeightChange : undefined}
       />
 

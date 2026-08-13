@@ -5,6 +5,7 @@ import BottomSheet, {
 } from '@gorhom/bottom-sheet';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import { visionImageBase64 } from '@/services/import/visionImage';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Reanimated, { FadeInDown, FadeInUp, FadeOutDown, FadeOutUp } from 'react-native-reanimated';
 import {
@@ -442,7 +443,7 @@ export default function ImportScreen({
       allowsMultipleSelection: !isSingleImage,
       selectionLimit: isSingleImage ? 1 : 3,
       quality: 0.7,
-      base64: true,
+      base64: false,
     });
 
     if (!result.canceled && result.assets.length > 0) {
@@ -461,9 +462,18 @@ export default function ImportScreen({
 
     if (section === 'images') {
       if (images.length === 0) return;
-      const imageDataList = images
-        .map((image) => image.base64)
-        .filter((base64): base64 is string => Boolean(base64));
+      let imageDataList: string[];
+      try {
+        imageDataList = await Promise.all(images.map((image) => visionImageBase64(image.uri)));
+      } catch (error) {
+        console.warn('[ImportScreen] could not prepare selected image:', error);
+        showDialog({
+          title: 'That photo could not be prepared',
+          message: 'Choose the image again and we\'ll take another look.',
+          tone: 'warning',
+        });
+        return;
+      }
 
       if (imageDataList.length === 0) {
         showDialog({

@@ -1,7 +1,7 @@
-"""Find Image Places service — GPT-4o vision → structured place result.
+"""Find Image Places service — Mango vision model → structured place result.
 
 Flow:
-1. Send the uploaded image to GPT-4o through LangChain.
+1. Send the uploaded image to the Mango-configured OpenAI model through LangChain.
 2. Ask for exactly one structured place result with:
    - landmark name
    - geographic coordinates
@@ -28,12 +28,17 @@ from backend.services.langchain_runtime import get_chat_model
 
 logger = logging.getLogger("atlas.find_image_places")
 
-OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
+# Keep single-photo recognition on the direct Mango/OpenAI credentials. The
+# legacy OPENAI_* values point at a retired proxy and must not be used here.
+OPENAI_VISION_MODEL = os.environ.get(
+    "OPENAI_MODEL_MANGO_FOR_IMGAE_RECOGNITION",
+    "gpt-4o",
+).strip() or "gpt-4o"
 OPENAI_VISION_TEMPERATURE = float(os.environ.get("OPENAI_VISION_TEMPERATURE", "0.1"))
 
 
 async def find_image_place(image_base64: str, request_id: str | None = None) -> dict:
-    """Identify a place from one image using GPT-4o vision."""
+    """Identify a place from one image using the Mango vision model."""
     from backend.services import progress
 
     progress.stream_note(request_id, "image:vision", {"stage": "started"})
@@ -56,7 +61,7 @@ async def find_image_place(image_base64: str, request_id: str | None = None) -> 
             longitude=longitude,
             confidence=confidence,
             subtitle="",
-            source="gpt4o_vision",
+            source="mango_vision",
         )
 
     progress.stream_note(request_id, "image:location", {"stage": "no_candidate"})
@@ -71,14 +76,14 @@ async def find_image_place(image_base64: str, request_id: str | None = None) -> 
 
 
 async def _call_gpt4o_vision(image_base64: str) -> Optional[dict]:
-    """Call GPT-4o vision via LangChain and parse a JSON result."""
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    """Call Mango's OpenAI-compatible vision endpoint and parse JSON."""
+    api_key = os.environ.get("OPENAI_API_KEY_MANGO", "").strip()
     if not api_key:
-        logger.warning("[FindImagePlaces] OPENAI_API_KEY not set")
+        logger.warning("[FindImagePlaces] OPENAI_API_KEY_MANGO not set")
         return None
 
     model = get_chat_model(
-        provider="openai",
+        provider="openai_mango",
         model=OPENAI_VISION_MODEL,
         temperature=OPENAI_VISION_TEMPERATURE,
     )
@@ -136,17 +141,17 @@ async def _call_gpt4o_vision(image_base64: str) -> Optional[dict]:
             return None
 
         logger.info(
-            "[FindImagePlaces] GPT-4o vision result: name=%s confidence=%s",
+            "[FindImagePlaces] Mango vision result: name=%s confidence=%s",
             result.get("name"),
             result.get("confidence"),
         )
         return result
 
     except json.JSONDecodeError as exc:
-        logger.warning("[FindImagePlaces] GPT-4o JSON parse error: %s", exc)
+        logger.warning("[FindImagePlaces] Mango vision JSON parse error: %s", exc)
         return None
     except Exception as exc:
-        logger.warning("[FindImagePlaces] GPT-4o vision call failed: %s", exc)
+        logger.warning("[FindImagePlaces] Mango vision call failed: %s", exc)
         return None
 
 

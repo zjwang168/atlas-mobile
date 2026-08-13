@@ -262,7 +262,11 @@ function sortPlacesByDate(
 function CategoryChip({ category }: { category?: string }) {
   const sourceLabel = category?.trim() || 'Place';
   const isRestaurant = /restaurant|food|dining|café|cafe/i.test(sourceLabel);
-  const label = isRestaurant ? 'Restaurant' : sourceLabel;
+  const label = isRestaurant
+    ? 'Restaurant'
+    : sourceLabel.toLocaleLowerCase().replace(/\p{L}+/gu, (word) => (
+      word[0].toLocaleUpperCase() + word.slice(1)
+    ));
   const Icon = isRestaurant ? ForkKnifeIcon : MapPinIcon;
 
   return (

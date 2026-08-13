@@ -6,6 +6,7 @@ import {
 import { BlurView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import { visionImageBase64 } from '@/services/import/visionImage';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Icon } from 'phosphor-react-native';
 import { ArrowUpIcon } from 'phosphor-react-native/src/icons/ArrowUp';
@@ -281,9 +282,10 @@ function splitThoughtMarkup(text: string): { response: string; thoughts: string 
 
 function normalizeAssistantText(text: string): string {
   const latexSymbol: Record<string, string> = {
-    alpha: 'alpha', beta: 'beta', gamma: 'gamma', delta: 'delta', theta: 'theta',
-    pi: 'pi', sigma: 'sigma', omega: 'omega', times: 'x', cdot: 'x',
-    leq: '<=', geq: '>=', neq: '!=', approx: '~', pm: '+/-', degree: 'deg',
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', theta: 'θ',
+    pi: 'π', sigma: 'σ', omega: 'ω', times: '×', cdot: '·',
+    leq: '≤', geq: '≥', neq: '≠', approx: '≈', pm: '±', degree: '°',
+    infty: '∞', partial: '∂', sum: '∑', prod: '∏', integral: '∫',
   };
   return text
     // Some model responses put a space before the closing bold marker, which
@@ -294,13 +296,14 @@ function normalizeAssistantText(text: string): string {
     .replace(/\$\$([\s\S]*?)\$\$/g, '$1')
     .replace(/\$([^$\n]+)\$/g, '$1')
     .replace(/\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
+    .replace(/\\sqrt\s*\{([^{}]+)\}/g, 'sqrt($1)')
     .replace(/\\(?:text|mathrm|mathbf|mathit|operatorname)\s*\{([^{}]+)\}/g, '$1')
+    .replace(/\\(?:left|right|,|;|!)/g, '')
     .replace(/\\([a-zA-Z]+)/g, (_match, command: string) => latexSymbol[command] ?? command)
     .replace(/\{\s*([^{}]+)\s*\}/g, '$1')
-    // Do not pass emphasis markers through the mobile Markdown implementation:
-    // some valid Chinese-label variants still render the source asterisks.
-    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
-    .replace(/__([^_\n]+)__/g, '$1');
+    // Keep Markdown emphasis intact. The renderer gives it a semibold rather
+    // than a heavy treatment, which works for Chinese and Latin text alike.
+    .trim();
 }
 
 function parseStoredToolResults(value: unknown): Array<Record<string, unknown>> {
@@ -1213,14 +1216,26 @@ export default function AIChatBox({
       allowsMultipleSelection: false,
       selectionLimit: 1,
       quality: 0.65,
-      base64: true,
+      base64: false,
     });
     if (result.canceled) return;
     const asset = result.assets?.[0];
-    if (asset?.uri && asset.base64) {
+    if (asset?.uri) {
+      let base64: string;
+      try {
+        base64 = await visionImageBase64(asset.uri);
+      } catch (error) {
+        console.warn('[AIChatBox] could not prepare selected image:', error);
+        showDialog({
+          title: 'That photo could not be prepared',
+          message: 'Choose the image again and we\'ll take another look.',
+          tone: 'warning',
+        });
+        return;
+      }
       setInputContentHeight(21);
       setAttachedImageUri(asset.uri);
-      setAttachedImageBase64(asset.base64);
+      setAttachedImageBase64(base64);
     }
   };
 
@@ -1489,6 +1504,9 @@ export default function AIChatBox({
         ? [chatMapOutcomeMarkers[0].longitude, chatMapOutcomeMarkers[0].latitude]
         : (chatMapOrigin ?? (chatMapMarkers[0] ? [chatMapMarkers[0].longitude, chatMapMarkers[0].latitude] : undefined)),
       bounds: boundsForChatMarkers(chatMapOutcomeMarkers),
+      // Keep broad AI result sets at a readable regional scale. A bounds fit
+      // may otherwise zoom all the way to a globe-like overview.
+      minimumBoundsZoom: 3,
       zoomLevel: chatMapOutcomeMarkers.length > 1 ? 13 : 15,
       cameraKey: `chat-map-${chatMapCameraKey}`,
       cameraAnimationDurationMs: 420,
@@ -2744,37 +2762,212 @@ const styles = StyleSheet.create({
 
 const markdownStyles = StyleSheet.create({
   body: {
-    color: '#000000',
+    color: '#27272A',
     fontSize: 16,
-    lineHeight: 24,
+    lineHeight: 25,
     fontWeight: '400',
-    letterSpacing: -0.16,
+    letterSpacing: 0,
+  },
+  heading1: {
+    color: '#18181B',
+    fontSize: 23,
+    lineHeight: 29,
+    fontWeight: '700',
+    letterSpacing: 0,
+    marginTop: 16,
+    marginBottom: 7,
+  },
+  heading2: {
+    color: '#18181B',
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
+    letterSpacing: 0,
+    marginTop: 15,
+    marginBottom: 6,
   },
   heading3: {
-    color: '#000000',
-    fontSize: 16,
-    lineHeight: 24,
+    color: '#18181B',
+    fontSize: 17,
+    lineHeight: 23,
     fontWeight: '600',
-    marginBottom: 6,
-    marginTop: 0,
+    letterSpacing: 0,
+    marginTop: 14,
+    marginBottom: 5,
+  },
+  heading4: {
+    color: '#3F3F46',
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+    letterSpacing: 0,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  heading5: {
+    color: '#52525B',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+    letterSpacing: 0,
+    marginTop: 10,
+    marginBottom: 3,
+  },
+  heading6: {
+    color: '#71717A',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    letterSpacing: 0,
+    marginTop: 10,
+    marginBottom: 3,
   },
   strong: {
     fontWeight: '600',
-    color: '#111827',
+    color: '#18181B',
+  },
+  em: {
+    color: '#3F3F46',
+    fontStyle: 'italic',
   },
   paragraph: {
     marginTop: 0,
-    marginBottom: 0,
+    marginBottom: 10,
+  },
+  blockquote: {
+    marginTop: 3,
+    marginBottom: 11,
+    marginLeft: 0,
+    paddingLeft: 13,
+    paddingRight: 12,
+    paddingVertical: 9,
+    borderLeftWidth: 3,
+    borderLeftColor: '#A7E7C1',
+    borderRadius: 4,
+    backgroundColor: '#F3FBF6',
+    color: '#3F3F46',
+  },
+  hr: {
+    height: StyleSheet.hairlineWidth,
+    marginTop: 8,
+    marginBottom: 15,
+    backgroundColor: '#E4E4E7',
   },
   bullet_list: {
-    marginTop: 0,
-    marginBottom: 8,
+    marginTop: 1,
+    marginBottom: 10,
+    paddingLeft: 2,
   },
   ordered_list: {
-    marginTop: 0,
-    marginBottom: 8,
+    marginTop: 1,
+    marginBottom: 10,
+    paddingLeft: 2,
   },
   list_item: {
-    marginBottom: 4,
+    marginBottom: 6,
+    color: '#27272A',
+    fontSize: 16,
+    lineHeight: 25,
+    letterSpacing: 0,
+  },
+  bullet_list_icon: {
+    width: 16,
+    marginLeft: 0,
+    marginRight: 4,
+    color: '#10A15E',
+    fontSize: 20,
+    lineHeight: 25,
+  },
+  ordered_list_icon: {
+    width: 20,
+    marginLeft: 0,
+    marginRight: 4,
+    color: '#0C8149',
+    fontSize: 15,
+    lineHeight: 25,
+    fontWeight: '600',
+  },
+  bullet_list_content: {
+    flex: 1,
+    paddingRight: 2,
+  },
+  ordered_list_content: {
+    flex: 1,
+    paddingRight: 2,
+  },
+  code_inline: {
+    color: '#9A3412',
+    backgroundColor: '#FFF7ED',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#FED7AA',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  code_block: {
+    color: '#E4E4E7',
+    backgroundColor: '#18181B',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#27272A',
+    borderRadius: 8,
+    padding: 13,
+    marginTop: 3,
+    marginBottom: 12,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  fence: {
+    color: '#E4E4E7',
+    backgroundColor: '#18181B',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#27272A',
+    borderRadius: 8,
+    padding: 13,
+    marginTop: 3,
+    marginBottom: 12,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  link: {
+    color: '#087A45',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+    textDecorationColor: '#8EDAAF',
+  },
+  table: {
+    marginTop: 3,
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D4D4D8',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  tr: {
+    flexDirection: 'row',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4E4E7',
+  },
+  th: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    backgroundColor: '#F4F4F5',
+    color: '#3F3F46',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  td: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    color: '#3F3F46',
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

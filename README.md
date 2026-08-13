@@ -331,7 +331,7 @@ OPENAI_MODEL_MANGO=
 OPENAI_BASE_URL_MANGO=
 ```
 
-Depending on the enabled import modes, also configure the relevant keys such as `GLM_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` for the photo-vision service, `APIFY_TOKEN`, `GROQ_API_KEY`, `TAVILY_API_KEY`, and geocoding-provider keys.
+Depending on the enabled import modes, also configure the relevant keys such as `GLM_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY_MANGO` plus `OPENAI_MODEL_MANGO_FOR_IMGAE_RECOGNITION` for the photo-vision service, `APIFY_TOKEN`, `GROQ_API_KEY`, `TAVILY_API_KEY`, and geocoding-provider keys.
 
 Discover's local events need `USDA_API_KEY` and `NPS_API_KEY`, both free self-service signups. Neither is required to boot: `GET /events` still answers without them and reports the missing source as `not_configured` rather than failing.
 
@@ -507,7 +507,7 @@ Apply [`20260812_special_places.sql`](docs/migrations/20260812_special_places.sq
 
 ### OCR, webpage vision, or photo identification fails
 
-Check the provider credentials required by the source you are testing. Screenshot parsing needs `GLM_API_KEY`; visual webpage capture needs Gemini configuration; single-photo place recognition reads the OpenAI vision configuration; social-video imports require `APIFY_TOKEN` where applicable.
+Check the provider credentials required by the source you are testing. Screenshot parsing needs `GLM_API_KEY`; visual webpage capture needs Gemini configuration; single-photo place recognition uses `OPENAI_API_KEY_MANGO`, `OPENAI_BASE_URL_MANGO`, and `OPENAI_MODEL_MANGO_FOR_IMGAE_RECOGNITION`; social-video imports require `APIFY_TOKEN` where applicable.
 
 ### iOS Pods or native build fails
 

@@ -52,7 +52,7 @@ export function AtlasEmptySkeleton() {
             <TypewriterHint />
             <Text style={styles.emptyAtlasHintSub}>Now, add your first pin.</Text>
           </> : index === 1 ? <>
-            <TypewriterHint text="Or search a pin, and add it." />
+            <TypewriterHint text="Or search a place to add." />
             <View style={[styles.emptyAtlasLine, styles.emptyAtlasLineShort]} />
           </> : <>
             <View style={styles.emptyAtlasLine} />

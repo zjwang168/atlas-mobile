@@ -92,9 +92,7 @@ def get_chat_model(provider: ProviderName, model: str, temperature: float = 0.2)
         api_key=os.environ.get(api_key_env, ""),
         base_url=_base_url_for_provider(provider),  # type: ignore[arg-type]
         streaming=True,
-        model_kwargs={
-            "metadata": metadata,
-        },
+        metadata=metadata,
     )
 
 

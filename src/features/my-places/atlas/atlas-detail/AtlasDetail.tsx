@@ -22,7 +22,6 @@ import { updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
 type AtlasDetailProps = {
   atlasId: string | null;
   onDismiss: () => void;
-  snapGroup?: string;
   onHeightChange?: (height: number) => void;
 };
 
@@ -177,7 +176,7 @@ function routeDistanceLabelsForItems(route: RouteFeature, items: ItineraryItem[]
   });
 }
 
-export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightChange }: AtlasDetailProps) {
+export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: AtlasDetailProps) {
   const { show: showDialog } = useAppDialog();
   const { atlases, savedPlaces, atlasPlaces, atlasMapState, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setActiveSidekick, userLocation } = useHome();
   const [editing, setEditing] = useState(false);
@@ -659,7 +658,7 @@ export default function AtlasDetail({ atlasId, onDismiss, snapGroup, onHeightCha
 
   if (!atlas) return null;
 
-  return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} snapGroup={snapGroup} minSnap="default" onHeightChange={onHeightChange}>
+  return <ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} minSnap="default" onHeightChange={onHeightChange}>
     {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={handleEditorClosed} onSaved={(_, askAI, mapView) => handleEditorSaved(askAI, mapView)} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
       <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><TouchableOpacity accessibilityLabel={displayedRoute ? 'Hide route' : 'Show route'} disabled={routeBusy || items.length < 2} onPress={() => { void toggleRoute(); }} style={[styles.headerRouteButton, (routeBusy || items.length < 2) && styles.headerRouteButtonDisabled]}>{routeBusy ? <ActivityIndicator size="small" color="#303033" /> : <Ionicons name={displayedRoute ? 'eye-off-outline' : 'git-branch-outline'} size={17} color="#303033" />}<Text numberOfLines={1} style={styles.headerRouteText}>{displayedRoute ? 'Hide route' : 'Show route'}</Text></TouchableOpacity><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#1A1A1A" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#1A1A1A" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
       <FlatList data={listItems} keyExtractor={itineraryKeyExtractor} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={renderItineraryRow} />

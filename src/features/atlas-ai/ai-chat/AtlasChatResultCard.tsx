@@ -37,23 +37,17 @@ const PLACE_IMAGE_STYLE: ImageStyle = {
   backgroundColor: '#E7E7E7',
 };
 
-function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?: AtlasChatPresentation['user_location']) {
-  const outcomeCoordinates = places.map(
-    (place) => [place.longitude, place.latitude] as [number, number],
-  );
-  const coordinates = [
-    ...outcomeCoordinates,
-    ...(userLocation ? [[userLocation.longitude, userLocation.latitude] as [number, number]] : []),
-  ];
-  // With a single outcome, add a reflected coordinate so that result itself
-  // stays centered while the user's green location marker remains in frame.
-  if (outcomeCoordinates.length === 1 && userLocation) {
-    const [outcomeLongitude, outcomeLatitude] = outcomeCoordinates[0];
-    coordinates.push([
-      outcomeLongitude * 2 - userLocation.longitude,
-      outcomeLatitude * 2 - userLocation.latitude,
-    ]);
-  }
+function boundsForPlaces(places: AtlasChatPresentation['places']) {
+  const coordinates = places
+    .map((place) => [place.longitude, place.latitude] as [number, number])
+    .filter(([longitude, latitude]) => (
+      Number.isFinite(longitude)
+      && Number.isFinite(latitude)
+      && longitude >= -180
+      && longitude <= 180
+      && latitude >= -85
+      && latitude <= 85
+    ));
   if (!coordinates.length) return undefined;
   const longitudes = coordinates.map(([longitude]) => longitude);
   const latitudes = coordinates.map(([, latitude]) => latitude);
@@ -63,7 +57,10 @@ function boundsForPlaces(places: AtlasChatPresentation['places'], userLocation?:
   const north = Math.max(...latitudes);
   const lngPad = Math.max(0.003, (east - west) * 0.24);
   const latPad = Math.max(0.003, (north - south) * 0.24);
-  return { ne: [east + lngPad, north + latPad] as [number, number], sw: [west - lngPad, south - latPad] as [number, number] };
+  return {
+    ne: [Math.min(180, east + lngPad), Math.min(85, north + latPad)] as [number, number],
+    sw: [Math.max(-180, west - lngPad), Math.max(-85, south - latPad)] as [number, number],
+  };
 }
 
 export default function AtlasChatResultCard({ presentation, pendingAction, completedAction, onConfirm, onCancel, onOpenMap }: Props) {
@@ -128,7 +125,11 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
         <View pointerEvents="none" style={styles.mapPreviewContent}>
           <MapboxMap
             markers={markers}
-            bounds={boundsForPlaces(mapPlaces, presentation.user_location)}
+            // The thumbnail describes the AI result. Context pins can be far
+            // away, so including them here would collapse this view into a
+            // globe instead of framing the returned places.
+            bounds={boundsForPlaces(presentation.places.length ? presentation.places : mapPlaces)}
+            minimumBoundsZoom={3}
             padding={{
               paddingTop: 56,
               paddingRight: 24,
@@ -173,6 +174,12 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
           </View>
         ) : null}
       </View>
+      {mapPlaces.length > 0 ? (
+        <View pointerEvents="none" style={styles.mapHint}>
+          <MapTrifoldIcon size={13} color="#7B7B83" weight="bold" />
+          <Text style={styles.mapHintText}>Tap the map to save places, view them in Google Maps, or get directions.</Text>
+        </View>
+      ) : null}
       {hasActionStatus ? (
         <View style={styles.confirmRow}>
           {completedAction ? <Animated.View key="saved" entering={FadeIn.duration(220)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
@@ -227,6 +234,8 @@ const styles = StyleSheet.create({
   mapPreview: { height: 246, borderRadius: 26, overflow: 'hidden', backgroundColor: '#E9E9E7' },
   mapPreviewContent: { flex: 1 },
   map: { flex: 1, width: '100%' },
+  mapHint: { minHeight: 34, paddingHorizontal: 3, paddingTop: 9, paddingBottom: 2, flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  mapHintText: { flex: 1, color: '#7B7B83', fontSize: 12, lineHeight: 17, fontWeight: '500' },
   mapCaption: { position: 'absolute', top: 12, left: 12, right: 58, minHeight: 32, paddingHorizontal: 11, borderRadius: 16, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(24,24,27,0.12)' },
   mapCaptionText: { flexShrink: 1, color: '#191919', fontSize: 13, lineHeight: 18, fontWeight: '700' },
   openMapButton: { position: 'absolute', top: 12, right: 12, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(24,24,27,0.12)' },
