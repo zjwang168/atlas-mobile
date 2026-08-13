@@ -17,7 +17,7 @@ export default {
     slug: 'atlas-mobile',
     version: '1.0.0',
     orientation: 'portrait',
-    icon: './assets/icon.png',
+    icon: './assets/atlas-icon.png',
     userInterfaceStyle: 'light',
     ios: {
       supportsTablet: true,
