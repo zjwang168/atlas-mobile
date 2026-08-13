@@ -484,6 +484,7 @@ type AIChatBoxProps = {
   onPresentationMapReturn?: () => void;
   onPresentationMapClose?: () => void;
   initialPrompt?: string | null;
+  autoSendInitialPrompt?: boolean;
 };
 
 type ChatMapPlace = AtlasChatPresentation['places'][number] & { markerId: string };
@@ -573,6 +574,7 @@ export default function AIChatBox({
   onPresentationMapReturn,
   onPresentationMapClose,
   initialPrompt = null,
+  autoSendInitialPrompt = false,
 }: AIChatBoxProps) {
   const { show: showDialog } = useAppDialog();
   const {
@@ -648,9 +650,10 @@ export default function AIChatBox({
     void hydrate();
   }, [messages]);
 
+  const autoSentInitialPromptRef = useRef<string | null>(null);
   useEffect(() => {
-    if (initialPrompt && !inputText && !messages.length) setInputText(initialPrompt);
-  }, [initialPrompt, inputText, messages.length]);
+    if (initialPrompt && !autoSendInitialPrompt && !inputText && !messages.length) setInputText(initialPrompt);
+  }, [autoSendInitialPrompt, initialPrompt, inputText, messages.length]);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [messageFeedback, setMessageFeedback] = useState<
     Record<string, MessageFeedback | undefined>
@@ -1175,6 +1178,13 @@ export default function AIChatBox({
       if (chatAbortControllerRef.current === controller) chatAbortControllerRef.current = null;
     }
   };
+
+  useEffect(() => {
+    const prompt = initialPrompt?.trim();
+    if (!autoSendInitialPrompt || !prompt || pending || sessionInitializing || messages.length || autoSentInitialPromptRef.current === prompt) return;
+    autoSentInitialPromptRef.current = prompt;
+    void handleSend(prompt);
+  }, [autoSendInitialPrompt, initialPrompt, messages.length, pending, sessionInitializing]);
 
   const cancelStream = () => {
     if (!pending) return;

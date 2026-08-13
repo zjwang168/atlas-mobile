@@ -41,7 +41,7 @@ const FILTERS: Array<{
   { value: 'places', label: 'Places', icon: MapPinIcon },
   // Keep the persisted `atlas` value for API compatibility; this saved-place
   // collection is now presented to users as a List.
-  { value: 'atlas', label: 'Lists', icon: ListDashesIcon },
+  { value: 'atlas', label: 'Atlas', icon: ListDashesIcon },
 ];
 
 function MyPlaces({
@@ -85,7 +85,7 @@ function MyPlaces({
     return (
       <View style={styles.compact}>
         <Text style={styles.compactLabel}>
-          {selectedView === 'atlas' ? 'Lists' : 'Places'}
+          {selectedView === 'atlas' ? 'Atlas' : 'Places'}
         </Text>
       </View>
     );

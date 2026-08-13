@@ -66,6 +66,38 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["locations"]), 2)
         self.assertIsNone(result["pending_action"])
 
+    async def test_named_response_places_create_a_selectable_non_atlas_map(self):
+        model = _ToolModel([
+            tool_call("present_response_places", {
+                "places": ["Pike Place Market", "Space Needle"],
+                "title": "Seattle highlights",
+                "area": "Seattle, Washington",
+            }),
+            AIMessage(content="Pike Place Market and the Space Needle are both pinned below."),
+        ])
+        retrieved_places = [[{
+            "name": "Pike Place Market", "latitude": 47.6097, "longitude": -122.3425,
+            "full_address": "85 Pike St, Seattle, WA", "category": "Market",
+        }], [{
+            "name": "Space Needle", "latitude": 47.6205, "longitude": -122.3493,
+            "full_address": "400 Broad St, Seattle, WA", "category": "Landmark",
+        }]]
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(side_effect=[
+                [{"external_id": "pike"}], [{"external_id": "needle"}],
+            ])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(side_effect=retrieved_places)),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "What are two Seattle highlights?")
+
+        self.assertEqual(result["tool_calls_used"], ["present_response_places"])
+        self.assertEqual(result["presentation"]["kind"], "places_map")
+        self.assertEqual(result["presentation"]["title"], "Seattle highlights")
+        self.assertEqual([place["name"] for place in result["presentation"]["places"]], ["Pike Place Market", "Space Needle"])
+        self.assertIsNone(result["pending_action"])
+
     async def test_image_location_uses_add_place_tool_without_calling_chat_model(self):
         identified = {
             "title": "Space Needle",
@@ -268,6 +300,30 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["pending_action"]["kind"], "create_atlas")
         self.assertEqual(result["presentation"]["kind"], "atlas_draft")
         self.assertEqual(self.session.pending_chat_action["action_id"], result["pending_action"]["action_id"])
+
+    async def test_itinerary_and_travel_guide_requests_are_explicitly_atlas_intent(self):
+        model = _ToolModel([
+            AIMessage(content="Which destination and dates should I use?"),
+            AIMessage(content="Which destination and dates should I use?"),
+            AIMessage(content="Which destination and dates should I use?"),
+        ])
+        requests = [
+            "Plan a weekend itinerary in Kyoto.",
+            "Make a 3-day Paris travel guide.",
+            "帮我做一个东京三日游攻略。",
+        ]
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            for request in requests:
+                await run_chat("tool-test-session", request)
+
+        for messages in model.requests:
+            system_prompt = messages[0].content
+            self.assertIn("Treat every request to make, build, plan", system_prompt)
+            self.assertIn("帮我规划...旅游攻略", system_prompt)
+            self.assertIn("propose_create_atlas", system_prompt)
 
     async def test_create_atlas_draft_preserves_schedule_and_transport_metadata(self):
         places = [{

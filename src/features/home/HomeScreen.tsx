@@ -16,6 +16,7 @@ import PlaceDetail from '../place-detail/PlaceDetail';
 import AtlasDetail from '../my-places/atlas/atlas-detail/AtlasDetail';
 import AIChatBox from '../atlas-ai/ai-chat/AIChatBox';
 import DebugPanel from '@/dev/DebugPanel';
+import { useAppDialog } from '@/components/feedback/AppDialog';
 import { useHome } from './HomeContext';
 import HomePanel from './HomePanel';
 import HomeTabBar, {
@@ -86,6 +87,7 @@ function HomeScreenContent({
   onOpenChatHistory,
   externalOverlayVisible = false,
 }: HomeScreenProps) {
+  const { show: showDialog } = useAppDialog();
   const { height: screenHeight } = useWindowDimensions();
   const {
     overlay,
@@ -136,6 +138,7 @@ function HomeScreenContent({
   const [chatPresentationVisible, setChatPresentationVisible] = useState(false);
   const [chatMapOpen, setChatMapOpen] = useState(false);
   const [standaloneChatKey, setStandaloneChatKey] = useState(0);
+  const [standaloneChatPrompt, setStandaloneChatPrompt] = useState<string | null>(null);
   const [chatPresented, setChatPresented] = useState(false);
   const [mainSheetPaused, setMainSheetPaused] = useState(false);
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
@@ -375,10 +378,26 @@ function HomeScreenContent({
   }, [onOpenImport, presentAboveMainSheet]);
   const handleChatPress = useCallback(() => {
     presentAboveMainSheet(() => {
+      setStandaloneChatPrompt(null);
       setStandaloneChatVisible(true);
       setChatPresented(true);
     });
   }, [presentAboveMainSheet]);
+  const handleChatVoiceTranscript = useCallback((text: string) => {
+    const prompt = text.trim();
+    if (!prompt) return;
+    presentAboveMainSheet(() => {
+      setActiveHistoryItem(null);
+      setActiveSidekick('none');
+      setStandaloneChatPrompt(prompt);
+      setStandaloneChatKey((current) => current + 1);
+      setStandaloneChatVisible(true);
+      setChatPresented(true);
+    });
+  }, [presentAboveMainSheet, setActiveHistoryItem, setActiveSidekick]);
+  const handleChatVoiceError = useCallback((message: string) => {
+    showDialog({ title: 'Voice input unavailable', message, tone: 'warning' });
+  }, [showDialog]);
   const handleAccountPress = useCallback(() => {
     presentAboveMainSheet(() => {
       setAccountOpen(true);
@@ -414,9 +433,11 @@ function HomeScreenContent({
         onTabChange={handleTabChange}
         onAddPress={handleAddPress}
         onChatPress={handleChatPress}
+        onChatVoiceTranscript={handleChatVoiceTranscript}
+        onChatVoiceError={handleChatVoiceError}
       />
     ) : undefined
-  ), [activeTab, effectiveTabBarVisible, handleAddPress, handleChatPress, handleTabChange]);
+  ), [activeTab, effectiveTabBarVisible, handleAddPress, handleChatPress, handleChatVoiceError, handleChatVoiceTranscript, handleTabChange]);
 
   useEffect(() => {
     animateToTab(activeTab);
@@ -590,7 +611,8 @@ function HomeScreenContent({
           setActiveSidekick('none');
           animateToTab(TAB_PLACES);
         }}
-        initialPrompt={null}
+        initialPrompt={standaloneChatVisible ? standaloneChatPrompt : null}
+        autoSendInitialPrompt={Boolean(standaloneChatVisible && standaloneChatPrompt)}
         onOpenHistory={() => {
           // Chat history is mounted by AppContent, outside this screen. The
           // full-screen chat surface has a higher local z-index, so leave it
@@ -637,6 +659,8 @@ function HomeScreenContent({
           onTabChange={handleTabChange}
           onAddPress={handleAddPress}
           onChatPress={handleChatPress}
+          onChatVoiceTranscript={handleChatVoiceTranscript}
+          onChatVoiceError={handleChatVoiceError}
         />
       </Animated.View>
 

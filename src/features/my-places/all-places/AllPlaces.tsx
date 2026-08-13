@@ -502,17 +502,17 @@ function AtlasSection({
     <View style={styles.section}>
       <PressableScale
         accessibilityRole="button"
-        accessibilityLabel="View all lists"
+        accessibilityLabel="View all Atlas"
         onPress={onHeaderPress}
         scaleTo={0.985}
         style={styles.sectionHeader}
       >
         <View style={styles.sectionTitleGroup}>
-          <Text style={[typography.h3, styles.sectionTitle]}>Lists</Text>
+          <Text style={[typography.h3, styles.sectionTitle]}>Atlas</Text>
           <CaretRightIcon size={16} weight="bold" color="#8A8A8A" />
         </View>
         <Text style={[typography.bodySmall, styles.sectionCount]}>
-          {atlases.length} {atlases.length === 1 ? 'List' : 'Lists'}
+          {atlases.length} Atlas
         </Text>
       </PressableScale>
 
@@ -529,7 +529,7 @@ function AtlasSection({
       ) : (
         <View style={styles.emptyState}>
           <Text style={[typography.bodySmall, styles.emptyText]}>
-            Your lists will appear here.
+            Your Atlas will appear here.
           </Text>
         </View>
       )}
@@ -1146,9 +1146,7 @@ function AllPlaces({
       : atlasSortMode === 'alphabetical'
         ? 'Alphabetical'
         : 'Most places';
-    const atlasSummary = `${atlasPreviews.length} ${
-      atlasPreviews.length === 1 ? 'List' : 'Lists'
-    } · ${atlasCountryCount} ${atlasCountryCount === 1 ? 'Country' : 'Countries'}`;
+    const atlasSummary = `${atlasPreviews.length} Atlas · ${atlasCountryCount} ${atlasCountryCount === 1 ? 'Country' : 'Countries'}`;
 
     return (
       <View style={styles.root}>
@@ -1174,7 +1172,7 @@ function AllPlaces({
             <View
               accessible
               accessibilityRole="button"
-              accessibilityLabel="Sort lists"
+              accessibilityLabel="Sort Atlas"
               style={styles.sortButton}
             >
               <ArrowsDownUpIcon size={16} weight="bold" color="#717171" />

@@ -53,6 +53,7 @@ _AGENT_STATUS_LABELS = {
     "find_nearby_places": "Searching nearby places",
     "find_verified_places": "Checking live venue details",
     "find_similar_places": "Finding comparable places",
+    "present_response_places": "Pinning places on the map",
     "extract_pasted_places": "Extracting places from your text",
     "research_screen_locations": "Researching locations",
     "propose_add_places": "Preparing places to save",
@@ -202,6 +203,16 @@ Tool rules:
   user explicitly gives a city/region, pass it as area. When they explicitly
   ask for worldwide results, pass scope="global". If X is ambiguous, ask a
   concise clarification instead of guessing its category or scope.
+- Whenever your final answer names or recommends one or more specific real
+  POIs, venues, attractions, or landmarks, call present_response_places first
+  with those exact place names (and a city/area when useful). It resolves only
+  real map points and creates the ordinary selectable map card below the
+  response. Do not use it for cities, countries, neighborhoods, generic place
+  categories, or answers without a specific mappable POI. If another place
+  finder has already produced the points for this response, keep its map
+  presentation instead of calling present_response_places again. Never name a
+  specific place in the final answer unless it came from a successful place
+  tool result.
 - For pasted notes or an itinerary that the user wants added, call
   extract_pasted_places, then propose_add_places. This is only a proposal.
 - For requests for film, television, or music-video filming locations, sets,
@@ -209,8 +220,15 @@ Tool rules:
   It uses the Paste Text live-research and geocoding pipeline, then produces
   one Atlas confirmation proposal itself. Do not call propose_create_atlas
   again after it.
-- For creating an Atlas, find or extract real places first, then call
-  propose_create_atlas. This is only a proposal.
+- Treat every request to make, build, plan, prepare, or design a multi-stop
+  trip, travel plan, itinerary, route, or travel guide as a request to create
+  an Atlas, even when the user does not say "Atlas". This includes Chinese
+  requests such as "做一个...行程", "帮我规划...旅游攻略", or "...三日游".
+  Find or extract real, geocoded places first, then call
+  propose_create_atlas with the complete ordered itinerary. Do not answer
+  with a plain-text itinerary or use propose_add_places for these requests.
+  This is only a proposal; keep the final natural-language answer concise and
+  let the Atlas draft card provide the create/cancel confirmation.
 - If an Atlas draft already exists and the user asks to change its places,
   order, timing, or transport, call propose_create_atlas again with the
   complete revised list. Preserve every unchanged place. Put schedule data on
@@ -1545,6 +1563,81 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
 
     @tool
+    async def present_response_places(
+        places: list[str],
+        title: str | None = None,
+        area: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve specific POIs in a reply into a selectable, non-Atlas map result.
+
+        Use only for precise real venues, attractions, landmarks, or other map
+        points that the final answer will name. This never proposes a save.
+        """
+        names: list[str] = []
+        seen_names: set[str] = set()
+        for value in places or []:
+            clean = " ".join(str(value or "").split()).strip(" .")[:200]
+            key = clean.casefold()
+            if clean and key not in seen_names:
+                seen_names.add(key)
+                names.append(clean)
+        names = names[:8]
+        if not names:
+            return {"error": "At least one specific place name is required."}
+
+        from backend.services import place_search_service
+
+        clean_area = " ".join(str(area or "").split()).strip(" .")[:160]
+        current = getattr(session, "user_location", None)
+        proximity = f"{float(current[0])},{float(current[1])}" if current and len(current) == 2 else None
+
+        async def resolve_name(name: str) -> list[dict[str, Any]]:
+            query = ", ".join(part for part in [name, clean_area] if part)
+            token = str(uuid.uuid4())
+            try:
+                suggestions = await place_search_service.suggest(
+                    query=query,
+                    session_token=token,
+                    proximity=proximity,
+                    limit=5,
+                )
+                retrieved = await asyncio.gather(*[
+                    place_search_service.retrieve(item["external_id"], token)
+                    for item in suggestions[:5]
+                ], return_exceptions=True)
+            except Exception:
+                return []
+            candidates = _dedupe_places([
+                place
+                for result in retrieved if isinstance(result, list)
+                for place in result
+            ], limit=5)
+            return candidates[:1]
+
+        resolved = await asyncio.gather(*(resolve_name(name) for name in names))
+        mapped_places = _dedupe_places(
+            [place for result in resolved for place in result],
+            limit=len(names),
+        )
+        if not mapped_places:
+            return {"error": "None of those places could be resolved to a mappable point."}
+
+        clean_title = " ".join(str(title or "Places to explore").split())[:100] or "Places to explore"
+        session.locations = mapped_places
+        session.route = None
+        state["presentation"] = {
+            "kind": "places_map",
+            "title": clean_title,
+            "user_location": (
+                {"longitude": float(current[0]), "latitude": float(current[1])}
+                if current and len(current) == 2 else None
+            ),
+            "places": mapped_places,
+            "route": None,
+        }
+        return {"title": clean_title, "places": mapped_places}
+
+    @tool
     async def extract_pasted_places(text: str) -> dict[str, Any]:
         """Extract and geocode real places from text pasted by the user."""
         from backend.services.smart_text_service import analyze_smart_text
@@ -1646,7 +1739,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
         return {"proposal": action}
 
-    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, find_similar_places, extract_pasted_places, research_screen_locations, propose_add_places, propose_create_atlas]
+    return [resolve_special_place, propose_special_place_change, find_places_between_special_places, find_nearby_places, find_verified_places, find_similar_places, present_response_places, extract_pasted_places, research_screen_locations, propose_add_places, propose_create_atlas]
 
 
 def _image_bytes(image_base64: str) -> bytes:

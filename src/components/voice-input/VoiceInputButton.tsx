@@ -16,10 +16,11 @@ type VoiceInputButtonProps = {
   onError?: (message: string) => void;
   icon?: Icon;
   showVoiceBadge?: boolean;
+  accessibilityLabel?: string;
 };
 
 /** Hold-to-talk recorder used anywhere Atlas accepts text. */
-export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError, icon: IconComponent = WaveformIcon, showVoiceBadge = false }: VoiceInputButtonProps) {
+export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError, icon: IconComponent = WaveformIcon, showVoiceBadge = false, accessibilityLabel = 'Hold to speak' }: VoiceInputButtonProps) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -95,7 +96,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Hold to speak"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: Boolean(disabled || processing), selected: recording }}
       disabled={disabled || processing}
       onPressIn={() => {

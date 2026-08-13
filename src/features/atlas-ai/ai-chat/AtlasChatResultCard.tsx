@@ -182,7 +182,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
               <Text style={styles.savedButtonText}>Saved</Text>
             </Animated.View>
           </Animated.View> : <Animated.View key="pending" entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
-            <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Ready to create this Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${specialRole}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} ${specialPlaceName || 'this location'} as your ${specialRole}?` : 'Ready to add these places?'}</Text>
+            <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Create Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${specialRole}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} ${specialPlaceName || 'this location'} as your ${specialRole}?` : 'Ready to add these places?'}</Text>
             <View style={styles.actions}>
               <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={onCancel} style={styles.cancelButton}>
                 <XIcon size={17} color="#52525B" weight="bold" />

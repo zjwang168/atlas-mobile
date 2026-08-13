@@ -20,6 +20,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 
 export const TAB_PLACES = 'myPlaces';
 export const TAB_PLAN = 'travelPlan';
@@ -41,6 +42,8 @@ type HomeTabBarProps = {
   onTabChange: (tab: string) => void;
   onAddPress: () => void;
   onChatPress: () => void;
+  onChatVoiceTranscript: (text: string) => void;
+  onChatVoiceError: (message: string) => void;
   bottomOffset?: number;
 };
 
@@ -85,6 +88,8 @@ function HomeTabBar({
   onTabChange,
   onAddPress,
   onChatPress,
+  onChatVoiceTranscript,
+  onChatVoiceError,
   bottomOffset = 16,
 }: HomeTabBarProps) {
   const reducedMotion = useReducedMotion();
@@ -184,6 +189,20 @@ function HomeTabBar({
           {TAB_ITEMS.map((item) => {
             const selected = !item.action && item.key === activeTab;
             const IconComponent = item.icon;
+
+            if (item.action === 'chat') {
+              return (
+                <VoiceInputButton
+                  key={item.key}
+                  accessibilityLabel="Open Chat. Hold to speak."
+                  icon={ChatTeardropIcon}
+                  onShortPress={onChatPress}
+                  onTranscript={onChatVoiceTranscript}
+                  onError={onChatVoiceError}
+                  style={styles.tab}
+                />
+              );
+            }
 
             return (
               <Pressable
