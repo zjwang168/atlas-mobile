@@ -372,10 +372,14 @@ function HomeScreenContent({
 
   const handleAddPress = useCallback(() => {
     if (!onOpenImport) return;
+    // Add Places is a fresh browsing flow. Do not carry a previously selected
+    // saved/special place (especially School) into its camera state.
+    setSelectedPlaceId(null);
+    setSelectedPlaceCoordinate(null);
     presentAboveMainSheet(() => {
       onOpenImport();
     });
-  }, [onOpenImport, presentAboveMainSheet]);
+  }, [onOpenImport, presentAboveMainSheet, setSelectedPlaceCoordinate, setSelectedPlaceId]);
   const handleChatPress = useCallback(() => {
     presentAboveMainSheet(() => {
       setStandaloneChatPrompt(null);
