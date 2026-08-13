@@ -962,11 +962,14 @@ async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
     session = conversation_manager.get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
-    action = session.pending_chat_action
+    actions = getattr(session, "pending_chat_actions", []) or []
+    action = next((item for item in actions if item.get("action_id") == req.action_id), None)
+    if not action and session.pending_chat_action and session.pending_chat_action.get("action_id") == req.action_id:
+        action = session.pending_chat_action
     # This endpoint only records an audit event; the client has already used
     # authenticated domain services for the actual write. Accept a replay
     # after a backend restart instead of reporting a false user-facing error.
-    if action and action.get("action_id") != req.action_id:
+    if (actions or session.pending_chat_action) and not action:
         raise HTTPException(status_code=409, detail="This chat action is no longer pending")
 
     outcome = req.outcome or {}
@@ -977,7 +980,9 @@ async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
         "outcome": outcome,
     }
     session.add_message("tool", "chat_action_confirmation", tool_results=event)
-    session.pending_chat_action = None
+    session.pending_chat_actions = [item for item in actions if item.get("action_id") != req.action_id]
+    if session.pending_chat_action and session.pending_chat_action.get("action_id") == req.action_id:
+        session.pending_chat_action = session.pending_chat_actions[-1] if session.pending_chat_actions else None
     try:
         await conversation_manager.save_conversation(session.session_id)
     except Exception:

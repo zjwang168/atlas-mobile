@@ -26,6 +26,10 @@ export interface MapMarker {
   title?: string;
   description?: string;
   labelHint?: string;
+  /** Force the React annotation tier so the standard capsule label is used. */
+  renderAsAnnotation?: boolean;
+  /** Keep the standard capsule label visible even when map labels collide. */
+  alwaysShowLabel?: boolean;
   ai?: boolean;
   tone?: 'saved' | 'focused' | 'atlas' | 'recommended' | 'location' | 'home' | 'office' | 'school';
   /** Number shown inside a saved Atlas route pin. */
@@ -159,6 +163,7 @@ function rendersAsLayer(
   popupMarkerId?: string | null,
   disableRecommendedClustering = false,
 ): boolean {
+  if (marker.renderAsAnnotation) return false;
   // AI outcome pins always stay in Mapbox's native single-point sources,
   // including while their action sheet is open. The sheet is an independent
   // overlay, so a React MarkerView is not needed for selection.
@@ -984,7 +989,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     // Bounds own both center and zoom. Compute the Web Mercator camera here
     // from the orange-pin bounds and the real remaining map viewport rather
     // than accepting a native fit result that can be superseded by padding.
-    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}:${fitPadding.join(',')}`;
+    // Include the measured viewport in the cache key. Mapbox can report the
+    // first ready/layout pass before width or height is non-zero; without
+    // this, that undersized fit would never be corrected for the real map.
+    const nextBounds = `${cameraKey ?? ''}:${bounds.ne.join(',')}:${bounds.sw.join(',')}:${fitPadding.join(',')}:${width}x${height}`;
     if (nextBounds === previousBoundsRef.current) return;
     const camera = cameraForBounds(bounds, width, height, fitPadding, minimumBoundsZoom);
     cameraRef.current.setCamera({
@@ -1379,7 +1387,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                   title={marker.title}
                   hint={marker.labelHint}
                   ai={marker.ai}
-                  visible={marker.tone === 'recommended' || selectedMarkerId === marker.id || labelIds.has(marker.id)}
+                  visible={marker.alwaysShowLabel || marker.tone === 'recommended' || selectedMarkerId === marker.id || labelIds.has(marker.id)}
                   selected={selectedMarkerId === marker.id}
                 />
               ) : null}

@@ -150,6 +150,7 @@ export type AtlasChatResponse = {
     special_role?: 'home' | 'office' | 'school' | null;
     operation?: 'create' | 'update' | 'delete' | null;
   } | null;
+  pending_actions?: Array<NonNullable<AtlasChatResponse['pending_action']>>;
   presentation?: AtlasChatPresentation | null;
   locations: Array<{
     name: string;

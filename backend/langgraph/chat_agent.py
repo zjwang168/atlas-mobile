@@ -116,7 +116,9 @@ def _location_context(session: Any) -> str:
 
 
 def _pending_atlas_context(session: Any) -> str:
-    action = getattr(session, "pending_chat_action", None)
+    actions = getattr(session, "pending_chat_actions", []) or []
+    action = next((item for item in reversed(actions) if item.get("kind") == "create_atlas"), None)
+    action = action or getattr(session, "pending_chat_action", None)
     if not action or action.get("kind") != "create_atlas":
         return "No Atlas draft is waiting for confirmation."
     lines = [f"Current Atlas draft: {action.get('title') or 'Untitled'}"]
@@ -134,7 +136,12 @@ def _pending_atlas_context(session: Any) -> str:
 
 
 def _pending_special_place_context(session: Any) -> str:
-    action = getattr(session, "pending_chat_action", None)
+    actions = getattr(session, "pending_chat_actions", []) or []
+    action = next((
+        item for item in reversed(actions)
+        if item.get("kind") in {"save_special_place", "delete_special_place"}
+    ), None)
+    action = action or getattr(session, "pending_chat_action", None)
     if not isinstance(action, dict) or action.get("kind") not in {"save_special_place", "delete_special_place"}:
         return "No Home, Office, or School confirmation is waiting."
     role = str(action.get("special_role") or "place").title()
@@ -189,6 +196,10 @@ Tool rules:
   When the user says "near my Home/Office/School" or "near home/office/school",
   pass anchor_role="home", "office", or "school" respectively. Those requests
   search around the saved special-place coordinate, never around device GPS.
+  When the user names a place that is not one of their saved Home, Office, or
+  School locations (for example, "closest car wash to Stanford University"),
+  pass that exact place name as anchor_query so the search is centered on it,
+  not on the device GPS.
 - For a place request with rating, price, menu, dietary, availability, or
   route/commute constraints, call find_verified_places instead. It uses live
   web research to find named venues and Mapbox only to resolve those venues to
@@ -255,6 +266,11 @@ Tool rules:
   propose_special_place_change. This must produce the existing confirmation
   note with cancel and save controls, even when you also answer another
   request in the same turn. Do not ask whether to save it in plain text.
+- If a route or road-trip request was waiting for a missing Home, Office, or
+  School and the current turn supplies that location, complete the original
+  request in this same turn. Resolve and propose the special place, then find
+  real, geocoded stops and call propose_create_atlas. Return both confirmation
+  proposals; do not require a save or a repeated planning request first.
 - If a Home, Office, or School confirmation is already waiting, a message such
   as "yes", "okay", or "好的" does not create a new location and does not
   confirm it. Tell the user to use the visible Save or Cancel control, and do
@@ -534,6 +550,65 @@ def _dedupe_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[s
     return result
 
 
+def _explicit_save_place_names(message: str) -> list[str]:
+    """Parse an unambiguous `Save these places: A, B, and C` command.
+
+    Short, named lists should not go through the pasted-text extraction model:
+    it is designed for prose and can reject a perfectly valid list of POIs.
+    """
+    match = re.match(r"^\s*(?:please\s+)?(?:save|add)\s+(?:these\s+)?(?:places?\s*:\s*)?(.+?)\s*$", message, re.IGNORECASE)
+    if not match:
+        return []
+    source = re.sub(r"^(?:these\s+)?\d+\s+places?\s*:\s*", "", match.group(1), flags=re.IGNORECASE)
+    source = re.sub(r"\s+(?:and|&)\s+", ",", source, flags=re.IGNORECASE)
+    names = []
+    for value in source.split(","):
+        name = " ".join(value.split()).strip(" .")
+        if name and len(name) <= 200 and name.casefold() not in {item.casefold() for item in names}:
+            names.append(name)
+    return names[:8]
+
+
+def _explicit_atlas_place_names(message: str) -> list[str]:
+    """Parse an unambiguous `Create an atlas for A, B, and C` command."""
+    match = re.match(
+        r"^\s*(?:please\s+)?(?:create|make|build)\s+(?:an?\s+)?atlas\s+(?:for\s+)?(?:these\s+)?(.+?)\s*$",
+        message,
+        re.IGNORECASE,
+    )
+    if not match:
+        return []
+    return _explicit_save_place_names(f"Save places: {match.group(1)}")
+
+
+async def _resolve_explicit_place_names(names: list[str]) -> list[dict[str, Any]]:
+    """Resolve each requested POI independently, preferring a literal match."""
+    from backend.services import place_search_service
+
+    async def resolve_one(name: str) -> dict[str, Any] | None:
+        token = str(uuid.uuid4())
+        try:
+            suggestions = await place_search_service.suggest(name, token, limit=5)
+            retrieved = await asyncio.gather(*(
+                place_search_service.retrieve(item["external_id"], token)
+                for item in suggestions[:5]
+            ), return_exceptions=True)
+        except Exception:
+            return None
+        candidates = _dedupe_places([
+            place for group in retrieved if isinstance(group, list) for place in group
+        ], limit=8)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda place: _special_place_match_score(name, [
+            place.get("name", ""), place.get("full_address", ""),
+        ]), reverse=True)
+        return candidates[0]
+
+    resolved = await asyncio.gather(*(resolve_one(name) for name in names))
+    return _dedupe_places([place for place in resolved if place], limit=len(names))
+
+
 _SPECIAL_PLACE_AREA_TERMS = (
     "chinatown", "neighborhood", "district", "downtown", "uptown", "midtown",
     "old town", "city center", "中国城", "市中心", "城区", "街区",
@@ -675,6 +750,28 @@ def _nearby_special_place_role(text: str) -> str | None:
         ("school", r"\b(?:near|nearby|around|by) (?:my )?(?:school|campus|university)\b|(?:我)?(?:学校|校园|大学)(?:附近|周边|旁边)"),
     )
     return next((role for role, pattern in patterns if re.search(pattern, normalized)), None)
+
+
+def _nearby_named_anchor_query(text: str) -> str | None:
+    """Extract an explicit landmark from common nearby-search phrasing.
+
+    This is a guardrail for tool calls where the model recognized the POI
+    category but omitted `anchor_query`; saved special-place anchors continue
+    to take precedence.
+    """
+    source = " ".join(str(text or "").split()).strip()
+    patterns = (
+        r"(?:离|距离)\s*(.+?)\s*(?:最近|附近|周边|旁边)\s*(?:的)?",
+        r"(?:near|nearby|closest to|closest)\s+(.+?)(?:[，,。.!?]|$)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source, re.IGNORECASE)
+        if not match:
+            continue
+        candidate = match.group(1).strip(" ，,。.!?")
+        if candidate and len(candidate) <= 160:
+            return candidate
+    return None
 
 
 def _special_place_anchor(session: Any, role: str | None) -> dict[str, Any] | None:
@@ -949,7 +1046,12 @@ async def _finalize_commute_presentation(session: Any, state: dict[str, Any]) ->
         if isinstance(item, dict) and item.get("role") == "user"
     ]
     destination: dict[str, Any] | None = None
+    actions = state.get("pending_actions") or []
     action = state.get("pending_action")
+    special_action = next((
+        item for item in reversed(actions)
+        if isinstance(item, dict) and item.get("kind") == "save_special_place"
+    ), None)
     current_message = str(state.get("user_message") or "")
     action_role = (
         str(action.get("special_role") or "").lower()
@@ -965,6 +1067,30 @@ async def _finalize_commute_presentation(session: Any, state: dict[str, Any]) ->
         contextual_role = _current_location_commute_role(context)
         role = action_role if contextual_role == action_role else None
     if not role:
+        # A road trip can start at a just-resolved Home and end at the last
+        # Atlas stop. The Home proposal remains pending, but its exact map
+        # point is safe to use for the preview route.
+        context = "\n".join([*recent_user_messages[-3:], current_message]).casefold()
+        home_origin_trip = bool(re.search(r"\bfrom (?:my )?home\b|从(?:我)?家(?:出发)?", context))
+        proposed_home = special_action if isinstance(special_action, dict) and special_action.get("special_role") == "home" else None
+        places = presentation.get("places") or []
+        if not (home_origin_trip and proposed_home and places):
+            return
+        home = (proposed_home.get("places") or [{}])[0]
+        destination = places[-1]
+        try:
+            home_lng, home_lat = float(home["longitude"]), float(home["latitude"])
+            destination_lng, destination_lat = float(destination["longitude"]), float(destination["latitude"])
+        except (KeyError, TypeError, ValueError):
+            return
+        presentation["special_places"] = [
+            *[item for item in (presentation.get("special_places") or []) if item.get("role") != "home"],
+            {"role": "home", "name": home.get("name") or "Home", "longitude": home_lng, "latitude": home_lat, "full_address": home.get("full_address")},
+        ]
+        presentation["commute_route"] = await _road_route([
+            (home_lng, home_lat),
+            (destination_lng, destination_lat),
+        ], profile="driving")
         return
 
     if (
@@ -1075,6 +1201,31 @@ async def _road_route(coordinates: list[tuple[float, float]], profile: str = "wa
 
 
 def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
+    def register_pending_action(action: dict[str, Any]) -> None:
+        def replaces(existing: dict[str, Any]) -> bool:
+            if action.get("kind") == "create_atlas":
+                return existing.get("kind") == "create_atlas"
+            return (
+                action.get("kind") in {"save_special_place", "delete_special_place"}
+                and existing.get("kind") in {"save_special_place", "delete_special_place"}
+                and existing.get("special_role") == action.get("special_role")
+            )
+
+        state["pending_actions"] = [
+            item for item in state.setdefault("pending_actions", [])
+            if not replaces(item)
+        ]
+        state["pending_actions"].append(action)
+        # Existing tool and persistence code still reads the most recent
+        # action. The response additionally exposes the full list so a Home
+        # save and an Atlas draft can be confirmed independently.
+        session.pending_chat_action = action
+        session.pending_chat_actions = [
+            *[item for item in getattr(session, "pending_chat_actions", []) if not replaces(item)],
+            action,
+        ]
+        state["pending_action"] = action
+
     @tool
     async def resolve_special_place(query: str, role: str) -> dict[str, Any]:
         """Resolve a user-supplied Home, Office, or School to that exact map point. Never writes data."""
@@ -1185,8 +1336,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             "special_role": clean_role,
             "operation": clean_operation,
         }
-        session.pending_chat_action = action
-        state["pending_action"] = action
+        register_pending_action(action)
         special_places = [item for item in [current] if item] if clean_operation == "delete" else [{
             "role": clean_role, "name": normalized[0]["name"], "latitude": normalized[0]["latitude"],
             "longitude": normalized[0]["longitude"], "full_address": normalized[0].get("full_address"),
@@ -1287,17 +1437,36 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         limit: int | None = None,
         radius_km: int | None = None,
         anchor_role: str | None = None,
+        anchor_query: str | None = None,
     ) -> dict[str, Any]:
-        """Find POIs near GPS or a saved Home, Office, or School anchor."""
+        """Find POIs near GPS, a named place, or a saved Home, Office, or School anchor."""
         current = getattr(session, "user_location", None)
         requested_anchor_role = str(anchor_role or "").strip().lower()
-        inferred_anchor_role = _nearby_special_place_role(str(state.get("user_message") or ""))
+        user_message = str(state.get("user_message") or "")
+        clean_anchor_query = " ".join(str(anchor_query or _nearby_named_anchor_query(user_message) or "").split()).strip(" .")[:160]
+        inferred_anchor_role = _nearby_special_place_role(user_message)
         resolved_anchor_role = requested_anchor_role if requested_anchor_role in {"home", "office", "school"} else inferred_anchor_role
         anchor = _special_place_anchor(session, resolved_anchor_role)
         if resolved_anchor_role and not anchor:
             return {"error": f"Your saved {resolved_anchor_role.title()} location is unavailable."}
         if anchor:
             longitude, latitude = anchor["longitude"], anchor["latitude"]
+        elif clean_anchor_query:
+            from backend.services.geocoder import geocode
+            resolved = await geocode(clean_anchor_query)
+            if not resolved:
+                return {"error": f"Could not locate {clean_anchor_query}."}
+            try:
+                longitude, latitude = float(resolved["longitude"]), float(resolved["latitude"])
+            except (KeyError, TypeError, ValueError):
+                return {"error": f"Could not locate {clean_anchor_query}."}
+            anchor = {
+                "role": "anchor",
+                "name": str(resolved.get("name") or clean_anchor_query),
+                "longitude": longitude,
+                "latitude": latitude,
+                "full_address": resolved.get("full_address"),
+            }
         elif current and len(current) == 2:
             longitude, latitude = float(current[0]), float(current[1])
         else:
@@ -1675,8 +1844,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         }
         session.locations = places
         session.route = result.get("route")
-        session.pending_chat_action = action
-        state["pending_action"] = action
+        register_pending_action(action)
         state["presentation"] = {
             "kind": "atlas_draft",
             "title": title,
@@ -1702,8 +1870,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             "title": f"Add {len(normalized)} place{'s' if len(normalized) != 1 else ''}",
             "places": normalized,
         }
-        session.pending_chat_action = action
-        state["pending_action"] = action
+        register_pending_action(action)
         state["presentation"] = {"kind": "places_map", "title": action["title"], "places": normalized, "route": session.route}
         return {"proposal": action}
 
@@ -1731,11 +1898,14 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
         # geocoded draft in the regular chat context so the model can submit a
         # revised complete itinerary without re-geocoding unchanged stops.
         session.locations = normalized
-        session.pending_chat_action = action
-        state["pending_action"] = action
+        register_pending_action(action)
+        existing_presentation = state.get("presentation")
         state["presentation"] = {
             "kind": "atlas_draft", "title": clean_title, "places": normalized,
             "planning_note": action["planning_note"], "route": session.route,
+            "special_places": existing_presentation.get("special_places", []) if isinstance(existing_presentation, dict) else [],
+            "commute_route": existing_presentation.get("commute_route") if isinstance(existing_presentation, dict) else None,
+            "commute_destination": existing_presentation.get("commute_destination") if isinstance(existing_presentation, dict) else None,
         }
         return {"proposal": action}
 
@@ -1886,12 +2056,81 @@ async def _run_agent(
     started_at = time.perf_counter()
     session.chat_presentation = None
     session.add_message("user", message)
+    explicit_place_names = _explicit_save_place_names(message)
+    explicit_atlas_names = _explicit_atlas_place_names(message)
+    explicit_action_kind = "create_atlas" if explicit_atlas_names else "save_places"
+    explicit_place_names = explicit_atlas_names or explicit_place_names
+    if explicit_place_names:
+        await _emit_agent_status(on_status, "Locating the requested places")
+        resolved_places = await _resolve_explicit_place_names(explicit_place_names)
+        resolved_names = {place["name"].casefold() for place in resolved_places}
+        unresolved_names = [name for name in explicit_place_names if name.casefold() not in resolved_names]
+        if resolved_places:
+            action = {
+                "action_id": str(uuid.uuid4()),
+                "kind": explicit_action_kind,
+                "title": (
+                    f"Atlas: {resolved_places[0]['name']} and {len(resolved_places) - 1} more"
+                    if explicit_action_kind == "create_atlas" and len(resolved_places) > 1
+                    else (f"Atlas: {resolved_places[0]['name']}" if explicit_action_kind == "create_atlas" else f"Add {len(resolved_places)} place{'s' if len(resolved_places) != 1 else ''}")
+                ),
+                "places": resolved_places,
+            }
+            if explicit_action_kind == "create_atlas":
+                action["planning_note"] = "Atlas created from the places you selected."
+            presentation = {
+                "kind": "atlas_draft" if explicit_action_kind == "create_atlas" else "places_map",
+                "title": action["title"],
+                # This is a result set, not a nearby or route result. Keeping
+                # device GPS out avoids collapsing a Los Angeles map to a
+                # cross-country overview.
+                "places": resolved_places,
+                "route": None,
+            }
+            session.locations = resolved_places
+            session.route = None
+            session.pending_chat_action = action
+            session.chat_presentation = presentation
+            unresolved_note = (
+                f" I could not confidently resolve {', '.join(unresolved_names)}."
+                if unresolved_names else ""
+            )
+            verb = "Create" if explicit_action_kind == "create_atlas" else "Add"
+            destination = "your Atlas" if explicit_action_kind == "create_atlas" else "My Places"
+            answer = f"I found {len(resolved_places)} place{'s' if len(resolved_places) != 1 else ''}. Review them on the map, then tap {verb} to save them to {destination}.{unresolved_note}"
+            tool_results = [
+                {"name": "resolve_named_places", "result": {"places": resolved_places, "unresolved": unresolved_names}},
+                {"name": "propose_create_atlas" if explicit_action_kind == "create_atlas" else "propose_add_places", "result": {"proposal": action}},
+                {"name": "chat_presentation", "result": {"presentation": presentation}},
+            ]
+            proposal_tool = "propose_create_atlas" if explicit_action_kind == "create_atlas" else "propose_add_places"
+            session.add_message("assistant", answer, tool_calls=["resolve_named_places", proposal_tool], tool_results=tool_results)
+            try:
+                await conversation_manager.save_conversation(session.session_id)
+            except Exception as error:
+                print(f"[Chat] Failed to persist explicit place save: {error}")
+            return {
+                "session_id": session.session_id,
+                "conversation_id": session.conversation_id,
+                "response": answer,
+                "locations": resolved_places,
+                "route": None,
+                "tool_calls_used": ["resolve_named_places", proposal_tool],
+                "tool_results": tool_results,
+                "status": "success",
+                "partial": bool(unresolved_names),
+                "pending_action": action,
+                "presentation": presentation,
+                "place_cards": [],
+                "metrics": {"latency_ms": round((time.perf_counter() - started_at) * 1000), "tool_call_count": 2},
+            }
     model_name = os.environ.get("OPENAI_MODEL_MANGO") or os.environ.get("OPENAI_MODEL", DEFAULT_CHAT_MODEL)
     model = get_chat_model(CHAT_PROVIDER, model_name, temperature=0.3)
     prompt: list[BaseMessage] = [SystemMessage(content=_system_prompt(session)), *_history_messages(session)]
     state: dict[str, Any] = {
         "presentation": None,
         "pending_action": None,
+        "pending_actions": [],
         "nearby_groups": {},
         "user_message": message,
     }
@@ -1962,6 +2201,7 @@ async def _run_agent(
         "session_id": session.session_id, "conversation_id": session.conversation_id, "response": answer, "locations": session.locations,
         "route": session.route, "tool_calls_used": tool_calls_used, "tool_results": tool_results,
         "status": status, "partial": partial, "pending_action": state["pending_action"],
+        "pending_actions": state["pending_actions"],
         "presentation": state["presentation"], "place_cards": [],
         "metrics": {
             "latency_ms": round((time.perf_counter() - started_at) * 1000),

@@ -132,6 +132,7 @@ type Message = {
     special_role?: 'home' | 'office' | 'school' | null;
     operation?: 'create' | 'update' | 'delete' | null;
   } | null;
+  pendingActions?: Array<NonNullable<Message['pendingAction']>>;
   completedAction?: {
     kind: 'save_special_place';
     special_role: 'home' | 'office' | 'school';
@@ -498,11 +499,23 @@ function chatMapPlaceId(place: AtlasChatPresentation['places'][number], index: n
 }
 
 function boundsForChatMarkers(markers: MapMarker[]) {
-  if (markers.length < 2) return undefined;
-  const longitudes = markers.map((marker) => marker.longitude);
-  const latitudes = markers.map((marker) => marker.latitude);
-  const longitudePadding = Math.max(0.003, (Math.max(...longitudes) - Math.min(...longitudes)) * 0.18);
-  const latitudePadding = Math.max(0.003, (Math.max(...latitudes) - Math.min(...latitudes)) * 0.18);
+  const validMarkers = markers.filter((marker) => (
+    Number.isFinite(marker.longitude)
+    && Number.isFinite(marker.latitude)
+    && marker.longitude >= -180
+    && marker.longitude <= 180
+    && marker.latitude >= -85
+    && marker.latitude <= 85
+    // A missing geocode must never expand a city-focused map to the globe.
+    && !(marker.longitude === 0 && marker.latitude === 0)
+  ));
+  if (validMarkers.length < 2) return undefined;
+  const longitudes = validMarkers.map((marker) => marker.longitude);
+  const latitudes = validMarkers.map((marker) => marker.latitude);
+  // The chat map has no persistent bottom sheet. A tighter frame keeps a
+  // same-city response (for example several NYC venues) clearly legible.
+  const longitudePadding = Math.max(0.002, (Math.max(...longitudes) - Math.min(...longitudes)) * 0.12);
+  const latitudePadding = Math.max(0.002, (Math.max(...latitudes) - Math.min(...latitudes)) * 0.12);
   return {
     ne: [Math.max(...longitudes) + longitudePadding, Math.max(...latitudes) + latitudePadding] as [number, number],
     sw: [Math.min(...longitudes) - longitudePadding, Math.min(...latitudes) - latitudePadding] as [number, number],
@@ -734,22 +747,11 @@ export default function AIChatBox({
     if (!autoFollowLatestRef.current || responseScrollFrameRef.current !== null) return;
     responseScrollFrameRef.current = requestAnimationFrame(() => {
       responseScrollFrameRef.current = null;
-      const responseLayout = streamingResponseLayoutRef.current;
-      const viewportHeight = listHeightRef.current;
-      if (!responseLayout || !viewportHeight) return;
-
-      const safeTop = headerOverlayHeightRef.current + 12;
-      const safeBottom = viewportHeight - composerOverlayHeightRef.current - 16;
-      const targetOffset = Math.max(
-        0,
-        responseLayout.y - safeTop,
-        responseLayout.y + responseLayout.height - safeBottom,
-      );
-      autoFollowLatestRef.current = true;
-      flatListRef.current?.scrollToOffset({
-        offset: targetOffset,
-        animated: animated && !reducedMotion,
-      });
+      // `onLayout` on a cell is local to that cell, not a document-level
+      // FlatList offset. Using it here occasionally produced offset zero and
+      // snapped a streaming conversation back to the top. The composer is
+      // already accounted for by list content padding, so pin to the end.
+      flatListRef.current?.scrollToEnd({ animated: animated && !reducedMotion });
     });
   }, [reducedMotion]);
 
@@ -1052,6 +1054,18 @@ export default function AIChatBox({
           }
         } else if (!initialImportWelcome) {
           setMessages(restoredMessages);
+          // A history payload mounts after the chat surface, and its result
+          // cards can finish measuring after the first list layout. Settle at
+          // the newest turn across those layouts rather than leaving a
+          // reopened conversation at offset zero.
+          autoFollowLatestRef.current = true;
+          requestAnimationFrame(scrollToLatest);
+          setTimeout(() => {
+            if (!cancelled) scrollToLatest();
+          }, 180);
+          setTimeout(() => {
+            if (!cancelled) scrollToLatest();
+          }, 480);
         }
         hydratedConversationIdRef.current = conversationId;
       } catch (error) {
@@ -1064,7 +1078,7 @@ export default function AIChatBox({
     return () => {
       cancelled = true;
     };
-  }, [atlasWelcome, conversationId, importWelcome, initialImportWelcome, places, title]);
+  }, [atlasWelcome, conversationId, importWelcome, initialImportWelcome, places, scrollToLatest, title]);
 
   const handleSend = async (submittedText = inputText.trim(), editingId?: string) => {
     const text = submittedText.trim();
@@ -1108,6 +1122,10 @@ export default function AIChatBox({
     setAttachedImageBase64(null);
     setEditingMessageId(null);
     setPending(true);
+    // The new user/assistant rows mount on the following layout pass. Repeat
+    // after that pass so sending a prompt cannot leave the viewport at top.
+    requestAnimationFrame(scrollToLatest);
+    setTimeout(scrollToLatest, 120);
 
     try {
       const currentSessionId = await ensureSession();
@@ -1139,7 +1157,12 @@ export default function AIChatBox({
       );
       setMessages((current) => current.map((message) => (
         message.id === assistantMessageId
-          ? { ...message, presentation: normalizedPresentation, pendingAction: result.pending_action }
+          ? {
+              ...message,
+              presentation: normalizedPresentation,
+              pendingAction: result.pending_action,
+              pendingActions: result.pending_actions,
+            }
           // The backend has one pending confirmation per chat. A revised Atlas
           // draft replaces the older proposal, so its old card must not remain
           // actionable and accidentally create the stale itinerary.
@@ -1243,8 +1266,12 @@ export default function AIChatBox({
     if (chatMapPresentation?.user_location) {
       return [chatMapPresentation.user_location.longitude, chatMapPresentation.user_location.latitude];
     }
+    const plannedHome = chatMapPresentation?.commute_route
+      ? chatMapPresentation.special_places?.find((place) => place.role === 'home')
+      : null;
+    if (plannedHome) return [plannedHome.longitude, plannedHome.latitude];
     return userLocation ?? null;
-  }, [chatMapPresentation?.user_location, userLocation]);
+  }, [chatMapPresentation?.commute_route, chatMapPresentation?.special_places, chatMapPresentation?.user_location, userLocation]);
 
   const chatMapPlaces = useMemo<ChatMapPlace[]>(() => (chatMapPresentation?.places ?? []).map((place, index) => ({
     ...place,
@@ -1256,10 +1283,11 @@ export default function AIChatBox({
     ...(chatMapPresentation?.special_places ?? []).filter((place) => place.role !== chatMapCommuteDestination?.role),
     ...(chatMapCommuteDestination ? [chatMapCommuteDestination] : []),
   ], [chatMapCommuteDestination, chatMapPresentation?.special_places]);
-  const chatMapIsCommute = Boolean(chatMapCommuteDestination);
+  const chatMapIsCommute = Boolean(chatMapCommuteDestination || chatMapPresentation?.commute_route);
+  const showChatMapUserLocation = chatMapPresentation?.kind === 'nearby_map' || Boolean(chatMapCommuteDestination);
 
   const chatMapMarkers = useMemo<MapMarker[]>(() => [
-    ...(chatMapOrigin ? [{
+    ...(showChatMapUserLocation && chatMapOrigin ? [{
       id: 'chat-user-location',
       latitude: chatMapOrigin[1],
       longitude: chatMapOrigin[0],
@@ -1276,6 +1304,8 @@ export default function AIChatBox({
       // The destination of a commute remains visually distinct from the
       // purple recommendation and green origin, including before it is saved.
       tone: chatMapCommuteDestination?.role === place.role ? 'atlas' as const : place.role,
+      renderAsAnnotation: true,
+      alwaysShowLabel: true,
       preserveToneOnSelect: true,
     })),
     ...chatMapPlaces.map((place, index) => ({
@@ -1284,11 +1314,15 @@ export default function AIChatBox({
       longitude: place.longitude,
       title: place.name,
       description: place.full_address || place.description || undefined,
-      tone: chatMapPresentation?.kind === 'atlas_draft' ? 'atlas' as const : 'recommended' as const,
+      tone: chatMapPresentation?.kind === 'atlas_draft' && !chatMapPresentation.commute_route
+        ? 'atlas' as const
+        : 'recommended' as const,
+      renderAsAnnotation: true,
+      alwaysShowLabel: true,
       preserveToneOnSelect: chatMapPresentation?.kind !== 'atlas_draft',
       order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
     })),
-  ], [chatMapCommuteDestination?.role, chatMapOrigin, chatMapPlaces, chatMapPresentation?.kind, chatMapSpecialPlaces]);
+  ], [chatMapCommuteDestination?.role, chatMapOrigin, chatMapPlaces, chatMapPresentation?.commute_route, chatMapPresentation?.kind, chatMapSpecialPlaces, showChatMapUserLocation]);
 
   // The map should enter on the AI outcome itself. Device and special-place
   // markers remain visible context, but must not zoom a single recommendation
@@ -1297,9 +1331,11 @@ export default function AIChatBox({
     id: place.markerId,
     latitude: place.latitude,
     longitude: place.longitude,
-    tone: chatMapPresentation?.kind === 'atlas_draft' ? 'atlas' as const : 'recommended' as const,
+    tone: chatMapPresentation?.kind === 'atlas_draft' && !chatMapPresentation.commute_route
+      ? 'atlas' as const
+      : 'recommended' as const,
     order: chatMapPresentation?.kind === 'atlas_draft' ? index + 1 : undefined,
-  })), [chatMapPlaces, chatMapPresentation?.kind]);
+  })), [chatMapPlaces, chatMapPresentation?.commute_route, chatMapPresentation?.kind]);
 
   const selectedChatMapPlace = useMemo(
     () => chatMapPlaces.find((place) => place.markerId === chatMapSelectedId) ?? null,
@@ -1503,7 +1539,7 @@ export default function AIChatBox({
       centerCoordinate: chatMapOutcomeMarkers[0]
         ? [chatMapOutcomeMarkers[0].longitude, chatMapOutcomeMarkers[0].latitude]
         : (chatMapOrigin ?? (chatMapMarkers[0] ? [chatMapMarkers[0].longitude, chatMapMarkers[0].latitude] : undefined)),
-      bounds: boundsForChatMarkers(chatMapOutcomeMarkers),
+      bounds: boundsForChatMarkers(chatMapIsCommute ? chatMapMarkers : chatMapOutcomeMarkers),
       // Keep broad AI result sets at a readable regional scale. A bounds fit
       // may otherwise zoom all the way to a globe-like overview.
       minimumBoundsZoom: 3,
@@ -1520,7 +1556,7 @@ export default function AIChatBox({
       overlay: chatMapOverlay,
       hideChrome: true,
     });
-  }, [chatMapCameraKey, chatMapMarkers, chatMapOrigin, chatMapOutcomeMarkers, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+  }, [chatMapCameraKey, chatMapIsCommute, chatMapMarkers, chatMapOrigin, chatMapOutcomeMarkers, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
     const requestId = chatMapRouteRequestRef.current + 1;
@@ -1558,9 +1594,10 @@ export default function AIChatBox({
     }
   }, [onPresentationMapOpen, userLocation]);
 
-  const resolveAction = async (messageId: string, accepted: boolean) => {
+  const resolveAction = async (messageId: string, accepted: boolean, actionId?: string) => {
     const message = messages.find((item) => item.id === messageId);
-    const action = message?.pendingAction;
+    const action = (actionId ? message?.pendingActions?.find((candidate) => candidate.action_id === actionId) : null)
+      ?? message?.pendingAction;
     if (!action || !sessionId || resolvingActionIdsRef.current.has(action.action_id)) return;
     resolvingActionIdsRef.current.add(action.action_id);
 
@@ -1568,7 +1605,11 @@ export default function AIChatBox({
     // open for Supabase, background photo enrichment, or action bookkeeping.
     if (accepted && action.kind === 'save_places') {
       setMessages((current) => current.map((item) => (
-        item.id === messageId ? { ...item, pendingAction: null } : item
+        item.id === messageId ? {
+          ...item,
+          pendingAction: item.pendingAction?.action_id === action.action_id ? null : item.pendingAction,
+          pendingActions: item.pendingActions?.filter((candidate) => candidate.action_id !== action.action_id),
+        } : item
       )));
       const placesToSave = action.places.map((place, index) => ({
         id: place.external_id || 'chat-place-' + index,
@@ -1628,7 +1669,8 @@ export default function AIChatBox({
         setMessages((current) => current.map((item) => (
           item.id === messageId ? {
             ...item,
-            pendingAction: null,
+            pendingAction: item.pendingAction?.action_id === action.action_id ? null : item.pendingAction,
+            pendingActions: item.pendingActions?.filter((candidate) => candidate.action_id !== action.action_id),
             completedAction: {
               kind: 'save_special_place',
               special_role: action.special_role!,
@@ -1669,7 +1711,11 @@ export default function AIChatBox({
         saved_place_count: accepted ? action.places.length : 0,
       });
       setMessages((current) => current.map((item) => (
-        item.id === messageId ? { ...item, pendingAction: null } : item
+        item.id === messageId ? {
+          ...item,
+          pendingAction: item.pendingAction?.action_id === action.action_id ? null : item.pendingAction,
+          pendingActions: item.pendingActions?.filter((candidate) => candidate.action_id !== action.action_id),
+        } : item
       )));
       if (createdAtlasId) {
         setOverlay({ kind: 'atlasDetail', atlasId: createdAtlasId });
@@ -1800,10 +1846,11 @@ export default function AIChatBox({
                 <AtlasChatResultCard
                   presentation={item.presentation}
                   pendingAction={item.pendingAction}
+                  pendingActions={item.pendingActions}
                   completedAction={item.completedAction}
                   onOpenMap={() => openPresentationMap(item.presentation!)}
-                  onConfirm={() => { void resolveAction(item.id, true); }}
-                  onCancel={() => { void resolveAction(item.id, false); }}
+                  onConfirm={(actionId) => { void resolveAction(item.id, true, actionId); }}
+                  onCancel={(actionId) => { void resolveAction(item.id, false, actionId); }}
                 />
               ) : null}
               {item.starterPrompts?.length ? (

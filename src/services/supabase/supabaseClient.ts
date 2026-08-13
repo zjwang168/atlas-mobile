@@ -354,3 +354,14 @@ export async function countChatHistory(): Promise<number> {
 
   return count ?? 0;
 }
+
+/** Delete a conversation owned by the current user. Dependent records cascade
+ * from the `conversations` foreign-key relationships. */
+export async function deleteChatHistory(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('conversations')
+    .delete()
+    .eq('id', id);
+
+  if (error) throw error;
+}

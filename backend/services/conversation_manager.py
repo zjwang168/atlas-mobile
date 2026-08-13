@@ -36,6 +36,7 @@ class Session:
     user_location: Optional[tuple[float, float]] = None
     chat_presentation: Optional[dict] = None
     pending_chat_action: Optional[dict] = None
+    pending_chat_actions: list[dict] = field(default_factory=list)
     # Sent by the authenticated mobile read model on each chat turn. It is
     # request-scoped user data, never inferred or persisted as model memory.
     special_places: list = field(default_factory=list)

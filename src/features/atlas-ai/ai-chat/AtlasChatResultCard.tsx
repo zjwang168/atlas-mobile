@@ -10,23 +10,26 @@ import { Text } from '@/components/ui/text';
 
 const GOOGLE_MAPS_ICON = require('../../../../assets/icons/google-maps2.png');
 
+type PendingAction = {
+  action_id: string;
+  kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
+  title: string;
+  places: AtlasChatPresentation['places'];
+  special_role?: 'home' | 'office' | 'school' | null;
+  operation?: 'create' | 'update' | 'delete' | null;
+};
+
 type Props = {
   presentation: AtlasChatPresentation;
-  pendingAction?: {
-    action_id: string;
-    kind: 'save_places' | 'create_atlas' | 'save_special_place' | 'delete_special_place';
-    title: string;
-    places: AtlasChatPresentation['places'];
-    special_role?: 'home' | 'office' | 'school' | null;
-    operation?: 'create' | 'update' | 'delete' | null;
-  } | null;
+  pendingAction?: PendingAction | null;
+  pendingActions?: PendingAction[];
   completedAction?: {
     kind: 'save_special_place';
     special_role: 'home' | 'office' | 'school';
     placeName: string;
   } | null;
-  onConfirm?: () => void;
-  onCancel?: () => void;
+  onConfirm?: (actionId: string) => void;
+  onCancel?: (actionId: string) => void;
   onOpenMap?: () => void;
 };
 
@@ -63,11 +66,10 @@ function boundsForPlaces(places: AtlasChatPresentation['places']) {
   };
 }
 
-export default function AtlasChatResultCard({ presentation, pendingAction, completedAction, onConfirm, onCancel, onOpenMap }: Props) {
-  const hasActionStatus = Boolean(pendingAction || completedAction);
+export default function AtlasChatResultCard({ presentation, pendingAction, pendingActions, completedAction, onConfirm, onCancel, onOpenMap }: Props) {
+  const actions = pendingActions?.length ? pendingActions : pendingAction ? [pendingAction] : [];
+  const hasActionStatus = actions.length > 0 || Boolean(completedAction);
   const featuredPlace = presentation.places[0];
-  const specialPlaceName = pendingAction?.places[0]?.name?.trim();
-  const specialRole = pendingAction?.special_role;
   const hasSinglePlace = presentation.places.length === 1 && Boolean(featuredPlace);
   const placeSubtitle = featuredPlace
     ? [featuredPlace.category, featuredPlace.full_address || featuredPlace.description]
@@ -80,9 +82,10 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
     ...(commuteDestination ? [commuteDestination] : []),
   ];
   const mapPlaces = [...specialPlaces, ...presentation.places];
+  const showUserLocation = presentation.kind === 'nearby_map' || Boolean(commuteDestination);
   const commuteRoute = presentation.commute_route?.route;
   const markers: MapMarker[] = [
-    ...(presentation.user_location ? [{
+    ...(showUserLocation && presentation.user_location ? [{
       id: 'chat-user-location',
       latitude: presentation.user_location.latitude,
       longitude: presentation.user_location.longitude,
@@ -128,8 +131,12 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
             // The thumbnail describes the AI result. Context pins can be far
             // away, so including them here would collapse this view into a
             // globe instead of framing the returned places.
-            bounds={boundsForPlaces(presentation.places.length ? presentation.places : mapPlaces)}
+            bounds={boundsForPlaces(commuteRoute ? mapPlaces : presentation.places.length ? presentation.places : mapPlaces)}
             minimumBoundsZoom={3}
+            // AI results are a deliberate, finite set. Keep every returned
+            // point visible in the preview instead of replacing nearby pins
+            // with a JavaScript or Mapbox count cluster.
+            disableRecommendedClustering
             padding={{
               paddingTop: 56,
               paddingRight: 24,
@@ -140,7 +147,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
             // The regular route ends at the recommendation, not at School/
             // Office/Home. Do not show it as a false commute fallback.
             routeGeoJSON={commuteDestination ? commuteRoute : presentation.route?.route}
-            routeVariant={commuteDestination && commuteRoute ? 'commute' : undefined}
+            routeVariant={commuteRoute ? 'commute' : undefined}
             style={styles.map}
             compassEnabled={false}
           />
@@ -188,18 +195,30 @@ export default function AtlasChatResultCard({ presentation, pendingAction, compl
               <CheckIcon size={17} color="#71717A" weight="bold" />
               <Text style={styles.savedButtonText}>Saved</Text>
             </Animated.View>
-          </Animated.View> : <Animated.View key="pending" entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
-            <Text style={styles.confirmText}>{pendingAction?.kind === 'create_atlas' ? 'Create Atlas?' : pendingAction?.kind === 'delete_special_place' ? `Delete your ${specialRole}?` : pendingAction?.kind === 'save_special_place' ? `${pendingAction.operation === 'update' ? 'Replace' : 'Save'} ${specialPlaceName || 'this location'} as your ${specialRole}?` : 'Ready to add these places?'}</Text>
-            <View style={styles.actions}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={onCancel} style={styles.cancelButton}>
-                <XIcon size={17} color="#52525B" weight="bold" />
-              </Pressable>
-              <Pressable accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={onConfirm} style={styles.confirmButton}>
-                <CheckIcon size={17} color="#FFFFFF" weight="bold" />
-                <Text style={styles.confirmButtonText}>{pendingAction?.kind === 'create_atlas' ? 'Create' : pendingAction?.kind === 'delete_special_place' ? 'Delete' : pendingAction?.kind === 'save_special_place' ? 'Save' : 'Add'}</Text>
-              </Pressable>
-            </View>
-          </Animated.View>}
+          </Animated.View> : null}
+          {actions.map((action) => {
+            const actionPlaceName = action.places[0]?.name?.trim();
+            const actionRole = action.special_role;
+            const prompt = action.kind === 'create_atlas' ? 'Create Atlas?'
+              : action.kind === 'delete_special_place' ? `Delete your ${actionRole}?`
+              : action.kind === 'save_special_place' ? `${action.operation === 'update' ? 'Replace' : 'Save'} ${actionPlaceName || 'this location'} as your ${actionRole}?`
+              : 'Ready to add these places?';
+            const label = action.kind === 'create_atlas' ? 'Create'
+              : action.kind === 'delete_special_place' ? 'Delete'
+              : action.kind === 'save_special_place' ? 'Save' : 'Add';
+            return <Animated.View key={action.action_id} entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
+              <Text style={styles.confirmText}>{prompt}</Text>
+              <View style={styles.actions}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={() => onCancel?.(action.action_id)} style={styles.cancelButton}>
+                  <XIcon size={17} color="#52525B" weight="bold" />
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={() => onConfirm?.(action.action_id)} style={styles.confirmButton}>
+                  <CheckIcon size={17} color="#FFFFFF" weight="bold" />
+                  <Text style={styles.confirmButtonText}>{label}</Text>
+                </Pressable>
+              </View>
+            </Animated.View>;
+          })}
         </View>
       ) : null}
       {hasSinglePlace ? (

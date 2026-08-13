@@ -188,6 +188,7 @@ function HomeScreenContent({
     Platform.OS === 'ios' &&
     overlay.kind === 'none' &&
     !externalOverlayVisible &&
+    !chatMapOpen &&
     !chatVisible &&
     !accountOpen &&
     !authOpen &&
@@ -296,6 +297,7 @@ function HomeScreenContent({
   const bottomPanelActive = mainPanelActive || overlay.kind === 'placeDetail' || overlay.kind === 'eventDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
   const nativeMainPanelActive =
     Platform.OS === 'ios' &&
+    mainSheetVisible &&
     (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
   const settledBottomPanelHeight = nativeMainPanelActive
     ? settledPanelSnapState === 'short'

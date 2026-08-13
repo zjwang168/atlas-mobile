@@ -15,8 +15,7 @@ import {
 import { Text } from '@/components/ui/text';
 import TopBlurFade from '@/components/ui/top-blur-fade';
 import { useAppDialog } from '@/components/feedback/AppDialog';
-import { deleteConversation } from '@/services/api/apiService';
-import { loadChatHistory } from '@/services/supabase/supabaseClient';
+import { deleteChatHistory, loadChatHistory } from '@/services/supabase/supabaseClient';
 import { useHome, type ChatHistoryItem } from '@/features/home/HomeContext';
 
 const COLOR = {
@@ -143,13 +142,13 @@ export default function AtlasAIHome({
           variant: 'destructive',
           onPress: () => {
             setDeletingId(item.id);
-            void deleteConversation(item.id)
+            void deleteChatHistory(item.id)
               .then(() => {
                 deleteChatHistoryItem(item.id);
                 setDeleteModeId((current) => (current === item.id ? null : current));
               })
               .catch((error) => {
-                console.warn('[AtlasAIHome] deleteConversation failed:', error);
+                console.warn('[AtlasAIHome] deleteChatHistory failed:', error);
                 showDialog({
                   title: 'Could not delete this chat',
                   message: 'Nothing has changed. Please try again in a moment.',
