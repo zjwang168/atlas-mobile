@@ -150,7 +150,7 @@ function markerVisualKey(marker: RenderMarker): string {
  *
  * A pin drops back to `MarkerView` only when it needs something a layer cannot
  * express: the selected/deleting animations, a popup anchored to it, the
- * numbered Atlas route pins, or the special Home/Office/School glyphs.
+ * animated Atlas route pins, or the special Home/Office/School glyphs.
  */
 function rendersAsLayer(
   marker: MapMarker,
@@ -161,11 +161,11 @@ function rendersAsLayer(
 ): boolean {
   if (marker.id === selectedMarkerId || marker.id === deletingMarkerId) return false;
   if (popupMarkerId && marker.id === popupMarkerId) return false;
-  // Recommended pins get their own non-clustered Mapbox source below. They
-  // remain native map points, not React MarkerViews.
+  // Recommended and stable Atlas pins get their own non-clustered Mapbox
+  // sources below. They remain native map points, not React MarkerViews.
   // Both drive Reanimated transitions on the React dot.
   if (marker.entering || marker.pulsing) return false;
-  return marker.tone === undefined || marker.tone === 'saved' || marker.tone === 'recommended';
+  return marker.tone === undefined || marker.tone === 'saved' || marker.tone === 'recommended' || marker.tone === 'atlas';
 }
 
 function markerTitleKey(marker: MapMarker): string | null {
@@ -722,10 +722,14 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       : [],
     [disableRecommendedClustering, layerMarkers],
   );
+  const atlasLayerMarkers = useMemo(
+    () => layerMarkers.filter((marker) => marker.tone === 'atlas'),
+    [layerMarkers],
+  );
   const clusteredLayerMarkers = useMemo(
     () => disableRecommendedClustering
-      ? layerMarkers.filter((marker) => marker.tone !== 'recommended')
-      : layerMarkers,
+      ? layerMarkers.filter((marker) => marker.tone !== 'recommended' && marker.tone !== 'atlas')
+      : layerMarkers.filter((marker) => marker.tone !== 'atlas'),
     [disableRecommendedClustering, layerMarkers],
   );
   const annotationMarkers = useMemo(
@@ -756,6 +760,20 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
     })),
   }), [recommendedLayerMarkers]);
+  const atlasLayerFeatures = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => ({
+    type: 'FeatureCollection',
+    features: atlasLayerMarkers.map((marker) => ({
+      type: 'Feature' as const,
+      id: marker.id,
+      properties: {
+        markerId: marker.id,
+        title: marker.title ?? '',
+        tone: 'atlas',
+        order: String(marker.order ?? ''),
+      },
+      geometry: { type: 'Point' as const, coordinates: [marker.longitude, marker.latitude] },
+    })),
+  }), [atlasLayerMarkers]);
   // Mapbox keeps the ordinary layers visible throughout a pinch/zoom. The
   // burst state below is the only time those layers yield to a transition.
   const layerVisible = true;
@@ -1219,6 +1237,33 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 circleOpacityTransition: { duration: 180, delay: 0 },
                 circleStrokeWidth: 3,
                 circleStrokeColor: '#FFFFFF',
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        ) : null}
+        {atlasLayerMarkers.length > 0 ? (
+          <MapboxGL.ShapeSource id="atlasPoints" shape={atlasLayerFeatures} cluster={false} onPress={handleLayerPress}>
+            <MapboxGL.CircleLayer
+              id="atlasPointCircle"
+              style={{
+                circleColor: '#E77B32',
+                circleRadius: 11,
+                circleOpacity: layerVisible ? 1 : 0,
+                circleRadiusTransition: { duration: 220, delay: 0 },
+                circleOpacityTransition: { duration: 180, delay: 0 },
+                circleStrokeWidth: 3,
+                circleStrokeColor: '#FFFFFF',
+              }}
+            />
+            <MapboxGL.SymbolLayer
+              id="atlasPointOrder"
+              style={{
+                textField: ['get', 'order'],
+                textSize: 13,
+                textFont: ['Open Sans Bold'],
+                textColor: '#FFFFFF',
+                textAllowOverlap: true,
+                textIgnorePlacement: true,
               }}
             />
           </MapboxGL.ShapeSource>
