@@ -2,6 +2,7 @@ import { Host } from '@expo/ui';
 import {
   BottomSheet,
   Group,
+  Overlay,
   RNHostView,
 } from '@expo/ui/swift-ui';
 import {
@@ -42,6 +43,8 @@ const DETENTS: PresentationDetent[] = [SHORT_DETENT, DEFAULT_DETENT, TALL_DETENT
 const SHEET_BACKGROUND_OPACITY = 0.6;
 const BOTTOM_BAR_CLEARANCE = 84;
 const TAB_BAR_BOTTOM_OFFSET = 16;
+const TAB_BAR_WIDTH = 248;
+const TAB_BAR_HEIGHT = 52;
 
 type PlacesBottomSheetProps = {
   visible: boolean;
@@ -153,78 +156,101 @@ function PlacesBottomSheet({
         onDismiss={onDismissed}
       >
         <Group modifiers={modifiers}>
-          <RNHostView>
-            <View style={styles.content}>
-              {activeTab === TAB_PLAN ? (
-                <MyPlan
-                  snapTo={handleSnapTo}
-                  active={isActive}
-                  onExit={onExitPlan}
-                />
-              ) : (
-                <>
+          {/* `Overlay` maps to SwiftUI's own `.overlay(alignment:)` — the tab
+              bar is composited above the sheet's content by the native
+              layout engine in the same pass that drives the sheet's detent
+              animation, instead of as an RN child inside the content's own
+              (live-resizing) frame. That's what keeps it from lagging behind
+              a drag/snap: positioning is native, not bridged through RN
+              layout on every frame. It also keeps it genuinely stacked above
+              the content (unlike `BottomSheet`'s `anchor` slot, which renders
+              *underneath* the presented sheet — it's meant for the trigger
+              view, not an overlay). */}
+          <Overlay alignment="bottom">
+            <RNHostView>
+              <View style={styles.content}>
+                {activeTab === TAB_PLAN ? (
+                  <MyPlan
+                    snapTo={handleSnapTo}
+                    active={isActive}
+                    onExit={onExitPlan}
+                  />
+                ) : (
+                  <>
+                    <View
+                      collapsable={false}
+                      pointerEvents={topMode === 'saved' ? 'auto' : 'none'}
+                      style={[
+                        styles.modePane,
+                        topMode !== 'saved' && styles.modePaneHidden,
+                      ]}
+                    >
+                      <MyPlaces
+                        active={topMode === 'saved'}
+                        onPlacePress={onPlacePress}
+                        bottomInset={BOTTOM_BAR_CLEARANCE}
+                        onDeleteInitiated={onDeleteInitiated}
+                        activeView={activeView}
+                        verticalScrollEnabled={
+                          groupSnapState === 'tall' || groupSnapState === 'full'
+                        }
+                      />
+                    </View>
+                    <View
+                      collapsable={false}
+                      pointerEvents={topMode === 'discover' ? 'auto' : 'none'}
+                      style={[
+                        styles.modePane,
+                        topMode !== 'discover' && styles.modePaneHidden,
+                      ]}
+                    >
+                      <Discover
+                        active={topMode === 'discover'}
+                        // The sheet does not resize for the keyboard, so the
+                        // list has to clear it itself or its last results sit
+                        // under it with no way to scroll them up.
+                        bottomInset={BOTTOM_BAR_CLEARANCE + keyboardHeight}
+                        snapTo={handleSnapTo}
+                        onSearchPress={onSearchPress}
+                        verticalScrollEnabled={
+                          groupSnapState === 'tall' || groupSnapState === 'full'
+                        }
+                      />
+                    </View>
+                  </>
+                )}
+                {/* <TopBlurFade
+                  edge="bottom"
+                  height={120}
+                  intensity={80}
+                  tint="systemUltraThinMaterialLight"
+                  scrim={0}
+                /> */}
+              </View>
+            </RNHostView>
+            {bottomBar ? (
+              <Overlay.Content>
+                {/* `matchContents` sizes this RNHostView to the RN tree's own
+                    measured size instead of stretching to the base content's
+                    (detent-sized) frame — needed since `HomeTabBar`'s own
+                    root is absolutely positioned (out of flow), which reports
+                    zero intrinsic size on its own. Wrapping it in an
+                    explicit-size box gives SwiftUI a concrete, non-zero size
+                    to align at the bottom. */}
+                <RNHostView matchContents>
                   <View
-                    collapsable={false}
-                    pointerEvents={topMode === 'saved' ? 'auto' : 'none'}
                     style={[
-                      styles.modePane,
-                      topMode !== 'saved' && styles.modePaneHidden,
+                      styles.bottomBarWrap,
+                      keyboardHeight > 0 && { transform: [{ translateY: keyboardHeight }] },
                     ]}
+                    pointerEvents="box-none"
                   >
-                    <MyPlaces
-                      active={topMode === 'saved'}
-                      onPlacePress={onPlacePress}
-                      bottomInset={BOTTOM_BAR_CLEARANCE}
-                      onDeleteInitiated={onDeleteInitiated}
-                      activeView={activeView}
-                      verticalScrollEnabled={
-                        groupSnapState === 'tall' || groupSnapState === 'full'
-                      }
-                    />
+                    {bottomBar}
                   </View>
-                  <View
-                    collapsable={false}
-                    pointerEvents={topMode === 'discover' ? 'auto' : 'none'}
-                    style={[
-                      styles.modePane,
-                      topMode !== 'discover' && styles.modePaneHidden,
-                    ]}
-                  >
-                    <Discover
-                      active={topMode === 'discover'}
-                      // The sheet does not resize for the keyboard, so the
-                      // list has to clear it itself or its last results sit
-                      // under it with no way to scroll them up.
-                      bottomInset={BOTTOM_BAR_CLEARANCE + keyboardHeight}
-                      snapTo={handleSnapTo}
-                      onSearchPress={onSearchPress}
-                      verticalScrollEnabled={
-                        groupSnapState === 'tall' || groupSnapState === 'full'
-                      }
-                    />
-                  </View>
-                </>
-              )}
-              {/* <TopBlurFade
-                edge="bottom"
-                height={120}
-                intensity={80}
-                tint="systemUltraThinMaterialLight"
-                scrim={0}
-              /> */}
-              {bottomBar ? (
-                <View
-                  style={[
-                    styles.bottomBarOverlay,
-                    keyboardHeight > 0 && { transform: [{ translateY: keyboardHeight }] },
-                  ]}
-                  pointerEvents="box-none"
-                >
-                  {bottomBar}
-                </View>
-              ) : null}
-            </View>
-          </RNHostView>
+                </RNHostView>
+              </Overlay.Content>
+            ) : null}
+          </Overlay>
         </Group>
       </BottomSheet>
     </Host>
@@ -253,12 +279,12 @@ const styles = StyleSheet.create({
   modePaneHidden: {
     opacity: 0,
   },
-  bottomBarOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: TAB_BAR_BOTTOM_OFFSET,
-    height: 52,
+  // Fixed-size box (not measured from resizing content) so `HomeTabBar`'s own
+  // absolutely-positioned root — placed via its `bottomOffset` prop — has a
+  // concrete height to resolve `bottom` against.
+  bottomBarWrap: {
+    width: TAB_BAR_WIDTH,
+    height: TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET,
     zIndex: 30,
   },
 });

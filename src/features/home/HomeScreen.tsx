@@ -518,7 +518,6 @@ function HomeScreenContent({
               onTabChange={handleTabChange}
               onAddPress={handleAddPress}
               onChatPress={handleChatPress}
-              bottomOffset={0}
             />
           ) : undefined}
         />
