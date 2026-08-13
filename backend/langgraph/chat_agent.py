@@ -282,6 +282,12 @@ Tool rules:
   Home, ask only for Home when it is missing. If School is missing, ask only
   for School. In all cases, ask only for the missing special place named as
   the destination; do not request every special place before answering.
+- For a route recommendation phrased as "from Home", "from Office", or
+  "from School" to a named landmark, venue, city, or other concrete POI,
+  treat the saved role as the origin. Do not ask for that role again when it
+  exists in Saved special places. Resolve the named destination, find real
+  stops along the route, and propose the complete ordered Atlas. Only ask for
+  an address when the explicitly named origin role is actually absent.
 - For a dining or activity request "between" two saved special places with no
   live constraint, call find_places_between_special_places. For rating, price,
   menu, dietary, availability, or commute constraints, call
@@ -647,6 +653,46 @@ def _special_place_tokens(value: str) -> set[str]:
 def _is_special_place_area_query(query: str) -> bool:
     text = query.casefold()
     return any(term in text for term in _SPECIAL_PLACE_AREA_TERMS)
+
+
+def _special_place_name_match_score(query: str, name: str) -> int:
+    """Score a literal place-name match independently from its address.
+
+    A city name is commonly present in the address of every nearby business.
+    Address-only matching therefore must never turn a city or neighborhood
+    supplied as Home, Office, or School into an arbitrary POI. Geocoded
+    address features are included because Search Box represents some city
+    centers that way; business categories are deliberately excluded.
+    """
+    normalized_name = " ".join(str(name or "").casefold().split())
+    best = 0
+    for variant in _special_place_query_variants(query):
+        normalized = " ".join(variant.casefold().split())
+        if normalized and normalized == normalized_name:
+            best = max(best, 20_000 + len(normalized))
+        elif normalized and normalized in normalized_name:
+            best = max(best, 10_000 + len(normalized))
+    return best
+
+
+def _looks_like_street_address(query: str) -> bool:
+    """Whether an address-only Search Box match is safe to consider."""
+    text = query.casefold()
+    return bool(re.search(
+        r"\d|\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|suite|ste)\b",
+        text,
+    ))
+
+
+def _is_geographic_feature(place: dict[str, Any], raw: dict[str, Any]) -> bool:
+    """Allow bare city/area queries only for geographic, non-business features."""
+    category = " ".join(str(value or "") for value in (
+        place.get("category"), raw.get("feature_type"), raw.get("place_type"),
+    )).casefold()
+    return any(term in category for term in (
+        "place", "city", "locality", "municipality", "region", "district",
+        "neighborhood", "town", "village", "county", "address",
+    ))
 
 
 def _special_place_match_score(query: str, values: list[str]) -> int:
@@ -1067,6 +1113,42 @@ async def _finalize_commute_presentation(session: Any, state: dict[str, Any]) ->
         contextual_role = _current_location_commute_role(context)
         role = action_role if contextual_role == action_role else None
     if not role:
+        # Named-destination commute: a saved Home/Office/School is the route
+        # origin, while Atlas places remain recommendations/destination. Keep
+        # the origin as an anchor pin, never as a duplicate numbered stop.
+        context = "\n".join([*recent_user_messages[-3:], current_message])
+        named_origin = re.search(
+            r"\bfrom (?:my )?(home|office|school|company|work)\b\s+to\s+(.+?)(?:,|\?|$)",
+            context,
+            re.IGNORECASE,
+        )
+        if named_origin:
+            requested_role = {"company": "office", "work": "office"}.get(named_origin.group(1).casefold(), named_origin.group(1).casefold())
+            origin = next((item for item in (getattr(session, "special_places", []) or []) if str(item.get("role") or "").casefold() == requested_role), None)
+            places = [item for item in (presentation.get("places") or []) if isinstance(item, dict)]
+            if origin and places:
+                try:
+                    origin_lng, origin_lat = float(origin["longitude"]), float(origin["latitude"])
+                    origin_name = str(origin.get("name") or "").casefold()
+                    places = [item for item in places if not (
+                        str(item.get("name") or "").casefold() == origin_name
+                        and abs(float(item["longitude"]) - origin_lng) < 0.002
+                        and abs(float(item["latitude"]) - origin_lat) < 0.002
+                    )]
+                    coordinates = [(origin_lng, origin_lat)]
+                    for item in places:
+                        coordinates.append((float(item["longitude"]), float(item["latitude"])))
+                except (KeyError, TypeError, ValueError):
+                    coordinates = []
+                if len(coordinates) >= 2:
+                    presentation["places"] = places
+                    presentation["special_places"] = [
+                        *[item for item in (presentation.get("special_places") or []) if item.get("role") != requested_role],
+                        {"role": requested_role, "name": origin.get("name") or requested_role.title(),
+                         "longitude": origin_lng, "latitude": origin_lat, "full_address": origin.get("full_address")},
+                    ]
+                    presentation["commute_route"] = await _road_route(coordinates, profile="driving")
+                    return
         # A road trip can start at a just-resolved Home and end at the last
         # Atlas stop. The Home proposal remains pending, but its exact map
         # point is safe to use for the preview route.
@@ -1245,7 +1327,7 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
             ), return_exceptions=True)
         except Exception as error:
             return {"error": f"Could not resolve this place: {type(error).__name__}"}
-        matches: list[tuple[int, dict[str, Any]]] = []
+        matches: list[tuple[int, int, dict[str, Any]]] = []
         for group in retrieved:
             if not isinstance(group, list):
                 continue
@@ -1257,16 +1339,24 @@ def _agent_tools(session: Any, state: dict[str, Any]) -> list[BaseTool]:
                     place.get("name", ""), place.get("full_address", ""),
                     str(raw.get("city") or ""), str(raw.get("region") or ""), str(raw.get("country") or ""),
                 ])
-                if score:
-                    matches.append((score, place))
+                name_score = _special_place_name_match_score(clean_query, str(place.get("name") or ""))
+                # A named POI or street address can use Search Box's address
+                # match. A bare city/area cannot: e.g. every San Jose business
+                # has "San Jose" in its address, but none is the city itself.
+                if (
+                    name_score
+                    or (score and _looks_like_street_address(clean_query))
+                    or (score and _is_geographic_feature(place, raw))
+                ):
+                    matches.append((name_score, score, place))
         if matches:
             # Area names must resolve to the named area, not an arbitrary hotel,
             # cafe, or other POI whose address only happens to be nearby.
             if _is_special_place_area_query(clean_query):
-                matches = [item for item in matches if _is_special_place_area_query(str(item[1].get("name") or ""))]
+                matches = [item for item in matches if _is_special_place_area_query(str(item[2].get("name") or ""))]
             if matches:
-                matches.sort(key=lambda item: item[0], reverse=True)
-                resolved = matches[0][1]
+                matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                resolved = matches[0][2]
                 state.setdefault("resolved_special_places", {})[clean_role] = resolved
                 return {"role": clean_role, "place": resolved, "query": clean_query, "resolution": "mapbox"}
 
@@ -2181,6 +2271,31 @@ async def _run_agent(
         answer, status, partial = f"Sorry, I couldn't answer that right now: {error}", "error", True
     answer = answer or "I don't have a response for that yet."
     await _finalize_commute_presentation(session, state)
+    # A route/itinerary may be rendered as an Atlas draft by a finder tool
+    # before the model calls `propose_create_atlas`. Do not show an Atlas map
+    # without its required explicit create confirmation.
+    presentation = state.get("presentation")
+    actions = state.get("pending_actions") or []
+    if (
+        isinstance(presentation, dict)
+        and presentation.get("kind") == "atlas_draft"
+        and presentation.get("places")
+        and not any(isinstance(item, dict) and item.get("kind") == "create_atlas" for item in actions)
+    ):
+        atlas_action = {
+            "action_id": str(uuid.uuid4()),
+            "kind": "create_atlas",
+            "title": str(presentation.get("title") or "Atlas draft")[:100],
+            "places": _dedupe_places(presentation["places"]),
+            "planning_note": presentation.get("planning_note"),
+        }
+        state["pending_actions"] = [*actions, atlas_action]
+        state["pending_action"] = atlas_action
+        session.pending_chat_action = atlas_action
+        session.pending_chat_actions = [
+            *[item for item in (getattr(session, "pending_chat_actions", []) or []) if item.get("kind") != "create_atlas"],
+            atlas_action,
+        ]
     # Persist the final, order-independent map model alongside the tool log.
     # History restoration otherwise sees whichever tool happened to run last
     # and can lose the commute destination marker and route controls.

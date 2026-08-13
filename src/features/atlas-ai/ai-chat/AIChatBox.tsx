@@ -532,6 +532,39 @@ function distanceLabel(origin: [number, number], destination: [number, number]):
   return kilometers < 1 ? `${Math.max(10, Math.round(kilometers * 1000 / 10) * 10)} m` : `${kilometers.toFixed(kilometers < 10 ? 1 : 0)} km`;
 }
 
+function routeSegmentDistanceLabels(route: GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString> | null, places: ChatMapPlace[]): Array<{ id: string; coordinate: [number, number]; text: string }> {
+  if (!route || places.length < 2) return [];
+  const lines = route.geometry.type === 'LineString' ? [route.geometry.coordinates] : route.geometry.coordinates;
+  const radians = Math.PI / 180;
+  const kilometers = (a: GeoJSON.Position, b: GeoJSON.Position) => {
+    const latitudeDelta = (b[1] - a[1]) * radians;
+    const longitudeDelta = (b[0] - a[0]) * radians;
+    const h = Math.sin(latitudeDelta / 2) ** 2 + Math.cos(a[1] * radians) * Math.cos(b[1] * radians) * Math.sin(longitudeDelta / 2) ** 2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  };
+  const labelForLine = (line: GeoJSON.Position[], index: number) => {
+    const length = line.slice(1).reduce((total, point, pointIndex) => total + kilometers(line[pointIndex], point), 0);
+    if (line.length < 2 || !Number.isFinite(length) || length <= 0) return null;
+    const text = length >= 10 ? `${Math.round(length)} km` : `${length.toFixed(1)} km`;
+    return { id: `chat-route-distance-${index}`, coordinate: line[Math.floor(line.length / 2)] as [number, number], text };
+  };
+  if (lines.length === places.length - 1) return lines.map(labelForLine).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const line = lines[0] ?? [];
+  if (line.length < 2) return [];
+  const nearestPointIndex = (place: ChatMapPlace) => line.reduce((nearest, point, index) => {
+    const currentDistance = (point[0] - place.longitude) ** 2 + (point[1] - place.latitude) ** 2;
+    const nearestDistance = (line[nearest][0] - place.longitude) ** 2 + (line[nearest][1] - place.latitude) ** 2;
+    return currentDistance < nearestDistance ? index : nearest;
+  }, 0);
+  let previous = nearestPointIndex(places[0]);
+  return places.slice(1).flatMap((place, index) => {
+    const next = Math.max(previous, nearestPointIndex(place));
+    const label = labelForLine(line.slice(previous, next + 1), index);
+    previous = next;
+    return label ? [label] : [];
+  });
+}
+
 type GlassIconButtonProps = {
   icon: Icon;
   label: string;
@@ -1101,6 +1134,11 @@ export default function AIChatBox({
     autoFollowLatestRef.current = true;
     const controller = new AbortController();
     chatAbortControllerRef.current = controller;
+    const isActiveRequest = () => (
+      !controller.signal.aborted
+      && !streamCancelledRef.current
+      && streamingMessageIdRef.current === assistantMessageId
+    );
 
     setMessages((prev) => {
       const base = editingId
@@ -1129,12 +1167,17 @@ export default function AIChatBox({
 
     try {
       const currentSessionId = await ensureSession();
+      if (!isActiveRequest()) return;
       const result = await chatWithAtlasStream(
         currentSessionId,
         message,
         {
-          onToken: enqueueStreamDelta,
-          onStatus: (label) => updateAgentStatus(assistantMessageId, label),
+          onToken: (delta) => {
+            if (isActiveRequest()) enqueueStreamDelta(delta);
+          },
+          onStatus: (label) => {
+            if (isActiveRequest()) updateAgentStatus(assistantMessageId, label);
+          },
         },
         activeConversationIdRef.current,
         userLocation,
@@ -1149,6 +1192,9 @@ export default function AIChatBox({
         imageMode,
         controller.signal,
       );
+      // A cancelled/timed-out request can still finish server-side. Its
+      // completed payload must never attach an old Atlas card to this chat.
+      if (!isActiveRequest()) return;
       const normalizedPresentation = normalizeCommutePresentation(
         result.presentation,
         result.pending_action,
@@ -1196,11 +1242,11 @@ export default function AIChatBox({
         replaceChatHistoryItem(historyItemIdRef.current, historyItem);
       }
     } catch (error) {
-      if (!streamCancelledRef.current && !streamedTextRef.current) {
+      if (isActiveRequest() && !streamedTextRef.current) {
         enqueueStreamDelta('I couldn\'t respond just now. Please try sending that again in a moment.');
       }
     } finally {
-      if (!streamCancelledRef.current) completeStreamAfterDisplay();
+      if (isActiveRequest()) completeStreamAfterDisplay();
       if (chatAbortControllerRef.current === controller) chatAbortControllerRef.current = null;
     }
   };
@@ -1446,13 +1492,18 @@ export default function AIChatBox({
       setChatMapOverviewRouteVisible(true);
       return;
     }
-    const coordinates = chatMapCommuteDestination && chatMapOrigin
+    const coordinates = chatMapPresentation?.kind === 'atlas_draft'
+      ? chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number])
+      : chatMapCommuteDestination && chatMapOrigin
       ? [chatMapOrigin, [chatMapCommuteDestination.longitude, chatMapCommuteDestination.latitude] as [number, number]]
       : [
         ...(chatMapOrigin ? [chatMapOrigin] : []),
         ...chatMapPlaces.map((place) => [place.longitude, place.latitude] as [number, number]),
       ];
-    if (coordinates.length < 2) return;
+    if (coordinates.length < 2) {
+      showChatMapNotice('Add at least two stops to show a route');
+      return;
+    }
     setChatMapRouteLoading(true);
     try {
       const result = await requestAtlasRoute(coordinates);
@@ -1460,6 +1511,7 @@ export default function AIChatBox({
       setChatMapOverviewRouteVisible(true);
     } catch (error) {
       console.warn('[AIChatBox] could not load overview route:', error);
+      showChatMapNotice('Route unavailable right now');
       showDialog({
         title: 'Route unavailable',
         message: 'We could not load a route for these places. Please try again.',
@@ -1468,7 +1520,17 @@ export default function AIChatBox({
     } finally {
       setChatMapRouteLoading(false);
     }
-  }, [chatMapCommuteDestination, chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, clearChatMapSelection, showDialog]);
+  }, [chatMapCommuteDestination, chatMapOrigin, chatMapOverviewRoute, chatMapOverviewRouteVisible, chatMapPlaces, chatMapPresentation?.kind, clearChatMapSelection, showDialog]);
+
+  const shareChatAtlasDraft = useCallback(() => {
+    if (!chatMapPresentation || chatMapPresentation.kind !== 'atlas_draft') return;
+    const stops = chatMapPresentation.places.map((place, index) => `${index + 1}. ${place.name}`).join('\n');
+    const note = chatMapPresentation.planning_note ? `\n\n${chatMapPresentation.planning_note}` : '';
+    void Share.share({ message: `${chatMapPresentation.title}\n${stops}${note}` }).catch((error) => {
+      console.warn('[AIChatBox] could not share Atlas draft:', error);
+      showChatMapNotice('Sharing is unavailable right now');
+    });
+  }, [chatMapPresentation, showChatMapNotice]);
 
   const returnFromPresentationMap = useCallback(() => {
     clearChatMapSelection();
@@ -1492,6 +1554,12 @@ export default function AIChatBox({
     () => chatMapRoute ? JSON.stringify(chatMapRoute.geometry.coordinates) : 'none',
     [chatMapRoute],
   );
+  const chatMapRouteDistanceLabels = useMemo(
+    () => chatMapPresentation?.kind === 'atlas_draft' && chatMapOverviewRouteVisible
+      ? routeSegmentDistanceLabels(chatMapRoute, chatMapPlaces)
+      : [],
+    [chatMapOverviewRouteVisible, chatMapPlaces, chatMapPresentation?.kind, chatMapRoute],
+  );
   const chatMapPopup = useMemo(() => selectedChatMapPlace && chatMapOrigin ? (
     <AtlasChatMapPlacePopup
       name={selectedChatMapPlace.name}
@@ -1509,10 +1577,12 @@ export default function AIChatBox({
     onReturn={returnFromPresentationMap}
     onClose={closePresentationMap}
     placePopup={chatMapPopup}
-    atlasItinerary={chatMapPresentation?.kind === 'atlas_draft' ? <AtlasChatMapItinerary presentation={chatMapPresentation} /> : null}
+    atlasItinerary={chatMapPresentation?.kind === 'atlas_draft' ? <AtlasChatMapItinerary presentation={chatMapPresentation} routeDistanceLabels={chatMapRouteDistanceLabels.map((label) => label.text)} /> : null}
     notice={chatMapNotice}
-    routeToggle={chatMapIsCommute ? { visible: chatMapOverviewRouteVisible, loading: chatMapRouteLoading, onPress: () => { void toggleChatMapOverviewRoute(); } } : null}
-  />, [chatMapIsCommute, chatMapNotice, chatMapOverviewRouteVisible, chatMapPopup, chatMapPresentation, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, toggleChatMapOverviewRoute]);
+    atlasMode={chatMapPresentation?.kind === 'atlas_draft'}
+    onShareAtlas={chatMapPresentation?.kind === 'atlas_draft' ? shareChatAtlasDraft : undefined}
+    routeToggle={chatMapIsCommute || chatMapPresentation?.kind === 'atlas_draft' ? { visible: chatMapOverviewRouteVisible, loading: chatMapRouteLoading, onPress: () => { void toggleChatMapOverviewRoute(); } } : null}
+  />, [chatMapIsCommute, chatMapNotice, chatMapOverviewRouteVisible, chatMapPopup, chatMapPresentation, chatMapRouteDistanceLabels, chatMapRouteLoading, closePresentationMap, insets.top, returnFromPresentationMap, shareChatAtlasDraft, toggleChatMapOverviewRoute]);
   const chatMapStateKey = [
     chatMapCameraKey,
     chatMapPresentation?.kind ?? 'none',
@@ -1549,6 +1619,7 @@ export default function AIChatBox({
       disableRecommendedClustering: true,
       routeGeoJSON: chatMapRoute ?? undefined,
       routeVariant: chatMapRouteVariant,
+      routeDistanceLabels: chatMapRouteDistanceLabels,
       selectedMarkerId: chatMapSelectedId,
       onMarkerPress: (marker) => { void selectChatMapPlace(marker); },
       onMapPress: clearChatMapSelection,
@@ -1556,7 +1627,7 @@ export default function AIChatBox({
       overlay: chatMapOverlay,
       hideChrome: true,
     });
-  }, [chatMapCameraKey, chatMapIsCommute, chatMapMarkers, chatMapOrigin, chatMapOutcomeMarkers, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
+  }, [chatMapCameraKey, chatMapIsCommute, chatMapMarkers, chatMapOrigin, chatMapOutcomeMarkers, chatMapOverlay, chatMapPresentation, chatMapRoute, chatMapRouteDistanceLabels, chatMapRouteVariant, chatMapSelectedId, chatMapStateKey, clearChatMapSelection, selectChatMapPlace, setAtlasMapState]);
 
   const openPresentationMap = useCallback((presentation: AtlasChatPresentation) => {
     const requestId = chatMapRouteRequestRef.current + 1;
@@ -1660,12 +1731,19 @@ export default function AIChatBox({
           country: place.country || null,
           photo_url: place.photo_url || null,
         });
-        // Chat action confirmation is audit bookkeeping only. The local place
-        // cache has already been updated, so an unavailable audit endpoint
-        // must not turn a saved Office/Home/School into a visible failure.
-        void confirmAtlasChatAction(sessionId, action.action_id, true, {
-          saved_place_count: 1,
-        }).catch((error) => console.warn('[AIChatBox] special-place action audit failed:', error));
+        // Wait for the server to clear the pending confirmation and mirror
+        // this special place into the active session before accepting the
+        // next prompt. Otherwise a quick follow-up can be told to save Home
+        // again instead of receiving its route and Atlas proposal.
+        try {
+          await confirmAtlasChatAction(sessionId, action.action_id, true, {
+            saved_place_count: 1,
+          });
+        } catch (error) {
+          // The local My Places write is authoritative; a failed audit call
+          // must not make an already-saved special place look unsuccessful.
+          console.warn('[AIChatBox] special-place action audit failed:', error);
+        }
         setMessages((current) => current.map((item) => (
           item.id === messageId ? {
             ...item,

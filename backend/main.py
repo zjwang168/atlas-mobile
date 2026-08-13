@@ -979,6 +979,29 @@ async def confirm_chat_action(req: ChatActionConfirmationRequest) -> dict:
         "accepted": req.accepted,
         "outcome": outcome,
     }
+    # The mobile client has already saved the user-confirmed special place in
+    # My Places. Mirror that fact in this in-memory chat immediately so a
+    # follow-up route request cannot be treated as still waiting for Home,
+    # Office, or School while the next request is arriving.
+    if req.accepted and action and action.get("kind") == "save_special_place":
+        role = str(action.get("special_role") or "").lower()
+        place = (action.get("places") or [None])[0]
+        if role in {"home", "office", "school"} and isinstance(place, dict):
+            try:
+                special_place = {
+                    "role": role,
+                    "name": place.get("name") or role.title(),
+                    "latitude": float(place["latitude"]),
+                    "longitude": float(place["longitude"]),
+                    "full_address": place.get("full_address") or place.get("description") or "",
+                }
+            except (KeyError, TypeError, ValueError):
+                special_place = None
+            if special_place:
+                session.special_places = [
+                    item for item in (session.special_places or [])
+                    if not isinstance(item, dict) or item.get("role") != role
+                ] + [special_place]
     session.add_message("tool", "chat_action_confirmation", tool_results=event)
     session.pending_chat_actions = [item for item in actions if item.get("action_id") != req.action_id]
     if session.pending_chat_action and session.pending_chat_action.get("action_id") == req.action_id:

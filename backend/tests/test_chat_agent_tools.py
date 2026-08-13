@@ -586,6 +586,58 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Home: Saved Home (-122.419400, 37.774900)", first_prompt)
         self.assertIn("No saved Home, Office, or School locations.", second_prompt)
 
+    async def test_saved_office_is_an_origin_for_named_landmark_route(self):
+        self.session.special_places = [{
+            "role": "office", "name": "Saved Office", "latitude": 37.789,
+            "longitude": -122.401, "full_address": "San Francisco, CA",
+        }]
+        model = _ToolModel([AIMessage(content="I will use your saved Office as the starting point and plan stops to Fisherman's Wharf.")])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "From office to Fisherman's Wharf, where should I stop along the way?")
+
+        system_prompt = str(model.requests[0][0].content)
+        self.assertIn("Office: Saved Office", system_prompt)
+        self.assertIn("from Home", system_prompt)
+        self.assertNotIn("Office location isn't saved", result["response"])
+
+    async def test_saved_office_route_uses_office_as_anchor_not_numbered_atlas_stop(self):
+        office = {
+            "role": "office", "name": "San Jose", "latitude": 37.3382,
+            "longitude": -121.8863, "full_address": "San Jose, California",
+        }
+        stops = [{
+            "name": "Half Moon Bay", "latitude": 37.4636, "longitude": -122.4286,
+            "full_address": "Half Moon Bay, California", "category": "Town",
+        }, {
+            "name": "Fisherman's Wharf", "latitude": 37.8080, "longitude": -122.4177,
+            "full_address": "San Francisco, California", "category": "Landmark",
+        }]
+        self.session.special_places = [office]
+        model = _ToolModel([
+            tool_call("propose_create_atlas", {"title": "Office to Fisherman's Wharf", "places": [
+                {**office, "category": "Place"}, *stops,
+            ]}),
+            AIMessage(content="I mapped the drive and the stops along the way."),
+        ])
+        route = {"route": {"type": "Feature", "geometry": {"type": "LineString", "coordinates": []}}}
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.langgraph.chat_agent._road_route", new=AsyncMock(return_value=route)) as road_route,
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "From office to Fisherman's Wharf, where should I stop along the way?")
+
+        presentation = result["presentation"]
+        self.assertEqual([place["name"] for place in presentation["places"]], ["Half Moon Bay", "Fisherman's Wharf"])
+        self.assertEqual(presentation["special_places"][-1]["name"], "San Jose")
+        self.assertEqual(presentation["commute_route"], route)
+        road_route.assert_awaited_once_with([
+            (-121.8863, 37.3382), (-122.4286, 37.4636), (-122.4177, 37.8080),
+        ], profile="driving")
+
     async def test_commute_destination_survives_reverse_tool_order(self):
         school = {
             "name": "Stanford University", "latitude": 37.4275, "longitude": -122.1697,
@@ -655,6 +707,34 @@ class AtlasChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proposed["name"], "Chinatown")
         self.assertEqual(proposed["latitude"], 37.7941)
         self.assertNotEqual(proposed["name"], nearby_hotel["name"])
+
+    async def test_special_place_city_never_saves_a_business_with_that_city_in_its_address(self):
+        san_jose = {
+            "name": "San Jose", "latitude": 37.3382, "longitude": -121.8863,
+            "full_address": "San Jose, California, United States", "category": "Place",
+        }
+        nearby_business = {
+            "name": "RN Paving Services", "latitude": 37.3350, "longitude": -121.8780,
+            "full_address": "123 Example St, San Jose, California", "category": "Paving Contractor",
+            "city": "San Jose",
+        }
+        model = _ToolModel([
+            tool_call("resolve_special_place", {"query": "SAN Jose", "role": "office"}, "call-1"),
+            tool_call("propose_special_place_change", {"role": "office", "operation": "create", "place": san_jose}, "call-2"),
+            AIMessage(content="I prepared San Jose as your Office for confirmation."),
+        ])
+        with (
+            patch("backend.langgraph.chat_agent.get_chat_model", return_value=model),
+            patch("backend.services.place_search_service.suggest", new=AsyncMock(return_value=[{"external_id": "paving"}, {"external_id": "san-jose"}])),
+            patch("backend.services.place_search_service.retrieve", new=AsyncMock(side_effect=[[nearby_business], [san_jose]])),
+            patch("backend.services.conversation_manager.conversation_manager.save_conversation", new=AsyncMock()),
+        ):
+            result = await run_chat("tool-test-session", "My office is SAN Jose.")
+
+        proposed = result["pending_action"]["places"][0]
+        self.assertEqual(proposed["name"], "San Jose")
+        self.assertEqual(proposed["latitude"], 37.3382)
+        self.assertNotEqual(proposed["name"], nearby_business["name"])
 
     async def test_special_place_uses_geocoder_when_search_box_cannot_match(self):
         geocoded = {

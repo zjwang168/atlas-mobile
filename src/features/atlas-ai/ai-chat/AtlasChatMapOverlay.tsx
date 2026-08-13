@@ -26,6 +26,8 @@ type ChatMapControlsProps = {
   atlasItinerary?: ReactNode;
   notice?: string | null;
   routeToggle?: { visible: boolean; loading: boolean; onPress: () => void } | null;
+  atlasMode?: boolean;
+  onShareAtlas?: () => void;
 };
 
 type ChatMapPlacePopupProps = {
@@ -103,27 +105,43 @@ function MapPlacePopupTransition({ content }: { content?: ReactNode }) {
   return <Animated.View pointerEvents="auto" style={{ opacity, transform: [{ scale }] }}>{displayedContent}</Animated.View>;
 }
 
-export function AtlasChatMapControls({ topInset, onReturn, onClose, placePopup, atlasItinerary, notice, routeToggle }: ChatMapControlsProps) {
+export function AtlasChatMapControls({ topInset, onReturn, onClose, placePopup, atlasItinerary, notice, routeToggle, atlasMode = false, onShareAtlas }: ChatMapControlsProps) {
   return <View pointerEvents="box-none" style={styles.controlLayer}>
     <View style={[styles.header, { top: topInset + 10 }]}>
       <Pressable accessibilityRole="button" accessibilityLabel="Return to chat" onPress={onReturn} style={({ pressed }) => [styles.returnButton, pressed && styles.controlPressed]}>
         <ArrowLeftIcon size={18} weight="bold" color="#18181B" />
         <Text style={styles.returnText}>Return to chat</Text>
       </Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Close map and return to My Places" onPress={onClose} style={({ pressed }) => [styles.iconButton, pressed && styles.controlPressed]}>
-        <XIcon size={21} weight="bold" color="#18181B" />
-      </Pressable>
+      <View style={styles.headerActions}>
+        {atlasMode && routeToggle ? <Pressable accessibilityRole="button" accessibilityLabel={routeToggle.visible ? 'Hide route' : 'Show route'} disabled={routeToggle.loading} onPress={routeToggle.onPress} style={({ pressed }) => [styles.headerRouteButton, routeToggle.loading && styles.buttonDisabled, pressed && !routeToggle.loading && styles.controlPressed]}>
+          {routeToggle.loading ? <ActivityIndicator size="small" color="#303033" /> : <Ionicons name={routeToggle.visible ? 'eye-off-outline' : 'git-branch-outline'} size={17} color="#303033" />}
+          <Text style={styles.headerRouteText}>{routeToggle.visible ? 'Hide Route' : 'Show Route'}</Text>
+        </Pressable> : null}
+        {atlasMode && onShareAtlas ? <Pressable accessibilityRole="button" accessibilityLabel="Share Atlas draft" onPress={onShareAtlas} style={({ pressed }) => [styles.iconButton, pressed && styles.controlPressed]}>
+          <Ionicons name="share-outline" size={20} color="#18181B" />
+        </Pressable> : null}
+        <Pressable accessibilityRole="button" accessibilityLabel="Close map and return to My Places" onPress={onClose} style={({ pressed }) => [styles.iconButton, pressed && styles.controlPressed]}>
+          <XIcon size={21} weight="bold" color="#18181B" />
+        </Pressable>
+      </View>
     </View>
     <View pointerEvents="none" style={[styles.noticeLayer, { top: topInset + 62 }]}><MapNotice notice={notice} /></View>
-    {routeToggle ? <View pointerEvents="box-none" style={styles.routeToggleLayer}><Pressable accessibilityRole="button" accessibilityLabel={routeToggle.visible ? 'Hide Route' : 'Show Route'} disabled={routeToggle.loading} onPress={routeToggle.onPress} style={({ pressed }) => [styles.routeToggle, pressed && !routeToggle.loading && styles.controlPressed]}>{routeToggle.loading ? <ActivityIndicator size="small" color="#6FA7EE" /> : <Ionicons name={routeToggle.visible ? 'eye-off-outline' : 'git-branch-outline'} size={16} color="#6FA7EE" />}<Text style={styles.routeToggleText}>{routeToggle.visible ? 'Hide Route' : 'Show Route'}</Text></Pressable></View> : null}
+    {!atlasMode && routeToggle ? <View pointerEvents="box-none" style={styles.routeToggleLayer}><Pressable accessibilityRole="button" accessibilityLabel={routeToggle.visible ? 'Hide Route' : 'Show Route'} disabled={routeToggle.loading} onPress={routeToggle.onPress} style={({ pressed }) => [styles.routeToggle, pressed && !routeToggle.loading && styles.controlPressed]}>{routeToggle.loading ? <ActivityIndicator size="small" color="#6FA7EE" /> : <Ionicons name={routeToggle.visible ? 'eye-off-outline' : 'git-branch-outline'} size={16} color="#6FA7EE" />}<Text style={styles.routeToggleText}>{routeToggle.visible ? 'Hide Route' : 'Show Route'}</Text></Pressable></View> : null}
     <View pointerEvents="box-none" style={[styles.placePopupLayer, Boolean(atlasItinerary) && styles.placePopupAboveItinerary]}><MapPlacePopupTransition content={placePopup} /></View>
     {atlasItinerary ? <View pointerEvents="box-none" style={styles.itineraryLayer}>{atlasItinerary}</View> : null}
   </View>;
 }
 
 /** Read-only Atlas detail surface for an unconfirmed chat draft. */
-export function AtlasChatMapItinerary({ presentation }: { presentation: AtlasChatPresentation }) {
+export function AtlasChatMapItinerary({ presentation, routeDistanceLabels = [] }: { presentation: AtlasChatPresentation; routeDistanceLabels?: string[] }) {
   const places = presentation.places;
+  const openDirections = useCallback((from: ItineraryPlace, to: ItineraryPlace) => {
+    const origin = `${from.latitude},${from.longitude}`;
+    const destination = `${to.latitude},${to.longitude}`;
+    Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`).catch((error) => {
+      console.warn('[AtlasChatMap] could not open Google Maps directions:', error);
+    });
+  }, []);
   const renderItem = useCallback(({ item: place, index }: { item: ItineraryPlace; index: number }) => {
     const transport = place.transport ? TRANSPORT_PRESENTATION[place.transport] : null;
     const nextPlace = places[index + 1];
@@ -136,16 +154,26 @@ export function AtlasChatMapItinerary({ presentation }: { presentation: AtlasCha
             {place.timeline_time ? <View style={styles.timeTag}><Ionicons name="time-outline" size={12} color="#2677B5" /><Text style={styles.timeTagText}>{place.timeline_day ? `Day ${place.timeline_day} · ` : ''}{place.timeline_time}</Text></View> : null}
             {transport ? <View accessibilityLabel={transport.label} style={styles.transportTag}><Ionicons name={transport.icon} size={12} color="#64748B" /><Text style={styles.transportTagText}>{transport.label}</Text></View> : null}
           </View> : null}
-          <Text numberOfLines={1} style={styles.itineraryPlaceName}>{place.name}</Text>
-          {place.full_address ? <Text numberOfLines={1} style={styles.itineraryAddress}>{place.full_address}</Text> : null}
+          <View style={styles.itineraryPlaceRow}>
+            {place.photo_url ? <Image source={{ uri: place.photo_url }} style={styles.itineraryPhoto} /> : <View style={styles.itineraryPhotoFallback}><Text style={styles.itineraryPhotoFallbackText}>{place.name.slice(0, 1).toUpperCase()}</Text></View>}
+            <View style={styles.itineraryPlaceCopy}>
+              <Text numberOfLines={1} style={styles.itineraryPlaceName}>{place.name}</Text>
+              {place.full_address ? <Text numberOfLines={1} style={styles.itineraryAddress}>{place.full_address}</Text> : null}
+            </View>
+          </View>
         </View>
       </View>
-      {nextPlace && (nextTransport || nextPlace.travel_duration_minutes != null) ? <View style={styles.itineraryLeg}>
+      {nextPlace ? <View style={styles.itineraryLeg}>
         <View style={styles.itineraryLegLine} />
         <Text style={styles.itineraryLegText}>{nextTransport?.label ?? 'Travel'}{nextPlace.travel_duration_minutes != null ? ` · ${nextPlace.travel_duration_minutes} min` : ''} to next stop</Text>
+        <Pressable accessibilityRole="link" accessibilityLabel={`Navigate from ${place.name} to ${nextPlace.name} in Google Maps`} onPress={() => openDirections(place, nextPlace)} style={styles.itineraryNavigationButton}>
+          <Ionicons name="logo-google" size={9} color="#4285F4" />
+          <Ionicons name="navigate-outline" size={11} color="#3C4043" />
+        </Pressable>
+        {routeDistanceLabels[index] ? <View pointerEvents="none" style={styles.itineraryDistanceLabel}><Text style={styles.itineraryDistanceText}>{routeDistanceLabels[index]}</Text></View> : null}
       </View> : null}
     </View>;
-  }, [places]);
+  }, [openDirections, places, routeDistanceLabels]);
 
   if (presentation.kind !== 'atlas_draft' || !presentation.places.length) return null;
   return <View accessibilityLabel={`${presentation.title} itinerary`} style={styles.itineraryPanel}>
@@ -201,9 +229,12 @@ export function AtlasChatMapPlacePopup({ name, address, distanceLabel, origin, d
 const styles = StyleSheet.create({
   controlLayer: { ...StyleSheet.absoluteFill },
   header: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   returnButton: { minHeight: 42, paddingHorizontal: 14, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.96)', flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(24,24,27,0.14)', shadowColor: '#18181B', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 5 },
   returnText: { color: '#18181B', fontSize: 14, lineHeight: 19, fontWeight: '700' },
   iconButton: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(24,24,27,0.14)', shadowColor: '#18181B', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 5 },
+  headerRouteButton: { minHeight: 42, paddingHorizontal: 13, borderRadius: 21, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(24,24,27,0.14)', shadowColor: '#18181B', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 5 },
+  headerRouteText: { color: '#303033', fontSize: 13, lineHeight: 18, fontWeight: '800' },
   controlPressed: { transform: [{ scale: 0.96 }], opacity: 0.86 },
   noticeLayer: { position: 'absolute', left: 16, right: 16, alignItems: 'center', zIndex: 31 },
   notice: { alignItems: 'center' },
@@ -212,9 +243,9 @@ const styles = StyleSheet.create({
   routeToggle: { minHeight: 38, paddingHorizontal: 13, borderRadius: 19, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(111,167,238,0.35)', shadowColor: '#111827', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   routeToggleText: { color: '#6FA7EE', fontSize: 13, lineHeight: 18, fontWeight: '800' },
   placePopupLayer: { position: 'absolute', left: 16, right: 16, bottom: 150, alignItems: 'center', zIndex: 30 },
-  placePopupAboveItinerary: { bottom: 322 },
-  itineraryLayer: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 20 },
-  itineraryPanel: { maxHeight: 304, paddingTop: 8, paddingHorizontal: 16, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: 'rgba(255,255,255,0.98)', borderTopWidth: StyleSheet.hairlineWidth, borderColor: '#E2E5E8', shadowColor: '#111827', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: -5 }, elevation: 9 },
+  placePopupAboveItinerary: { bottom: '52%' },
+  itineraryLayer: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '50%', zIndex: 20 },
+  itineraryPanel: { flex: 1, minHeight: 0, paddingTop: 8, paddingHorizontal: 16, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: 'rgba(255,255,255,0.98)', borderTopWidth: StyleSheet.hairlineWidth, borderColor: '#E2E5E8', shadowColor: '#111827', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: -5 }, elevation: 9 },
   itineraryHandle: { alignSelf: 'center', width: 32, height: 4, borderRadius: 2, backgroundColor: '#D8DCE0', marginBottom: 8 },
   itineraryHeader: { flexDirection: 'row', alignItems: 'center', paddingBottom: 7 },
   itineraryHeaderCopy: { flex: 1, minWidth: 0 },
@@ -232,11 +263,19 @@ const styles = StyleSheet.create({
   timeTagText: { color: '#2677B5', fontSize: 11, lineHeight: 15, fontWeight: '700' },
   transportTag: { minHeight: 23, paddingHorizontal: 7, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F1F4F5' },
   transportTagText: { color: '#64748B', fontSize: 11, lineHeight: 15, fontWeight: '700' },
+  itineraryPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
+  itineraryPlaceCopy: { flex: 1, minWidth: 0 },
+  itineraryPhoto: { width: 42, height: 42, borderRadius: 9, backgroundColor: '#E7ECF0' },
+  itineraryPhotoFallback: { width: 42, height: 42, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E9FBF1' },
+  itineraryPhotoFallbackText: { color: '#12C170', fontSize: 16, fontWeight: '800' },
   itineraryPlaceName: { color: '#202024', fontSize: 14, lineHeight: 19, fontWeight: '700' },
   itineraryAddress: { color: '#85858C', fontSize: 11, lineHeight: 16, marginTop: 1 },
   itineraryLeg: { minHeight: 23, marginLeft: 11, paddingLeft: 22, paddingTop: 3, paddingBottom: 3, justifyContent: 'center' },
   itineraryLegLine: { position: 'absolute', left: 0, top: 0, bottom: 0, width: StyleSheet.hairlineWidth, backgroundColor: '#DDE2E7' },
   itineraryLegText: { color: '#8A8A91', fontSize: 10, lineHeight: 14 },
+  itineraryNavigationButton: { position: 'absolute', left: '50%', top: 2, marginLeft: -14, width: 28, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D4D9E0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 5 },
+  itineraryDistanceLabel: { position: 'absolute', left: '50%', top: 2, marginLeft: 20, minWidth: 32, height: 18, paddingHorizontal: 5, borderRadius: 9, backgroundColor: '#FBFCFC', borderWidth: StyleSheet.hairlineWidth, borderColor: '#E7EBEE', alignItems: 'center', justifyContent: 'center' },
+  itineraryDistanceText: { color: '#A7A7A7', fontSize: 8, lineHeight: 16, fontWeight: '600' },
   placePopup: { width: '100%', maxWidth: 312, minHeight: 76, paddingHorizontal: 15, paddingVertical: 13, borderRadius: 14, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#111827', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
   saveButton: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#16A34A' },
   removeButton: { backgroundColor: '#64748B' },
