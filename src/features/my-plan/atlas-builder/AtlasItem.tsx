@@ -1,14 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { NotePencilIcon } from 'phosphor-react-native/src/icons/NotePencil';
 import { useMemo } from 'react';
 import { Image, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { type SharedValue, useAnimatedStyle } from 'react-native-reanimated';
-import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Text } from '@/components/ui/text';
-import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
 import { styles } from './styles';
+import { AtlasNoteButton } from './AtlasNoteButton';
 import type { DraftPlace } from './types';
 
 /** Fixed at the right edge behind the row — doesn't translate with the
@@ -29,7 +27,6 @@ function AtlasItemDeleteAction({ progress, onDelete }: { progress: SharedValue<n
 }
 
 export function AtlasItem({ item, index, onFocus, onRemove, onMove, onNote }: { item: DraftPlace; index: number; onFocus: () => void; onRemove: () => void; onMove: (index: number, delta: number) => void; onNote: (note: string) => void }) {
-  const { show: showDialog } = useAppDialog();
   const reorderGesture = useMemo(() => Gesture.Pan().activateAfterLongPress(180).runOnJS(true).onEnd((event) => {
     if (event.translationY > 28) onMove(index, 1);
     if (event.translationY < -28) onMove(index, -1);
@@ -48,10 +45,7 @@ export function AtlasItem({ item, index, onFocus, onRemove, onMove, onNote }: { 
         {item.photo_url ? <Image source={{ uri: item.photo_url }} style={styles.itemImage as import('react-native').ImageStyle} /> : <View style={[styles.itemImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.name.slice(0, 1).toUpperCase()}</Text></View>}
         <TouchableOpacity onPress={onFocus} style={styles.itemCopy}><Text numberOfLines={1} style={styles.itemName}>{item.name}</Text><Text numberOfLines={1} style={styles.itemAddress}>{item.subtitle}</Text>{item.note ? <Text numberOfLines={2} style={styles.itemNoteModern}>{item.note}</Text> : null}</TouchableOpacity>
         <View style={styles.noteActions}>
-          <TouchableOpacity accessibilityLabel={`Edit note for ${item.name}`} onPress={() => showDialog({ title: 'Note', input: { placeholder: 'Add a note', initialValue: item.note ?? '', hint: 'You can also use the voice button to add a note.' }, actions: [{ label: 'Cancel' }, { label: 'Save', variant: 'primary', onPress: onNote }] })} style={styles.noteButton}>
-            <Ionicons name="create-outline" size={18} color="#176C59" />
-          </TouchableOpacity>
-          <VoiceInputButton icon={NotePencilIcon} showVoiceBadge style={styles.noteVoiceButton} onTranscript={(text) => onNote(item.note ? `${item.note} ${text}` : text)} />
+          <AtlasNoteButton placeName={item.name} initialNote={item.note} onSave={onNote} />
         </View>
         <GestureDetector gesture={reorderGesture}><View style={styles.dragHandle}><Ionicons name="reorder-three-outline" size={23} color="#66737C" /></View></GestureDetector>
       </View>

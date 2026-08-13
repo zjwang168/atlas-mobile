@@ -1140,6 +1140,13 @@ async def speech_transcribe(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=502, detail="Speech recognition failed") from exc
 
 
+@app.post("/atlas/notes/transcribe")
+async def atlas_note_transcribe(file: UploadFile = File(...)) -> dict:
+    """Transcribe a short recording made from an Edit Atlas place note."""
+    logging.getLogger("atlas.notes").info("Atlas note transcription requested: %s", file.filename or "unnamed audio")
+    return await speech_transcribe(file)
+
+
 @app.get("/landmarks/seed", response_model=LandmarkSeedResponse,
          responses={422: {"model": ErrorResponse}, 502: {"model": ErrorResponse}})
 async def landmark_seed(

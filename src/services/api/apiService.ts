@@ -328,6 +328,21 @@ export async function transcribeAudio(uri: string): Promise<{ text: string }> {
   return response.json() as Promise<{ text: string }>;
 }
 
+/** Atlas notes use their own endpoint so note recording can evolve separately
+ * from the general import and chat voice-input flows. */
+export async function transcribeAtlasNoteAudio(uri: string): Promise<{ text: string }> {
+  const form = new FormData();
+  const audioFile = new File(uri);
+  form.append('file', audioFile, 'atlas-note.m4a');
+  const response = await fetch(`${API_BASE_URL}/atlas/notes/transcribe`, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: form,
+  });
+  if (!response.ok) throw new Error(`Atlas note speech API error (${response.status})`);
+  return response.json() as Promise<{ text: string }>;
+}
+
 export type MemoryRecord = {
   id: string;
   key: string;
