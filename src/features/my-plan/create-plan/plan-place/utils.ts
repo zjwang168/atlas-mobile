@@ -1,4 +1,4 @@
-import type { DateRange } from '../CreatePlan';
+import type { DateRange } from '../createPlanState';
 
 export function enumerateDates(range: DateRange): string[] {
   if (!range.start) return [];

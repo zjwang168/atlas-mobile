@@ -12,7 +12,7 @@
 
 import type { PlaceDetail } from '@/types/place';
 import type { ParsedPlace } from '../import/importService';
-import { buildPlaceStableKey } from '../import/importService';
+import { buildPlaceStableKey } from './placeIdentity';
 import { createLocalId, LOCAL_CACHE_KEYS } from '../local/cacheKeys';
 import { getCached, getCurrentUserId, setCached, updateCached } from '../local/localStore';
 import { enqueueWrite, flushQueue, isRetryableError, type SavedPlacesIndexEntry, withTimeout } from '../local/syncQueue';

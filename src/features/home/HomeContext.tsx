@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AppState, Image, InteractionManager } from 'react-native';
+import { AppState, Image } from 'react-native';
 import * as Location from 'expo-location';
 import { useAppDialog } from '../../components/feedback/AppDialog';
 import { ContentPanelSnapProvider } from '../../components/content-panel/ContentPanelSnapProvider';
@@ -128,6 +128,8 @@ export type AtlasMapState = {
   markers: MapMarker[];
   /** Per-Atlas camera adjustment. Create an Atlas deliberately leaves this at zero. */
   cameraVerticalOffset?: number;
+  /** Keeps the shared map stationary while the editor sheet is dragged. */
+  lockCameraToScreen?: boolean;
   /** Moves map content vertically in screen points without changing panel layout. */
   cameraScreenOffsetY?: number;
   centerCoordinate?: [number, number];
@@ -450,10 +452,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
         .map((place) => place.photo_url),
     ]);
     if (!urls.length) return;
-    const task = InteractionManager.runAfterInteractions(() => {
+    const task = requestIdleCallback(() => {
       void prefetchPhotoUrlsInOrder(urls);
     });
-    return () => task.cancel();
+    return () => cancelIdleCallback(task);
   }, [atlasPlaces, atlasPlacesLoaded, atlases, atlasesLoaded, savedPlaces, savedPlacesLoaded]);
   useEffect(() => subscribeAtlases(setAtlases), []);
   useEffect(() => subscribeAtlasPlaces(setAtlasPlaces), []);

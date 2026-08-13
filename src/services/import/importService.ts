@@ -21,6 +21,7 @@ import {
   type ParseRequestIdHandler,
   type ParseProgress,
 } from '../api/apiService';
+import { buildPlaceStableKey } from '../place/placeIdentity';
 import { staticMapThumbnail } from '../place/staticMapThumbnail';
 
 export type ParsedPlace = {
@@ -140,26 +141,6 @@ function normalizeLabel(value: string): string {
 
 function looksLikeAddress(value: string): boolean {
   return /\d/.test(value) && /\b(st|street|rd|road|ave|avenue|blvd|boulevard|dr|drive|ln|lane|way|pkwy|parkway|hwy|highway|ct|court|pl|place|sq|square)\b/i.test(value);
-}
-
-function normalizeStableCategory(value?: string | null): string {
-  const normalized = normalizeLabel(value || '');
-  return normalized === 'place' ? '' : normalized;
-}
-
-export function buildPlaceStableKey(loc: {
-  name: string;
-  latitude: number;
-  longitude: number;
-  category?: string | null;
-}): string {
-  const parts = [
-    normalizeLabel(loc.name || ''),
-    normalizeStableCategory(loc.category || ''),
-    loc.latitude.toFixed(5),
-    loc.longitude.toFixed(5),
-  ].filter(Boolean);
-  return parts.join('|');
 }
 
 export function shouldShowAddress(loc: BackendLocation): boolean {

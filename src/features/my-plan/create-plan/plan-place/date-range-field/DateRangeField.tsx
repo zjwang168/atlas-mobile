@@ -4,7 +4,7 @@ import { useAnimatedReaction, runOnJS } from 'react-native-reanimated';
 import { useDndContext } from '../dnd/DndProvider';
 import { enumerateDates } from '../utils';
 import type { PlannedPlace, TimeSlot } from '../types';
-import type { DateRange } from '../../CreatePlan';
+import type { DateRange } from '../../createPlanState';
 import DateColumn from './DateColumn';
 
 const COLUMN_WIDTH = Dimensions.get('window').width * 0.78;

@@ -19,7 +19,7 @@ import {
   fetchPlanSummaries,
 } from '../../../services/plan/planItineraryService';
 import { createPlan, deletePlan, fetchPlans, findPlan } from '../../../services/plan/planService';
-import type { DateRange } from './CreatePlan';
+import type { DateRange } from './createPlanState';
 import { enumerateDates } from './plan-place/utils';
 import type { PlacesState, PlannedPlace } from './plan-place/types';
 

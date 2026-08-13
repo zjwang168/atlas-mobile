@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
-import { createPlanCache, type DateRange } from '../CreatePlan';
+import { createPlanCache, type DateRange } from '../createPlanState';
 import { DndProvider } from './dnd/DndProvider';
 import FlexiblePlaceField from './flexible-place-field/FlexiblePlaceField';
 import DateRangeField from './date-range-field/DateRangeField';

@@ -90,6 +90,7 @@ type MapViewport = {
 type ScreenRect = { left: number; top: number; right: number; bottom: number };
 type ScreenMarker = { marker: MapMarker; x: number; y: number; dotRect: ScreenRect };
 type LabelOwnerGroups = Map<string, ScreenMarker[]>;
+type RenderMarker = MapMarker & { clusterMembers?: MapMarker[] };
 type CameraState = {
   properties: {
     center: GeoJSON.Position;
@@ -201,6 +202,73 @@ function screenMarkers(markers: MapMarker[], viewport: MapViewport, width: numbe
     const y = point[1] - center[1] + height / 2;
     return { marker, x, y, dotRect: { left: x - 10, top: y - 10, right: x + 10, bottom: y + 10 } };
   }).filter((point) => point.x >= -12 && point.x <= width + 12 && point.y >= -12 && point.y <= height + 12);
+}
+
+function canCluster(marker: MapMarker, selectedMarkerId?: string | null): boolean {
+  return marker.id !== selectedMarkerId
+    && marker.tone !== 'atlas'
+    && marker.tone !== 'location'
+    && marker.tone !== 'focused'
+    && marker.tone !== 'home'
+    && marker.tone !== 'office'
+    && marker.tone !== 'school';
+}
+
+/** Group ordinary saved/recommended pins in screen space. Native MarkerView
+ * stays overlap-safe; this is the visual density policy owned by the app. */
+function clusterMarkerPoints(
+  points: ScreenMarker[],
+  viewport: MapViewport,
+  selectedMarkerId?: string | null,
+  deletingMarkerId?: string | null,
+): RenderMarker[] {
+  const radius = viewport.zoom < 9 ? 58 : viewport.zoom < 11 ? 50 : viewport.zoom < 13 ? 44 : viewport.zoom < 15 ? 36 : viewport.zoom < 16 ? 28 : 0;
+  const groups: ScreenMarker[][] = [];
+  const standalone: ScreenMarker[] = [];
+  const candidates = [...points]
+    .filter((point) => canCluster(point.marker, selectedMarkerId) && point.marker.id !== deletingMarkerId)
+    .sort((a, b) => a.marker.id.localeCompare(b.marker.id));
+
+  for (const point of candidates) {
+    const matching = groups.filter((group) => group.some((member) => Math.hypot(member.x - point.x, member.y - point.y) <= radius));
+    if (!matching.length) {
+      groups.push([point]);
+      continue;
+    }
+    matching[0].push(point);
+    for (const other of matching.slice(1)) {
+      matching[0].push(...other);
+      const index = groups.indexOf(other);
+      if (index >= 0) groups.splice(index, 1);
+    }
+  }
+
+  const result: RenderMarker[] = [];
+  groups.forEach((group) => {
+    if (group.length === 1) {
+      standalone.push(group[0]);
+      return;
+    }
+    const longitude = group.reduce((sum, point) => sum + point.marker.longitude, 0) / group.length;
+    const latitude = group.reduce((sum, point) => sum + point.marker.latitude, 0) / group.length;
+    const members = group.map((point) => point.marker);
+    result.push({
+      id: `cluster:${members.map((member) => member.id).sort().join('|')}`,
+      longitude,
+      latitude,
+      tone: 'saved',
+      clusterMembers: members,
+    });
+  });
+
+  // Keep points which must never be hidden (selected, route, and special pins).
+  points.forEach((point) => {
+    if (!canCluster(point.marker, selectedMarkerId) || point.marker.id === deletingMarkerId) {
+      result.push(point.marker);
+    }
+  });
+  result.push(...standalone.map((point) => point.marker));
+  return result;
 }
 
 /** Pick one label owner for each connected visual dot collision group. */
@@ -406,6 +474,16 @@ function MarkerDot({
   );
 }
 
+function MarkerCluster({ count }: { count: number }) {
+  return (
+    <View style={styles.clusterOuter}>
+      <View style={styles.clusterInner}>
+        <Text style={styles.clusterCount}>{count > 99 ? '99+' : count}</Text>
+      </View>
+    </View>
+  );
+}
+
 export interface MapboxMapHandle {
   /**
    * Update bottom camera padding directly via the camera ref, bypassing React
@@ -505,26 +583,39 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     () => screenMarkers(renderedMarkers, viewport, width, height),
     [height, renderedMarkers, viewport, width],
   );
-  const nativeMarkers = useMemo(() => {
+  const clusteredMarkers = useMemo(
+    () => clusterMarkerPoints(screenMarkerPoints, viewport, selectedMarkerId, deletingMarkerId),
+    [deletingMarkerId, screenMarkerPoints, selectedMarkerId, viewport],
+  );
+  const clusteredMarkerPoints = useMemo(
+    () => screenMarkers(clusteredMarkers, viewport, width, height),
+    [clusteredMarkers, height, viewport, width],
+  );
+  const labelOwnerMarkerPoints = useMemo(
+    () => labelOwnerPoints(clusteredMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
+    [clusteredMarkerPoints, deletingMarkerId, height, markerPopup?.markerId, selectedMarkerId, width],
+  );
+  const nativeMarkers = useMemo<RenderMarker[]>(() => {
     // MarkerView is a React/native view for every point. Keep the active Atlas
-    // pins and selected point, but cull distant saved/recommended views to the
-    // current viewport and cap the remainder. This avoids reconciling an
-    // entire country's saved places while a local Atlas sheet opens.
-    const visibleIds = new Set(screenMarkerPoints.map((point) => point.marker.id));
-    const atlas = renderedMarkers.filter((marker) => marker.tone === 'atlas');
-    const selected = renderedMarkers.filter((marker) => marker.id === selectedMarkerId && marker.tone !== 'atlas');
-    const nearby = screenMarkerPoints
-      .filter((point) => point.marker.tone !== 'atlas' && point.marker.id !== selectedMarkerId)
+    // pins and selected point, while retaining every visible cluster. Labels
+    // still use their own collision pass, but hiding a cluster would make its
+    // count misleading and leave users unable to drill into that area.
+    const selected = renderedMarkers.filter((marker) => marker.id === selectedMarkerId);
+    const persistent = renderedMarkers.filter((marker) => (
+      marker.tone === 'atlas'
+      || marker.tone === 'location'
+      || marker.tone === 'focused'
+      || marker.tone === 'home'
+      || marker.tone === 'office'
+      || marker.tone === 'school'
+    ));
+    const nearby = clusteredMarkerPoints
+      .filter((point) => point.marker.id !== selectedMarkerId)
       .sort((a, b) => Math.hypot(a.x - width / 2, a.y - height / 2) - Math.hypot(b.x - width / 2, b.y - height / 2))
       .slice(0, 96)
       .map((point) => point.marker)
-      .filter((marker) => visibleIds.has(marker.id));
-    return [...new Map([...atlas, ...selected, ...nearby].map((marker) => [marker.id, marker])).values()];
-  }, [height, renderedMarkers, screenMarkerPoints, selectedMarkerId, width]);
-  const labelOwnerMarkerPoints = useMemo(
-    () => labelOwnerPoints(screenMarkerPoints, width, height, selectedMarkerId, deletingMarkerId, markerPopup?.markerId),
-    [deletingMarkerId, height, markerPopup?.markerId, screenMarkerPoints, selectedMarkerId, width],
-  );
+    return [...new Map([...persistent, ...selected, ...nearby].map((marker) => [marker.id, marker])).values()];
+  }, [clusteredMarkerPoints, clusteredMarkers, renderedMarkers, selectedMarkerId, width]);
   const labelIds = useMemo(
     () => visibleLabelIds(labelOwnerMarkerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
     [height, labelOwnerMarkerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
@@ -547,7 +638,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     onMapPress?.();
   };
 
-  const queueViewportUpdate = (state: CameraState) => {
+  const queueViewportUpdate = (state: CameraState, settled = false) => {
+    if (!settled) {
+      return;
+    }
     const nextViewport = viewportFromCamera(state);
     // Mapbox can send duplicate camera events after an idle render. Ignore
     // them so the exact-coordinate cache cannot oscillate with its fallback.
@@ -567,6 +661,27 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
       pendingViewportRef.current = null;
       setViewport(next);
       onViewportChanged?.(next.center, next.zoom);
+    });
+  };
+
+  const handleClusterPress = (members: MapMarker[]) => {
+    if (members.length < 2 || !cameraRef.current) return;
+    const coordinates = members.map((marker) => [marker.longitude, marker.latitude] as [number, number]);
+    const longitudes = coordinates.map(([longitude]) => longitude);
+    const latitudes = coordinates.map(([, latitude]) => latitude);
+    const west = Math.min(...longitudes);
+    const east = Math.max(...longitudes);
+    const south = Math.min(...latitudes);
+    const north = Math.max(...latitudes);
+    const longitudeSpan = Math.max(0.004, east - west);
+    const latitudeSpan = Math.max(0.004, north - south);
+    cameraRef.current.setCamera({
+      bounds: {
+        ne: [east + longitudeSpan * 0.32, north + latitudeSpan * 0.32],
+        sw: [west - longitudeSpan * 0.32, south - latitudeSpan * 0.32],
+      },
+      padding: prevPaddingRef.current,
+      animationDuration: 340,
     });
   };
 
@@ -715,8 +830,11 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         attributionEnabled={false}
         scaleBarEnabled={false}
         onPress={handleMapPress}
-        onCameraChanged={queueViewportUpdate}
-        onMapIdle={queueViewportUpdate}
+        // A camera event fires continuously while a gesture is in progress.
+        // Keep the current cluster arrangement in place until Mapbox reports
+        // idle, so pins do not trade places at collision thresholds mid-pan.
+        onCameraChanged={(event) => queueViewportUpdate(event, false)}
+        onMapIdle={(event) => queueViewportUpdate(event, true)}
         onDidFinishLoadingMap={() => setMapLoaded(true)}
       >
         <MapboxGL.Camera
@@ -759,36 +877,35 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
           <MapboxGL.SymbolLayer id="routeDistanceLabels" style={{ textField: ['get', 'label'], textSize: 10, textColor: '#475569', textHaloColor: 'rgba(255,255,255,0.99)', textHaloWidth: 2.5, textOffset: [0, -0.9], textAllowOverlap: false, textIgnorePlacement: false, textOptional: true, textAnchor: 'center' }} />
         </MapboxGL.ShapeSource>
 
-        {nativeMarkers.map((marker) => (
+        {nativeMarkers.map((marker) => {
+          const clusterMembers = marker.clusterMembers;
+          const isCluster = Boolean(clusterMembers?.length && clusterMembers.length > 1);
+          return (
           <MapboxGL.MarkerView
-            // MarkerView does not reliably re-evaluate native collision after
-            // allowOverlap changes. Remount only the marker whose focused
-            // state changed so a deselected green pin immediately returns to
-            // the normal blue-pin collision set without requiring a pan/zoom.
-            // MarkerView holds a native child tree. Remount when its visual
-            // role changes so a saved blue marker cannot survive into an Atlas
-            // orange marker while Mapbox catches up with a prop update.
-            // Orange itinerary markers keep a stable native identity. Their
-            // number or focus state may change, but neither should unmount a
-            // MarkerView and make an active Atlas pin flash or disappear.
-            key={marker.tone === 'atlas'
+            key={isCluster
+              ? marker.id
+              : marker.tone === 'atlas'
               ? `${marker.id}:atlas`
               : `${marker.id}:${marker.tone ?? 'saved'}:${marker.order ?? 'none'}:${marker.id === selectedMarkerId ? 'focused' : 'normal'}`}
             coordinate={[marker.longitude, marker.latitude]}
-            style={[styles.markerAnnotation, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
-            // A current Atlas choice is the authoritative visual state. It
-            // must never lose a native collision to a nearby saved/recommended
-            // point; non-green points continue to use Mapbox collision.
-            allowOverlap={marker.tone === 'focused' || marker.id === selectedMarkerId}
+            style={[styles.markerAnnotation, isCluster && styles.markerAnnotationCluster, selectedMarkerId === marker.id && styles.markerAnnotationSelected, marker.tone === 'atlas' && styles.markerAnnotationAtlas, marker.tone === 'location' && styles.markerAnnotationLocation, (marker.tone === 'home' || marker.tone === 'office' || marker.tone === 'school') && styles.markerAnnotationSpecialPlace]}
+            // React already mounts one point per collision group above. Keep
+            // these animated native views out of Mapbox's collision engine so
+            // dense Atlas markers cannot block pan or zoom gestures.
+            allowOverlap
           >
             <View
               style={styles.markerContainer}
               onTouchEnd={() => {
                 markerPressTimestampRef.current = Date.now();
+                if (isCluster && clusterMembers) {
+                  handleClusterPress(clusterMembers);
+                  return;
+                }
                 onMarkerPress?.(marker);
               }}
             >
-              <MarkerDot
+              {isCluster && clusterMembers ? <MarkerCluster count={clusterMembers.length} /> : <MarkerDot
                 selected={selectedMarkerId === marker.id}
                 deleting={deletingMarkerId === marker.id}
                 tone={marker.tone}
@@ -797,8 +914,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
                 entering={marker.entering}
                 pulsing={marker.pulsing}
                 preserveToneOnSelect={marker.preserveToneOnSelect}
-              />
-              {marker.title ? (
+              />}
+              {!isCluster && marker.title ? (
                 <MarkerLabel
                   title={marker.title}
                   hint={marker.labelHint}
@@ -810,7 +927,8 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
               {markerPopup?.markerId === marker.id ? <View style={styles.markerPopup}>{markerPopup.content}</View> : null}
             </View>
           </MapboxGL.MarkerView>
-        ))}
+          );
+        })}
       </MapboxGL.MapView>
     </View>
   );
@@ -832,6 +950,12 @@ const styles = StyleSheet.create({
   markerAnnotation: {
     width: 20,
     height: 20,
+  },
+  markerAnnotationCluster: {
+    width: 42,
+    height: 42,
+    zIndex: 60,
+    elevation: 60,
   },
   markerAnnotationSelected: {
     zIndex: 70,
@@ -937,6 +1061,36 @@ const styles = StyleSheet.create({
     height: 20,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  clusterOuter: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    padding: 4,
+    backgroundColor: 'rgba(0,122,255,0.30)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clusterInner: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#007AFF',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.24,
+    shadowRadius: 4,
+    elevation: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clusterCount: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
   },
   markerDotWrapAtlas: {
     width: 30,

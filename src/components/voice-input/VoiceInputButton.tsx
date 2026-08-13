@@ -23,7 +23,15 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStarted = useRef(false);
+  const releasePending = useRef(false);
+  const shortPressHandled = useRef(false);
+
+  const openShortPress = useCallback(() => {
+    if (longPressStarted.current || shortPressHandled.current) return;
+    shortPressHandled.current = true;
+    onShortPress?.();
+  }, [onShortPress]);
 
   const setActive = useCallback((next: boolean) => {
     setRecording(next);
@@ -42,6 +50,18 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       await recorder.prepareToRecordAsync();
       recorder.record();
       setActive(true);
+      if (releasePending.current) {
+        releasePending.current = false;
+        await recorder.stop();
+        setActive(false);
+        setProcessing(true);
+        if (recorder.uri) {
+          const result = await transcribeAudio(recorder.uri);
+          if (result.text.trim()) onTranscript(result.text.trim());
+        }
+        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
+        setProcessing(false);
+      }
     } catch (error) {
       console.warn('[VoiceInputButton] could not start recording', error);
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
@@ -69,7 +89,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
   }, [onError, onTranscript, recorder, recording, setActive]);
 
   useEffect(() => () => {
-    if (holdTimer.current) clearTimeout(holdTimer.current);
+    releasePending.current = false;
   }, []);
 
   return (
@@ -79,16 +99,26 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       accessibilityState={{ disabled: Boolean(disabled || processing), selected: recording }}
       disabled={disabled || processing}
       onPressIn={() => {
-        if (onShortPress) {
-          holdTimer.current = setTimeout(() => { holdTimer.current = null; start(); }, 360);
-        } else start();
+        releasePending.current = false;
+        longPressStarted.current = false;
+        shortPressHandled.current = false;
       }}
+      delayLongPress={360}
+      onLongPress={() => {
+        longPressStarted.current = true;
+        void start();
+      }}
+      onPress={() => {
+        openShortPress();
+      }}
+      // Atlas rows own a horizontal PanResponder. It can cancel Pressable's
+      // synthesized onPress after a tiny finger drift, so keep the raw touch
+      // end as a short-tap fallback.
+      onTouchEnd={() => openShortPress()}
       onPressOut={() => {
-        if (holdTimer.current) {
-          clearTimeout(holdTimer.current);
-          holdTimer.current = null;
-          onShortPress?.();
-        } else stop();
+        if (!longPressStarted.current) return;
+        if (recording) void stop();
+        else releasePending.current = true;
       }}
       style={[styles.button, style, recording && styles.recording]}
     >

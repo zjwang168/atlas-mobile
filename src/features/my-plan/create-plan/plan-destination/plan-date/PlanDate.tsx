@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react';
 import { Calendar, DateData } from 'react-native-calendars';
-import type { DateRange } from '../../CreatePlan';
+import type { DateRange } from '../../createPlanState';
 
 type PlanDateProps = {
   range: DateRange;

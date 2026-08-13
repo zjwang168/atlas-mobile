@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import PlanLocation from './plan-location/PlanLocation';
 import PlanDate from './plan-date/PlanDate';
-import type { DateRange } from '../CreatePlan';
+import type { DateRange } from '../createPlanState';
 
 type PlanDestinationProps = {
   onNext: () => void;

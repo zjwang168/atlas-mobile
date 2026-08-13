@@ -6,21 +6,11 @@ import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import PlanDestination from './plan-destination/PlanDestination';
 import PlanPlace from './plan-place/PlanPlace';
-import type { PlacesState } from './plan-place/types';
+import { createPlanCache, type DateRange } from './createPlanState';
 import type { SavedPlan } from './savePlan';
 
 type CreatePlanStep = 'destination' | 'places';
-export type DateRange = { start: string | null; end: string | null };
-
-export const createPlanCache: {
-  location: string;
-  range: DateRange;
-  places: PlacesState;
-} = {
-  location: '',
-  range: { start: null, end: null },
-  places: { free: [], byDate: {} },
-};
+export type { DateRange } from './createPlanState';
 
 const STEPS: CreatePlanStep[] = ['destination', 'places'];
 

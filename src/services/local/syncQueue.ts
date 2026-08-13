@@ -2,7 +2,7 @@ import type { Atlas } from '@/types/atlas';
 import type { AtlasPlace } from '@/types/place';
 import { ATLAS_PLACES_SELECT_COLUMNS, ATLAS_SELECT_COLUMNS } from '../atlas/atlasShared';
 import type { ParsedPlace } from '../import/importService';
-import { buildPlaceStableKey } from '../import/importService';
+import { buildPlaceStableKey } from '../place/placeIdentity';
 import type { SavedPlace, SpecialPlaceRole } from '../place/placeService';
 import { supabase } from '../supabase/supabaseClient';
 import { createLocalId, isLocalId, LOCAL_CACHE_KEYS } from './cacheKeys';

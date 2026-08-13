@@ -11,7 +11,8 @@
 import type { GeocodedLocation, PlaceSuggestion } from '@/types/route';
 
 import { retrievePlace, searchPlaces } from '../api/apiService';
-import { buildPlaceStableKey, formatSubtitle, type ParsedPlace } from '../import/importService';
+import { formatSubtitle, type ParsedPlace } from '../import/importService';
+import { buildPlaceStableKey } from './placeIdentity';
 
 /** Rows shown to the user. */
 export const SEARCH_DISPLAY_LIMIT = 8;

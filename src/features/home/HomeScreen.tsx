@@ -286,6 +286,7 @@ function HomeScreenContent({
         : screenHeight * 0.54
     : SNAP_HEIGHTS[settledPanelSnapState];
   const atlasCameraVerticalOffset = atlasMapState?.cameraVerticalOffset ?? 0;
+  const lockAtlasCameraToScreen = Boolean(atlasMapState?.lockCameraToScreen);
   // Tracks the live panel height without React state — the panel reports it every
   // animation frame while dragging/snapping, and nothing else needs to reactively
   // read it, so pushing it through setState would re-render the whole screen 60x/sec.
@@ -303,12 +304,12 @@ function HomeScreenContent({
     // sheet's detents are screen fractions rather than SNAP_HEIGHTS, plus
     // Jay's atlasCameraVerticalOffset. Either side alone breaks the other's
     // camera. Math.max(0, …) is Jay's — the offset can be negative.
-    paddingBottom: bottomPanelActive
+    paddingBottom: bottomPanelActive && !lockAtlasCameraToScreen
       ? Math.max(0, settledBottomPanelHeight + atlasCameraVerticalOffset)
       : 0,
     paddingLeft: 0,
     paddingRight: 0,
-  }), [atlasCameraVerticalOffset, bottomPanelActive, settledBottomPanelHeight]);
+  }), [atlasCameraVerticalOffset, bottomPanelActive, lockAtlasCameraToScreen, settledBottomPanelHeight]);
   useEffect(() => {
     bottomPanelHeightRef.current = mapPadding.paddingBottom;
   }, [mapPadding]);
@@ -319,11 +320,11 @@ function HomeScreenContent({
     // Bounds-owned Atlas cameras must only be moved by fitBounds. A native
     // padding-only setCamera call after fitBounds can replace its calculated
     // zoom with the Camera's previous state.
-    if (!atlasMapState?.bounds) {
+    if (!lockAtlasCameraToScreen && !atlasMapState?.bounds) {
       mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + atlasCameraVerticalOffset) : 0);
     }
     atlasMapState?.onPanelHeightChange?.(height);
-  }, [atlasCameraVerticalOffset, atlasMapState, bottomPanelActive]);
+  }, [atlasCameraVerticalOffset, atlasMapState, bottomPanelActive, lockAtlasCameraToScreen]);
 
   // A panel may already be resting when the Atlas overlay mounts, so its
   // height listener is not guaranteed to emit an initial frame. Seed the
