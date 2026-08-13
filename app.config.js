@@ -13,7 +13,7 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8
 
 export default {
   expo: {
-    name: 'atlas-mobile',
+    name: 'OurAtlas',
     slug: 'atlas-mobile',
     version: '1.0.0',
     orientation: 'portrait',
