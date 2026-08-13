@@ -1,0 +1,55 @@
+name: CI
+
+# Runs on every push to main and on pull requests targeting it. The point is
+# the pull-request run: a typecheck that only fires after a merge tells you
+# about a regression once it is already everyone's problem.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch cancels the run still going for the first.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: Typecheck (tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22 rather than the 23 on some dev machines: tsc does not care, and
+          # an LTS line is one less thing to chase when a runner image moves.
+          node-version: '22'
+          cache: npm
+
+      # `ci` not `install`: it installs exactly the lockfile and fails if the
+      # lockfile and package.json have drifted, which is worth knowing.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+  backend-tests:
+    name: Backend tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - run: pip install -r backend/requirements.txt pytest
+
+      # No API keys and no network: every source is stubbed, so this suite is
+      # hermetic. `playwright install` is deliberately skipped — the browser is
+      # only needed by scrapers none of these tests exercise.
+      - name: Run tests
+        run: python -m pytest backend/tests -q --ignore=backend/tests/test_import_performance.py
