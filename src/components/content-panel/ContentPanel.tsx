@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, View } from 'react-native';
+import { Animated, Dimensions, View, type View as RNView } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -172,18 +172,21 @@ export default function ContentPanel({
   const [snapState, setSnapState] = useState<SnapState>(initialResolvedSnap);
   const snapStateRef = useRef<SnapState>(initialResolvedSnap);
 
-  const panelHeight = useRef(new Animated.Value(snapHeights.current[initialResolvedSnap])).current;
+  const initialPanelHeight = snapHeights.current[initialResolvedSnap];
+  const panelHeight = useRef(new Animated.Value(initialPanelHeight)).current;
+  const panelFrameRef = useRef<RNView | null>(null);
 
   // Tracks the actual current panel height (updated via listener) so gesture start
   // height is always correct even when in free-height mode between snap points.
-  const currentPanelHeight = useRef(snapHeights.current[initialResolvedSnap]);
+  const currentPanelHeight = useRef(initialPanelHeight);
   useEffect(() => {
     const id = panelHeight.addListener(({ value }) => {
       currentPanelHeight.current = value;
+      panelFrameRef.current?.setNativeProps({ style: { height: value } });
       onHeightChange?.(value);
     });
     return () => panelHeight.removeListener(id);
-  }, [onHeightChange]);
+  }, [onHeightChange, panelHeight]);
 
   // Visual properties derived from panelHeight so they track live drag without
   // needing separate parallel animations.
@@ -228,18 +231,9 @@ export default function ContentPanel({
     [edgeTransitionEnd, edgeTransitionStart],
   );
 
-  // Derived from panelHeight so the safe-area padding fades in smoothly as
-  // the panel approaches full screen, instead of jumping on snap state change.
-  // useMemo re-creates the interpolation if insets.top ever changes.
-  const animatedPaddingTop = useMemo(
-    () =>
-      panelHeight.interpolate({
-        inputRange: [edgeTransitionStart, edgeTransitionEnd],
-        outputRange: [0, preserveTopRadius ? 0 : insets.top],
-        extrapolate: 'clamp',
-      }),
-    [edgeTransitionEnd, edgeTransitionStart, insets.top, preserveTopRadius],
-  );
+  // Padding is a layout property and is not supported by the native animated
+  // module. Keep this discrete instead of deriving it from panelHeight.
+  const contentPaddingTop = snapState === 'full' && !preserveTopRadius ? insets.top : 0;
 
   // Override snap-based height when a fixed `height` prop is supplied
   useEffect(() => {
@@ -416,13 +410,13 @@ export default function ContentPanel({
       translateY.setValue(40);
       opacity.setValue(0);
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 0, duration: 260, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.timing(translateY, { toValue: 0, duration: 260, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: false }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 40, duration: 260, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: true }),
+        Animated.timing(translateY, { toValue: 40, duration: 260, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: false }),
       ]).start(({ finished }) => {
         if (finished) onHidden?.();
       });
@@ -526,17 +520,24 @@ export default function ContentPanel({
         transform: [{ translateY }],
       }}
     >
-      <Animated.View
+      <View
+        ref={panelFrameRef}
         style={{
-          borderTopLeftRadius: borderRadiusTop,
-          borderTopRightRadius: borderRadiusTop,
-          borderBottomLeftRadius: borderRadiusBottom,
-          borderBottomRightRadius: borderRadiusBottom,
-          height: panelHeight,
+          height: currentPanelHeight.current,
           overflow: 'hidden',
-          paddingTop: animatedPaddingTop,
+          paddingTop: contentPaddingTop,
         }}
       >
+        <Animated.View
+          style={{
+            borderTopLeftRadius: borderRadiusTop,
+            borderTopRightRadius: borderRadiusTop,
+            borderBottomLeftRadius: borderRadiusBottom,
+            borderBottomRightRadius: borderRadiusBottom,
+            flex: 1,
+            overflow: 'hidden',
+          }}
+        >
         {frosted ? (
           <>
             <BlurView
@@ -609,7 +610,8 @@ export default function ContentPanel({
             </Animated.View>
           )}
         </View>
-      </Animated.View>
+        </Animated.View>
+      </View>
     </Animated.View>
   );
 }
