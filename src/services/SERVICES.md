@@ -101,6 +101,8 @@ export async function requestUserLocation(): Promise<UserLocationResult>  // pro
 
 Turns typed text into saveable places via the backend's Mapbox Search Box endpoints. Search is two steps — suggestions carry no coordinates, and the one the user picks is resolved into a full place. Both steps share a session token created here, not on the server, because Mapbox bills a search session and only the client knows when a typing session starts and ends.
 
+**A token is spent by `resolvePlace()` and must not be used again.** Mapbox ends a session at the `/retrieve`, and warns that reusing a token across sessions bills unpredictably — so every caller rotates immediately after resolving, whether or not the resolve succeeded. Creating a token is free: it is a locally generated UUID that costs nothing until it reaches Mapbox, so rotating early is always the safe side. `usePlaceSearch` handles this for its own consumers; a caller driving `suggestPlaces`/`resolvePlace` directly owns it (see `AtlasBuilder`, which keeps one token across the keystrokes of a search and pairs a fresh one with each retrieve in its seeding loop).
+
 Only `poi` suggestions are surfaced. A `brand` resolves to every branch Mapbox knows about, which the one-row-one-place save path cannot represent; nearby branches already appear as their own `poi` rows under proximity weighting. Because filtering happens after the request, more suggestions are asked for than are displayed.
 
 ```ts

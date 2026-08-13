@@ -36,6 +36,20 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
+/**
+ * The same image at the width the caller actually draws it.
+ *
+ * The stock imagery arrives sized for the largest use — the detail hero — so a
+ * list row would otherwise decode a 250KB, 800px JPEG into a 72pt box, once per
+ * visible row. Asking the CDN for the real width cuts that by an order of
+ * magnitude. Only Unsplash URLs carry a `w` parameter; anything else (NPS
+ * photos, which have no resizing endpoint) is returned untouched.
+ */
+export function sizedEventImage(url: string | null, width: number): string | null {
+  if (!url || !url.includes('images.unsplash.com')) return url;
+  return url.replace(/([?&])w=\d+/, `$1w=${Math.round(width)}`);
+}
+
 export async function fetchEvents(
   query: EventsQuery,
   signal?: AbortSignal,

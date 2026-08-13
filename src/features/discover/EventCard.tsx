@@ -7,6 +7,7 @@
  * strip carries images.
  */
 
+import { sizedEventImage } from '@/services/events/eventsService';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import type { EventCategory, LocalEvent } from '@/types/event';
@@ -75,6 +76,12 @@ export function EventCover({ category, iconSize }: { category: EventCategory; ic
     </View>
   );
 }
+
+/** Requested image widths, in device pixels for a 3x screen. The row's box is
+    72pt and the featured card's is 260pt; asking for the detail hero's width
+    at either site decodes roughly ten times the bytes for no visible gain. */
+const ROW_THUMBNAIL_WIDTH = 220;
+const FEATURED_IMAGE_WIDTH = 560;
 
 // -- Formatting ------------------------------------------------------------
 
@@ -145,7 +152,7 @@ export const EventCard = memo(function EventCard({ event, onPress }: EventCardPr
       <View className="h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-xl bg-muted">
         {event.image_url ? (
           <Image
-            source={{ uri: event.image_url }}
+            source={{ uri: sizedEventImage(event.image_url, ROW_THUMBNAIL_WIDTH)! }}
             className="h-full w-full"
             resizeMode="cover"
           />
@@ -210,7 +217,7 @@ export const FeaturedEventCard = memo(function FeaturedEventCard({
       <View className="h-[132px] w-full items-center justify-center bg-muted">
         {event.image_url ? (
           <Image
-            source={{ uri: event.image_url }}
+            source={{ uri: sizedEventImage(event.image_url, FEATURED_IMAGE_WIDTH)! }}
             className="h-full w-full"
             resizeMode="cover"
           />

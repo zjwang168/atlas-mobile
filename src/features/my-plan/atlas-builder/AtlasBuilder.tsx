@@ -69,7 +69,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const { atlasPlaces, atlases } = useHomeAtlases();
   const { setAtlasMapState, setTabBarVisible } = useHomeOverlayActions();
   const { userLocation, refreshUserLocation } = useHomeLocation();
-  const searchSession = useRef(createSearchSession()).current;
+  /**
+   * The token for the search the user is currently typing. Keystrokes share it
+   * — that is what makes them one session rather than one each — and the
+   * `/retrieve` that resolves the chosen result ends it, after which
+   * `resolveResult` rotates it. A ref, not a value, precisely so it can be
+   * replaced when Mapbox considers the session spent.
+   */
+  const searchSessionRef = useRef(createSearchSession());
   const queryAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<TextInput>(null);
   const [query, setQuery] = useState('');
@@ -374,7 +381,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     // after typing stops avoids turning each keystroke into an upstream call.
     const timer = setTimeout(() => void suggestPlaces(
       trimmed,
-      searchSession,
+      searchSessionRef.current,
       isCreateAtlasLanding
         ? { proximity: mapCenter, types: 'poi,place,locality,district,region,country', includeNonPoi: true }
         : mapCenter ? { proximity: mapCenter } : {},
@@ -423,7 +430,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       clearTimeout(timer);
       controller.abort();
     };
-  }, [isCreateAtlasLanding, mapCenter, query, savedPlaces, searchSession]);
+  }, [isCreateAtlasLanding, mapCenter, query, savedPlaces]);
 
   const hideTransientUI = useCallback(() => {
     seedUserInteractedRef.current = true;
@@ -527,10 +534,20 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       'park',
     ];
     for (const query of queries) {
-      const suggestions = await suggestPlaces(query, searchSession, { proximity: center, includeNonPoi: true, types: 'poi' });
+      // Seeding is the one path that resolves several candidates in a row: a
+      // suggestion carries no coordinates, so each has to be retrieved before
+      // its bounds and duplicate checks can run. Every `/retrieve` ends a
+      // session at Mapbox, so each pairing gets its own token rather than
+      // stacking retrieves onto one — which is what the API calls reusing a
+      // token across sessions, and bills unpredictably.
+      let seedSession = createSearchSession();
+      const suggestions = await suggestPlaces(query, seedSession, { proximity: center, includeNonPoi: true, types: 'poi' });
       log('suggestions', { query, count: suggestions.length, names: suggestions.slice(0, 5).map((item) => item.name) });
       for (const suggestion of suggestions) {
-        const resolved = await resolvePlace(suggestion, searchSession);
+        const resolved = await resolvePlace(suggestion, seedSession);
+        // Spent the moment the retrieve above returns; the next candidate in
+        // this loop must not inherit it.
+        seedSession = createSearchSession();
         if (!resolved) {
           log('retrieve-empty', { query, id: suggestion.external_id, name: suggestion.name });
           continue;
@@ -560,7 +577,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     }
     log('no-candidate');
     return null;
-  }, [savedPlaces, searchSession]);
+  }, [savedPlaces]);
 
   useEffect(() => {
     // This is only for a newly opened focus area with no saved-pin candidate.
@@ -878,7 +895,12 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         source: 'search',
       };
     }
-    const resolved = await resolvePlace({ external_id: result.externalId, name: result.name, feature_type: 'poi', source: 'mapbox' }, searchSession);
+    // Pairs with the suggests above: those keystrokes and this retrieve are one
+    // session. Mapbox ends it here, so the token is replaced before the user
+    // can start typing the next search onto it.
+    const sessionToken = searchSessionRef.current;
+    searchSessionRef.current = createSearchSession();
+    const resolved = await resolvePlace({ external_id: result.externalId, name: result.name, feature_type: 'poi', source: 'mapbox' }, sessionToken);
     if (!resolved) return null;
     return {
       id: result.externalId,
@@ -892,7 +914,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       country: resolved.country ?? null,
       category: resolved.type ?? result.featureType ?? null,
     };
-  }, [searchSession]);
+  }, []);
 
   const focusAreaResult = useCallback(async (result: SearchResult) => {
     try {
@@ -1099,7 +1121,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     if (trimmed.length < 2) return;
     setSearching(true);
     try {
-      const remote = await suggestPlaces(trimmed, searchSession, mapCenter ? { proximity: mapCenter } : {});
+      const remote = await suggestPlaces(trimmed, searchSessionRef.current, mapCenter ? { proximity: mapCenter } : {});
       const local = savedPlaces.filter((place) => isLocalMatch(place, trimmed)).map((place): SearchResult => ({ kind: 'saved', place }));
       const seen = new Set<string>();
       setFullResults([...remote.map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type })), ...local].filter((result) => {
@@ -1113,7 +1135,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     } finally {
       setSearching(false);
     }
-  }, [mapCenter, query, savedPlaces, searchSession]);
+  }, [mapCenter, query, savedPlaces]);
 
   const removePlace = useCallback((place: DraftPlace) => {
     LayoutAnimation.configureNext({

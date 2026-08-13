@@ -4,6 +4,7 @@ import { Text } from '@/components/ui/text';
 import { EventCover, categoryStyle, formatWhen } from '@/features/discover/EventCard';
 import { useHomeOverlay, useHomePlaces } from '@/features/home/HomeContext';
 import { eventToParsedPlace } from '@/services/events/eventPlaceAdapter';
+import { sizedEventImage } from '@/services/events/eventsService';
 import { savePlaces } from '@/services/place/placeService';
 import { addFlexiblePlaces } from '@/services/plan/planItineraryService';
 import { fetchPlans } from '@/services/plan/planService';
@@ -28,6 +29,9 @@ import {
 } from 'react-native';
 
 const HERO_HEIGHT = 190;
+/** Full panel width on a 3x screen; the hero is the one place the large
+    stock render is actually worth its bytes. */
+const HERO_IMAGE_WIDTH = 1000;
 
 /** What the save button is currently reporting. */
 type SaveState = 'idle' | 'saving' | 'saved' | 'duplicate' | 'error';
@@ -210,7 +214,7 @@ export function EventDetail({
           <View style={styles.hero}>
             {event.image_url && !imageFailed ? (
               <Image
-                source={{ uri: event.image_url }}
+                source={{ uri: sizedEventImage(event.image_url, HERO_IMAGE_WIDTH)! }}
                 style={StyleSheet.absoluteFill}
                 resizeMode="cover"
                 onError={() => setImageFailed(true)}
