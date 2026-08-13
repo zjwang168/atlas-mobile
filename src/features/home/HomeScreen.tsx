@@ -10,6 +10,7 @@ import { useContentPanelSnapGroup } from '../../components/content-panel/Content
 import AddPlace from '../add-place/AddPlace';
 import CreatePlan from '../my-plan/create-plan/CreatePlan';
 import type { SavedPlan } from '../my-plan/create-plan/savePlan';
+import { EventDetail } from '../event-detail/EventDetail';
 import PlanDetail from '../my-plan/plan-detail/PlanDetail';
 import PlaceDetail from '../place-detail/PlaceDetail';
 import AtlasDetail from '../my-places/atlas/atlas-detail/AtlasDetail';
@@ -277,7 +278,7 @@ function HomeScreenContent({
   // the PlaceDetail overlay, the AtlasDetail overlay, or the AddPlace overlay —
   // drives the same padding-tracking path.
   const mainPanelActive = Platform.OS === 'ios' ? mainSheetVisible : panelVisible;
-  const bottomPanelActive = mainPanelActive || overlay.kind === 'placeDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
+  const bottomPanelActive = mainPanelActive || overlay.kind === 'placeDetail' || overlay.kind === 'eventDetail' || overlay.kind === 'atlasDetail' || overlay.kind === 'addPlace';
   const nativeMainPanelActive =
     Platform.OS === 'ios' &&
     (activeTab === TAB_PLACES || activeTab === TAB_PLAN);
@@ -636,6 +637,13 @@ function HomeScreenContent({
         }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'placeDetail' ? handlePanelHeightChange : undefined}
+      />
+
+      <EventDetail
+        event={overlay.kind === 'eventDetail' ? overlay.event : null}
+        onDismiss={() => setOverlay(overlay.kind === 'eventDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
+        snapGroup={HOME_PANEL_SNAP_GROUP}
+        onHeightChange={overlay.kind === 'eventDetail' ? handlePanelHeightChange : undefined}
       />
 
       <PlanDetail

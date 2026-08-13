@@ -92,6 +92,7 @@ type Overlay =
   | { kind: 'planDetail'; planId: string }
   | { kind: 'atlasDetail'; atlasId: string }
   | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }  // excludeIds hides already-selected places (e.g. AtlasDetail passes places already in the atlas); omit to allow duplicates (e.g. the plan flow). returnTo is the overlay to restore on dismiss/confirm — the caller's own overlay state (e.g. `{ kind: 'atlasDetail', atlasId }`); omit to fall back to `{ kind: 'none' }`
+  | { kind: 'eventDetail'; event: LocalEvent; returnTo?: Overlay }  // carries the event itself, not an id — a Discover event is not persisted until the user saves it, so there is nothing to look up
   | { kind: 'createPlan' };
 
 // src/features/home/HomeTabBar.tsx
@@ -105,3 +106,4 @@ const TAB_ADD: string;     // not a pager page — triggers onAddPress instead
 - [CHAT-HISTORY.md](../atlas-ai/chat-history/CHAT-HISTORY.md) — `AtlasAIHome` / `HistoryPlacesPanel`, currently unmounted
 - [AI-CHAT.md](../atlas-ai/ai-chat/AI-CHAT.md) — `AIChatBox`, mounted directly by `HomeScreen`
 - [ADD-PLACE.md](../add-place/ADD-PLACE.md) — `AddPlace` overlay, opened via the `addPlace` `Overlay` variant
+- [EVENT-DETAIL.md](../event-detail/EVENT-DETAIL.md) — `EventDetail` overlay, opened via the `eventDetail` `Overlay` variant

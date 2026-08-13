@@ -41,6 +41,22 @@ import type { Atlas } from '@/types/atlas';
 
 `Atlas` mirrors the Supabase `atlas` table (renamed from `collections`), including its `emoji` column — read/written by `services/atlas/atlasService.ts`, the same offline-first pattern as `SavedPlace`/`placeService.ts`.
 
+## `event.ts` — local event types
+
+```ts
+import type { LocalEvent, EventCategory, EventsResult, EventSourceStatus } from '@/types/event';
+import { EVENT_CATEGORIES } from '@/types/event';
+```
+
+| Type | Notes |
+|---|---|
+| `LocalEvent` | One row from `GET /events`. `latitude`/`longitude` are never null — the backend drops rows it could not place. A dated event fills `starts_at`; a recurring one fills `schedule_text` and leaves `starts_at` null, so read those two in that order rather than branching on `source`. `image_is_stock` marks an image as a generic category photo rather than a picture of this event — never caption one as if it showed the real thing |
+| `EventCategory` | `'festival' \| 'market' \| 'music' \| 'arts' \| 'outdoors' \| 'history' \| 'community'` — the set every backend source is normalized onto; `EVENT_CATEGORIES` is the runtime array |
+| `EventSourceStatus` | Per-source outcome (`ok` / `unavailable` / `not_configured`), so a partial answer can be labelled as partial rather than shown as complete |
+| `EventsResult` | The whole response — events, source statuses, attribution, and the radius/window actually applied after clamping |
+
+Read/written by `services/events/eventsService.ts`; see `backend/services/events_service/EVENTS-SERVICE.md` for what each source can promise.
+
 ## `plan.ts` — plan row types
 
 ```ts

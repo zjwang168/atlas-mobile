@@ -6,6 +6,7 @@ import { ContentPanelSnapProvider } from '../../components/content-panel/Content
 import { createAtlas as createAtlasService, deleteAtlas as deleteAtlasService, fetchAtlases, subscribeAtlases } from '../../services/atlas/atlasService';
 import { addPlacesToAtlas as addPlacesToAtlasService, fetchAtlasPlaces, removePlaceFromAtlas as removePlaceFromAtlasService, subscribeAtlasPlaces } from '../../services/atlas/atlasPlacesService';
 import type { ParsedPlace } from '../../services/import/importService';
+import type { LocalEvent } from '../../types/event';
 import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
 import type { LocationPermissionStatus } from '../../services/location/locationService';
 import { requestUserLocation } from '../../services/location/locationService';
@@ -118,6 +119,9 @@ export type Overlay =
   | { kind: 'planDetail'; planId: string }
   | { kind: 'atlasDetail'; atlasId: string }
   | { kind: 'addPlace'; onSelect: (places: PlaceDetail[]) => void; excludeIds?: string[]; returnTo?: Overlay }
+  // Carries the event itself rather than an id: a local event is not persisted
+  // anywhere until the user saves it, so there is nothing to look it up from.
+  | { kind: 'eventDetail'; event: LocalEvent; returnTo?: Overlay }
   | { kind: 'createPlan' };
 
 /**
