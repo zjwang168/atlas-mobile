@@ -22,8 +22,12 @@ import LeftNav from './left-nav/LeftNav';
 
 export type TopMode = 'saved' | 'discover';
 
-const SEGMENT_WIDTH = 80;
+const SEGMENT_WIDTH = 88;
 const SEGMENT_CONTROL_WIDTH = SEGMENT_WIDTH * 2 + 4;
+const SEGMENT_CONTROL_HEIGHT = 48;
+// Control height minus its 2px padding on each side.
+const SEGMENT_INNER_HEIGHT = SEGMENT_CONTROL_HEIGHT - 4;
+const AVATAR_SIZE = 48;
 const LIQUID_GLASS_AVAILABLE =
   isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
 
@@ -105,15 +109,7 @@ function SegmentButton({
       onPress={onPress}
       style={({ pressed }) => [styles.segmentButton, pressed && styles.segmentPressed]}
     >
-      <Text
-        style={[
-          typography.subheader,
-          styles.segmentLabel,
-          { color: active ? '#1A1A1A' : '#1A1A1A' },
-        ]}
-      >
-        {label}
-      </Text>
+      <Text style={[typography.bodySmallMedium, styles.segmentLabel]}>{label}</Text>
     </Pressable>
   );
 }
@@ -154,7 +150,7 @@ function TopNav({
             <Avatar alt={mockUser.avatarFallback} style={styles.avatar}>
               <AvatarImage source={{ uri: mockUser.avatarUri }} />
               <AvatarFallback>
-                <Text style={typography.captionEmphasis}>{mockUser.avatarFallback}</Text>
+                <Text style={typography.bodyEmphasis}>{mockUser.avatarFallback}</Text>
               </AvatarFallback>
             </Avatar>
           </PressableScale>
@@ -172,8 +168,8 @@ const styles = StyleSheet.create({
   topRow: {
     position: 'absolute',
     top: 0,
-    left: 12,
-    right: 12,
+    left: 16,
+    right: 16,
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
@@ -185,13 +181,13 @@ const styles = StyleSheet.create({
   },
   segmentShadow: {
     width: SEGMENT_CONTROL_WIDTH,
-    height: 44,
+    height: SEGMENT_CONTROL_HEIGHT,
     borderRadius: 100,
     boxShadow: '0 8px 40px rgba(0,0,0,0.12)',
   },
   segmentControl: {
     width: SEGMENT_CONTROL_WIDTH,
-    height: 44,
+    height: SEGMENT_CONTROL_HEIGHT,
     padding: 2,
     borderRadius: 100,
     borderCurve: 'continuous',
@@ -204,8 +200,8 @@ const styles = StyleSheet.create({
     top: 2,
     left: 2,
     width: SEGMENT_WIDTH,
-    height: 40,
-    borderRadius: 20,
+    height: SEGMENT_INNER_HEIGHT,
+    borderRadius: SEGMENT_INNER_HEIGHT / 2,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(255,255,255,0.7)',
     shadowColor: '#000',
@@ -215,35 +211,35 @@ const styles = StyleSheet.create({
   },
   segmentButton: {
     width: SEGMENT_WIDTH,
-    height: 40,
+    height: SEGMENT_INNER_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    borderRadius: 20,
+    borderRadius: SEGMENT_INNER_HEIGHT / 2,
     borderCurve: 'continuous',
   },
   segmentPressed: {
     opacity: 0.68,
   },
+  // Deliberate exception to the body-family 0% tracking rule: these two words
+  // sit in a fixed-width pill, and -1% keeps them optically centred in it.
   segmentLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    lineHeight: 20,
+    color: '#1A1A1A',
     letterSpacing: -0.15,
   },
   avatarShadow: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: AVATAR_SIZE / 2,
     boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
   },
   avatar: {
-    width: 44,
-    height: 44,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
   },
   avatarSpacer: {
-    width: 44,
-    height: 44,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
   },
 });

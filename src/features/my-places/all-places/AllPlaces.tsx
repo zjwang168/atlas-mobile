@@ -1,4 +1,5 @@
 import { PlaceCover } from '@/components/place-cover/PlaceCover';
+import { PlaceTagChip } from '@/components/place-tag-chip/PlaceTagChip';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
@@ -14,7 +15,6 @@ import { CaretRightIcon } from 'phosphor-react-native/src/icons/CaretRight';
 import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
-import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -32,11 +32,16 @@ import {
   type ViewToken,
 } from 'react-native';
 
-const CARD_SIZE = 144;
+// gray-200 in THEME.md's palette. Shared by every rule in this file so the
+// home sheet and the full-list pages can't drift apart again.
+const DIVIDER_COLOR = '#E0E0E0';
+// Matches the filter chips in MyPlaces so both rows sit on the same pill height.
+const CHIP_HEIGHT = 38;
+const CARD_SIZE = 160;
 const CARD_GAP = 12;
 const SECTION_GAP = 16;
 const MAX_SECTION_ITEMS = 12;
-const LIST_THUMBNAIL_SIZE = 64;
+const LIST_THUMBNAIL_SIZE = 68;
 const EARTH_RADIUS_KM = 6371;
 const US_STATE_ABBREVIATIONS: Record<string, string> = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
@@ -308,7 +313,7 @@ const PlaceTile = memo(function PlaceTile({ place, onPress }: PlaceTileProps) {
       <View style={styles.tileLabelBox}>
         <Text
           numberOfLines={2}
-          style={styles.tileLabel}
+          style={[typography.captionMedium, styles.tileLabel]}
         >
           {place.name}
         </Text>
@@ -316,23 +321,6 @@ const PlaceTile = memo(function PlaceTile({ place, onPress }: PlaceTileProps) {
     </PressableScale>
   );
 });
-
-function PlaceTagChip({ label }: { label: string }) {
-  const normalizedLabel = label.toLocaleLowerCase();
-  const isCafe = normalizedLabel.includes('cafe') || normalizedLabel.includes('coffee');
-  const Icon = isCafe ? CoffeeBeanIcon : ForkKnifeIcon;
-
-  return (
-    <View style={styles.listTag}>
-      <Icon
-        size={13}
-        weight="fill"
-        color={isCafe ? '#FF6259' : '#F5A000'}
-      />
-      <Text numberOfLines={1} style={styles.listTagLabel}>{label}</Text>
-    </View>
-  );
-}
 
 const SavedPlaceListItem = memo(function SavedPlaceListItem({
   place,
@@ -362,15 +350,15 @@ const SavedPlaceListItem = memo(function SavedPlaceListItem({
 
       <View style={styles.listItemContent}>
         <View style={styles.listItemCopy}>
-          <Text numberOfLines={1} style={styles.listItemTitle}>{place.name}</Text>
-          <Text numberOfLines={2} style={styles.listItemDescription}>
+          <Text numberOfLines={1} style={[typography.bodyEmphasis, styles.listItemTitle]}>{place.name}</Text>
+          <Text numberOfLines={2} style={[typography.bodySmall, styles.listItemDescription]}>
             {place.summary || place.subtitle || place.address}
           </Text>
         </View>
         {place.tags.length > 0 ? (
           <View style={styles.listTagsRow}>
             {place.tags.slice(0, 2).map((tag) => (
-              <PlaceTagChip key={tag.id} label={tag.label} />
+              <PlaceTagChip key={tag.id} label={tag.label} style={styles.listTagCap} />
             ))}
           </View>
         ) : null}
@@ -417,7 +405,7 @@ function PlacesSection({
           <Text style={[typography.h3, styles.sectionTitle]}>{title}</Text>
           <CaretRightIcon size={16} weight="bold" color="#8A8A8A" />
         </View>
-        <Text style={[typography.bodySmall, styles.sectionCount]}>
+        <Text style={[typography.bodySmallMedium, styles.sectionCount]}>
           {totalCount} {totalCount === 1 ? 'Place' : 'Places'}
         </Text>
       </PressableScale>
@@ -481,10 +469,10 @@ const AtlasRow = memo(function AtlasRow({ atlas, onPress }: AtlasRowProps) {
         )}
       </View>
       <View style={styles.atlasCopy}>
-        <Text numberOfLines={1} style={[typography.h3, styles.atlasTitle]}>
+        <Text numberOfLines={1} style={[typography.bodyEmphasis, styles.atlasTitle]}>
           {atlas.title}
         </Text>
-        <Text style={[typography.bodySmall, styles.atlasCount]}>
+        <Text style={[typography.bodySmallMedium, styles.atlasCount]}>
           {atlas.placeCount} {atlas.placeCount === 1 ? 'Place' : 'Places'}
         </Text>
       </View>
@@ -515,7 +503,7 @@ function AtlasSection({
           <Text style={[typography.h3, styles.sectionTitle]}>Atlas</Text>
           <CaretRightIcon size={16} weight="bold" color="#8A8A8A" />
         </View>
-        <Text style={[typography.bodySmall, styles.sectionCount]}>
+        <Text style={[typography.bodySmallMedium, styles.sectionCount]}>
           {atlases.length} Atlas
         </Text>
       </PressableScale>
@@ -1044,9 +1032,8 @@ function AllPlaces({
               pressed && styles.countryIndexButtonPressed,
             ]}
           >
-            <MapTrifoldIcon size={16} weight="fill" color="#B0B0B0" />
             <Animated.View style={[styles.placesLocationCopy, { opacity: locationLabelOpacity }]}>
-              <Text numberOfLines={1} style={styles.placesLocationLabel}>
+              <Text numberOfLines={1} style={[typography.subheader, styles.placesLocationLabel]}>
                 {sortMode === 'date' ? (
                   visibleLocation.dateLabel
                 ) : (
@@ -1075,7 +1062,7 @@ function AllPlaces({
               style={styles.sortButton}
             >
               <ArrowsDownUpIcon size={16} weight="bold" color="#717171" />
-              <Text style={styles.sortButtonLabel}>
+              <Text style={[typography.bodySmallEmphasis, styles.sortButtonLabel]}>
                 {sortMode === 'distance' ? 'Distance' : 'Date added'}
               </Text>
               <CaretDownIcon size={12} weight="fill" color="#717171" />
@@ -1156,7 +1143,7 @@ function AllPlaces({
       <View style={styles.root}>
         <View style={styles.placesDivider} />
         <View style={styles.atlasListHeader}>
-          <Text numberOfLines={1} style={styles.atlasSummaryLabel}>
+          <Text numberOfLines={1} style={[typography.subheader, styles.atlasSummaryLabel]}>
             {atlasSummary}
           </Text>
           <MenuView
@@ -1180,7 +1167,7 @@ function AllPlaces({
               style={styles.sortButton}
             >
               <ArrowsDownUpIcon size={16} weight="bold" color="#717171" />
-              <Text style={styles.sortButtonLabel}>{atlasSortLabel}</Text>
+              <Text style={[typography.bodySmallEmphasis, styles.sortButtonLabel]}>{atlasSortLabel}</Text>
               <CaretDownIcon size={12} weight="fill" color="#717171" />
             </View>
           </MenuView>
@@ -1259,6 +1246,7 @@ function AllPlaces({
             onPlacePress={handlePlacePress}
           />
         ) : null}
+        {showPlaces && showAtlases ? <View style={styles.overviewDivider} /> : null}
         {showAtlases ? (
           <AtlasSection
             atlases={atlasPreviews}
@@ -1282,7 +1270,7 @@ const styles = StyleSheet.create({
   placesDivider: {
     height: StyleSheet.hairlineWidth,
     marginHorizontal: 16,
-    backgroundColor: '#E0E0E0',
+    backgroundColor: DIVIDER_COLOR,
   },
   placesListHeader: {
     paddingHorizontal: 16,
@@ -1315,20 +1303,12 @@ const styles = StyleSheet.create({
   atlasSummaryLabel: {
     flex: 1,
     color: '#717171',
-    fontSize: 15,
-    fontWeight: '600',
-    lineHeight: 20,
-    letterSpacing: -0.15,
   },
   placesLocationCopy: {
     flex: 1,
   },
   placesLocationLabel: {
     color: '#717171',
-    fontSize: 15,
-    fontWeight: '600',
-    lineHeight: 20,
-    letterSpacing: -0.15,
   },
   placesListViewport: {
     flex: 1,
@@ -1490,12 +1470,11 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   sortButton: {
-    minHeight: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    height: CHIP_HEIGHT,
+    paddingHorizontal: 12,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: DIVIDER_COLOR,
     backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignSelf: 'flex-start',
@@ -1505,10 +1484,6 @@ const styles = StyleSheet.create({
   },
   sortButtonLabel: {
     color: '#717171',
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 20,
-    letterSpacing: -0.14,
   },
   placesListContent: {
     paddingHorizontal: 16,
@@ -1517,7 +1492,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   placesListSeparator: {
-    height: 16,
+    height: 24,
   },
   atlasListSeparator: {
     height: 8,
@@ -1547,48 +1522,23 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   listItemCopy: {
-    gap: 2,
+    gap: 4,
   },
   listItemTitle: {
     color: '#1A1A1A',
-    fontSize: 16,
-    fontWeight: '600',
-    lineHeight: 22,
-    letterSpacing: -0.16,
   },
+  // Two lines of bodySmall, clamped so every row keeps the same height.
   listItemDescription: {
     height: 40,
     color: '#717171',
-    fontSize: 14,
-    fontWeight: '400',
-    lineHeight: 20,
-    letterSpacing: -0.14,
   },
   listTagsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  listTag: {
+  listTagCap: {
     maxWidth: '48%',
-    minHeight: 24,
-    paddingLeft: 6,
-    paddingRight: 8,
-    paddingVertical: 3,
-    borderRadius: 100,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
-  },
-  listTagLabel: {
-    flexShrink: 1,
-    color: '#717171',
-    fontSize: 12,
-    fontWeight: '500',
-    lineHeight: 18,
-    letterSpacing: -0.12,
   },
   contentScroll: {
     flex: 1,
@@ -1597,10 +1547,15 @@ const styles = StyleSheet.create({
     gap: SECTION_GAP,
   },
   section: {
-    gap: 8,
+    gap: 12,
+  },
+  overviewDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: 16,
+    backgroundColor: DIVIDER_COLOR,
   },
   sectionHeader: {
-    minHeight: 22,
+    minHeight: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1610,14 +1565,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  // Overrides h3's -1% tracking: at 20pt these two headings read too tight.
   sectionTitle: {
     color: '#1A1A1A',
+    letterSpacing: 0,
   },
   sectionCount: {
     color: '#717171',
-    fontWeight: '500',
-    letterSpacing: -0.14,
-    fontVariant: ['tabular-nums'],
   },
   tilesRow: {
     gap: CARD_GAP,
@@ -1684,14 +1638,14 @@ const styles = StyleSheet.create({
     gap: 3,
     paddingLeft: 6,
     paddingRight: 8,
-    paddingVertical: 3,
+    paddingVertical: 4,
   },
+  // 13pt Medium — the type scale has no 13 tier, so this stays a local style.
   chipLabel: {
     flexShrink: 1,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '500',
     lineHeight: 18,
-    letterSpacing: -0.12,
     color: '#1A1A1A',
   },
   tileLabelBox: {
@@ -1701,10 +1655,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   tileLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    lineHeight: 20,
-    letterSpacing: -0.14,
     color: '#1A1A1A',
   },
   emptyState: {
@@ -1756,15 +1706,9 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   atlasTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    lineHeight: 22,
-    letterSpacing: -0.16,
     color: '#1A1A1A',
   },
   atlasCount: {
-    fontWeight: '500',
-    letterSpacing: -0.14,
     color: '#717171',
   },
 });

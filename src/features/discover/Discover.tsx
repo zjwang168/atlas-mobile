@@ -6,6 +6,7 @@ import { Text } from '@/components/ui/text';
 import { useHomeLocation, useHomeOverlay, useHomePlaces } from '@/features/home/HomeContext';
 import { MIN_QUERY_LENGTH } from '@/services/place/placeSearchService';
 import { usePlaceSearch } from '@/services/place/usePlaceSearch';
+import { typography } from '@/theme/typography';
 import type { EventCategory, LocalEvent } from '@/types/event';
 import type { PlaceSaveOutcome } from '@/types/place';
 import type { PlaceSuggestion } from '@/types/route';
@@ -13,12 +14,19 @@ import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ArrowsDownUpIcon } from 'phosphor-react-native/src/icons/ArrowsDownUp';
 import { CaretDownIcon } from 'phosphor-react-native/src/icons/CaretDown';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import {
   ActivityIndicator,
   FlatList,
   Keyboard,
   Pressable,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -72,6 +80,13 @@ function eventKeyExtractor(item: LocalEvent): string {
 /** Same reason as CardGap, for the horizontal featured strip. The width is
     shared with the strip's snap interval, so a card always lands flush. */
 const FEATURED_GAP = 10;
+// Search field and the filter/sort pills share one height across both modes.
+const CONTROL_HEIGHT = 38;
+// Focusing the field grows it and steps the text up a size, so the query the
+// user is actually typing reads at body size rather than at chip size.
+const SEARCH_FOCUSED_HEIGHT = 44;
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 function FeaturedGap() {
   return <View style={styles.featuredGap} />;
@@ -169,7 +184,7 @@ function FilterButton({
         style={styles.filterButton}
       >
         {showIcon ? <ArrowsDownUpIcon size={16} weight="bold" color="#717171" /> : null}
-        <Text style={styles.filterButtonLabel}>{label}</Text>
+        <Text style={[typography.bodySmallEmphasis, styles.filterButtonLabel]}>{label}</Text>
         <CaretDownIcon size={12} weight="fill" color="#717171" />
       </View>
     </MenuView>
@@ -235,7 +250,28 @@ function Discover({
   // Results are unusable at the shorter detents — a third of the screen, and
   // the hosts disable this list's scrolling below `tall`. Focusing the field is
   // the moment the user commits to searching, so take the height then.
-  const handleSearchFocus = useCallback(() => snapTo?.('tall'), [snapTo]);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchHeight = useSharedValue(CONTROL_HEIGHT);
+  const searchFieldStyle = useAnimatedStyle(() => ({ height: searchHeight.value }));
+
+  const handleSearchFocus = useCallback(() => {
+    setSearchFocused(true);
+    searchHeight.value = withTiming(SEARCH_FOCUSED_HEIGHT, { duration: 180 });
+    snapTo?.('tall');
+  }, [searchHeight, snapTo]);
+
+  const handleSearchBlur = useCallback(() => {
+    setSearchFocused(false);
+    searchHeight.value = withTiming(CONTROL_HEIGHT, { duration: 180 });
+  }, [searchHeight]);
+
+  // Focusing took the sheet to `tall` to make room for results; closing gives
+  // that height back rather than leaving the user in a full-screen sheet.
+  const handleSearchClose = useCallback(() => {
+    setQuery('');
+    searchInputRef.current?.blur();
+    snapTo?.('default');
+  }, [setQuery, snapTo]);
 
   const {
     status: eventsStatus,
@@ -353,7 +389,15 @@ function Discover({
         </Text>
       ) : null}
 
-      <View style={styles.filtersRow}>
+      {/* Scrolls rather than squeezes: the three labels are wider than the
+          sheet once the longest timeframe and category are selected. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        style={styles.filtersScroller}
+        contentContainerStyle={styles.filtersRow}
+      >
         <FilterButton
           label={sortMode === 'distance' ? 'Nearest' : 'Soonest'}
           showIcon
@@ -372,7 +416,7 @@ function Discover({
           actions={timeframeActions}
           onSelect={(id) => setTimeframe(id as EventTimeframe)}
         />
-      </View>
+      </ScrollView>
 
       {eventsStatus === 'loading' && events.length === 0 ? (
         <View style={styles.listLoading}>
@@ -409,31 +453,46 @@ function Discover({
   return (
     <View style={styles.root}>
       <View style={styles.searchRow}>
-        <Pressable
+        <AnimatedPressable
           accessibilityRole="search"
           onPress={() => {
             if (active) searchInputRef.current?.focus();
           }}
-          style={styles.searchField}
+          style={[styles.searchField, searchFieldStyle]}
         >
-          <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
+          <MagnifyingGlassIcon size={20} weight="bold" color="#717171" />
           {active ? (
             <TextInput
               ref={searchInputRef}
               value={query}
               onChangeText={setQuery}
               onFocus={handleSearchFocus}
+              onBlur={handleSearchBlur}
               placeholder="Search places of interests..."
-              placeholderTextColor="#8A8A8A"
+              placeholderTextColor="#717171"
               returnKeyType="search"
               autoCapitalize="none"
               autoCorrect={false}
               clearButtonMode="while-editing"
-              style={styles.searchInput}
+              style={[
+                styles.searchInput,
+                searchFocused ? styles.searchInputFocused : styles.searchInputIdle,
+              ]}
             />
           ) : null}
           {status === 'searching' ? <ActivityIndicator size="small" /> : null}
-        </Pressable>
+        </AnimatedPressable>
+        {searchFocused ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Close search"
+            onPress={handleSearchClose}
+            scaleTo={0.9}
+            style={styles.closeButton}
+          >
+            <XIcon size={20} weight="bold" color="#717171" />
+          </PressableScale>
+        ) : null}
       </View>
 
       {/* Two lists rather than one branching list: the sample browse rows and
@@ -498,42 +557,67 @@ const styles = StyleSheet.create({
 
   // Search
   searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: 16,
     paddingBottom: 16,
   },
+  closeButton: {
+    width: SEARCH_FOCUSED_HEIGHT,
+    height: SEARCH_FOCUSED_HEIGHT,
+    borderRadius: SEARCH_FOCUSED_HEIGHT / 2,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   searchField: {
-    height: 36,
-    paddingHorizontal: 12,
-    borderRadius: 30,
+    flex: 1,
+    paddingHorizontal: 16,
+    borderRadius: 100,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
+  // Takes size/weight from bodySmallMedium but deliberately drops its
+  // lineHeight: on iOS a lineHeight on TextInput breaks vertical centring.
   searchInput: {
     flex: 1,
-    height: 36,
     paddingHorizontal: 0,
     paddingVertical: 0,
     color: '#1A1A1A',
-    fontSize: 14,
-    fontWeight: '400',
+  },
+  searchInputIdle: {
+    height: CONTROL_HEIGHT,
+    fontSize: typography.bodySmallMedium.fontSize,
+    fontWeight: typography.bodySmallMedium.fontWeight,
+  },
+  searchInputFocused: {
+    height: SEARCH_FOCUSED_HEIGHT,
+    fontSize: typography.bodyMedium.fontSize,
+    fontWeight: typography.bodyMedium.fontWeight,
   },
   // Filters
+  // Cancels the list's own horizontal padding so the row can scroll edge to
+  // edge, then re-applies it to the content.
+  filtersScroller: {
+    marginHorizontal: -16,
+  },
   filtersRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingBottom: 8,
+    paddingHorizontal: 16,
   },
   filterMenu: {
     alignSelf: 'flex-start',
   },
   filterButton: {
-    minHeight: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    height: CONTROL_HEIGHT,
+    paddingHorizontal: 12,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: '#E0E0E0',
@@ -545,8 +629,6 @@ const styles = StyleSheet.create({
   },
   filterButtonLabel: {
     color: '#717171',
-    fontSize: 14,
-    fontWeight: '600',
   },
 
   // Featured strip

@@ -1,5 +1,5 @@
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
-import type { Icon } from 'phosphor-react-native';
+import type { Icon, IconWeight } from 'phosphor-react-native';
 import { MicrophoneIcon } from 'phosphor-react-native/src/icons/Microphone';
 import { WaveformIcon } from 'phosphor-react-native/src/icons/Waveform';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,12 +15,15 @@ type VoiceInputButtonProps = {
   onShortPress?: () => void;
   onError?: (message: string) => void;
   icon?: Icon;
+  iconSize?: number;
+  iconWeight?: IconWeight;
+  iconColor?: string;
   showVoiceBadge?: boolean;
   accessibilityLabel?: string;
 };
 
 /** Hold-to-talk recorder used anywhere Atlas accepts text. */
-export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError, icon: IconComponent = WaveformIcon, showVoiceBadge = false, accessibilityLabel = 'Hold to speak' }: VoiceInputButtonProps) {
+export default function VoiceInputButton({ onTranscript, onRecordingChange, disabled, style, label, onShortPress, onError, icon: IconComponent = WaveformIcon, iconSize = 22, iconWeight = 'bold', iconColor = '#202024', showVoiceBadge = false, accessibilityLabel = 'Hold to speak' }: VoiceInputButtonProps) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -135,7 +138,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
         </View>
       ) : (
         <View style={styles.iconWrap}>
-          <IconComponent size={22} weight="bold" color={recording ? '#FFFFFF' : '#202024'} />
+          <IconComponent size={iconSize} weight={iconWeight} color={recording ? '#FFFFFF' : iconColor} />
           {showVoiceBadge ? (
             <View style={[styles.voiceBadge, recording && styles.voiceBadgeRecording]}>
               <MicrophoneIcon size={8} weight="fill" color={recording ? '#0C8149' : '#FFFFFF'} />

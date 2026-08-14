@@ -120,8 +120,8 @@ function PlacesBottomSheet({
         [FLOATING_GAP, FLOATING_GAP, 0],
         Extrapolation.CLAMP,
       ),
-      borderTopLeftRadius: 36,
-      borderTopRightRadius: 36,
+      borderTopLeftRadius: 40,
+      borderTopRightRadius: 40,
       borderBottomLeftRadius: interpolate(
         index,
         [0, 1, 2],

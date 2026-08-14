@@ -49,16 +49,19 @@ Backgrounds for `PlaceCover`, the fallback thumbnail a place gets when it has no
 
 | Token | className / `typography.*` key | Size / line-height / weight |
 |---|---|---|
-| Display | `display` | 28px / 34px / 600 |
-| Heading/H2 | `h2` | 22px / 28px / 600, -0.11px tracking |
-| Heading/H3 | `h3` | 17px / 22px / 600 |
-| Heading/Subheader | `subheader` | 15px / 20px / 600 |
-| Body | `body` | 16px / 24px / 400 |
-| Body Emphasis | `bodyEmphasis` | 16px / 24px / 600 |
-| Body Small | `bodySmall` | 14px / 20px / 400 |
-| Body Small Emphasis | `bodySmallEmphasis` | 14px / 20px / 600 |
-| Caption | `caption` | 13px / 18px / 400 |
-| Caption Emphasis | `captionEmphasis` | 13px / 18px / 600 |
+| Display | `display` | 28px / 34px / 600, -1% tracking |
+| Heading/H2 | `h2` | 22px / 28px / 600, -1% tracking |
+| Heading/H3 | `h3` | 20px / 26px / 600, -1% tracking |
+| Heading/Subheader | `subheader` | 16px / 22px / 600, 0% tracking |
+| Body | `body` | 17px / 24px / 400, 0% tracking |
+| Body Medium | `bodyMedium` | 17px / 24px / 500, 0% tracking |
+| Body Emphasis | `bodyEmphasis` | 17px / 24px / 600, 0% tracking |
+| Body Small | `bodySmall` | 15px / 20px / 400, 0% tracking |
+| Body Small Medium | `bodySmallMedium` | 15px / 20px / 500, 0% tracking |
+| Body Small Emphasis | `bodySmallEmphasis` | 15px / 20px / 600, 0% tracking |
+| Caption | `caption` | 14px / 18px / 400, 0% tracking |
+| Caption Medium | `captionMedium` | 14px / 20px / 500, 0% tracking |
+| Caption Emphasis | `captionEmphasis` | 14px / 18px / 600, 0% tracking |
 | Label/Tab | `labelTab` | 11px / 14px / 500 |
 
 ## Adding New Tokens

@@ -32,8 +32,9 @@ const buttonStyle = {
   ...glassShadow,
 };
 
+// 24px icon + 12px on each side = the 48pt button in the design.
 const blurStyle = {
-  padding: 10,
+  padding: 12,
   alignItems: 'center' as const,
   justifyContent: 'center' as const,
 };
