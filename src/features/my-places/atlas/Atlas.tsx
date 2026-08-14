@@ -3,10 +3,11 @@ import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Text } from '@/components/ui/text';
 import { useHome, useHomeAtlases } from '@/features/home/HomeContext';
 import { atlasCameraFromStops, type AtlasCameraPresentation } from '@/features/map/atlasCamera';
+import { queueAtlasPlacePhotoBackfill } from '@/services/atlas/atlasPlacesService';
 import { typography } from '@/theme/typography';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { ScrollView, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { AtlasCard } from './AtlasCard';
 
 const CATEGORY_PILLS = ['All', 'Restaurants', 'Museums', 'Trails', 'Cafes', 'Landmarks'];
@@ -90,7 +91,23 @@ type AtlasProps = {
 
 export default function Atlas({ verticalScrollEnabled = true }: AtlasProps) {
   const { atlases, savedPlaces, atlasPlaces, setAtlasMapState, setOverlay } = useHome();
+  const queuedCoverRowsRef = useRef(new Set<string>());
   const savedById = useMemo(() => new Map(savedPlaces.map((place) => [place.id, place])), [savedPlaces]);
+  useEffect(() => {
+    // Older Atlases were saved before background cover hydration existed.
+    // Select only one stop per missing-cover Atlas; the service serializes and
+    // deduplicates the requests so opening My Places cannot flood the network.
+    atlases.forEach((atlas) => {
+      const rows = atlasPlaces
+        .filter((row) => row.atlas_id === atlas.id)
+        .sort((a, b) => a.sort_order - b.sort_order);
+      const hasCover = rows.some((row) => row.photo_url || (row.place_id && savedById.get(row.place_id)?.photo_url));
+      const candidate = rows.find((row) => !row.photo_url && row.place_name && row.latitude != null && row.longitude != null);
+      if (hasCover || !candidate || queuedCoverRowsRef.current.has(candidate.id)) return;
+      queuedCoverRowsRef.current.add(candidate.id);
+      void queueAtlasPlacePhotoBackfill(candidate);
+    });
+  }, [atlasPlaces, atlases, savedById]);
   const cards = useMemo(() => atlases.map((atlas) => {
     const rows = atlasPlaces
       .filter((row) => row.atlas_id === atlas.id)
@@ -102,7 +119,10 @@ export default function Atlas({ verticalScrollEnabled = true }: AtlasProps) {
       }
       return [{ id: row.place_id ?? row.external_place_id ?? row.id, latitude: row.latitude, longitude: row.longitude, title: row.place_name ?? saved?.name, description: row.place_subtitle ?? saved?.subtitle }];
     });
-    const photoUrls = rows.map((row) => row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url).filter((url): url is string => Boolean(url));
+    // An Atlas owns a snapshot of each stop. Its background photo enrichment
+    // can complete before (or independently from) the matching My Places row,
+    // so prefer the Atlas value for the bookmark cover in every creation path.
+    const photoUrls = rows.map((row) => row.photo_url ?? (row.place_id ? savedById.get(row.place_id)?.photo_url : null)).filter((url): url is string => Boolean(url));
     return {
       atlas,
       camera: atlasCameraFromStops(stops),

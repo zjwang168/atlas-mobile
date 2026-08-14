@@ -21,6 +21,7 @@ type AtlasPlacesListener = (rows: AtlasPlace[]) => void;
 
 const atlasPlacesListeners = new Set<AtlasPlacesListener>();
 let atlasPhotoBackfillTail: Promise<void> = Promise.resolve();
+const atlasPhotoBackfillRequests = new Map<string, Promise<string | null>>();
 
 export function subscribeAtlasPlaces(listener: AtlasPlacesListener): () => void {
   atlasPlacesListeners.add(listener);
@@ -206,33 +207,46 @@ export async function addAtlasOwnedPlaces(atlasId: string, places: AtlasOwnedPla
   }
 }
 
-async function backfillAtlasPlacePhoto(place: AtlasPlace): Promise<void> {
-  if (place.photo_url || !place.place_name || place.latitude == null || place.longitude == null) return;
+async function backfillAtlasPlacePhoto(place: AtlasPlace): Promise<string | null> {
+  if (place.photo_url) return place.photo_url;
+  if (!place.place_name || place.latitude == null || place.longitude == null) return null;
 
   const response = await getPlacePhoto(place.place_name);
   const photoUrl = response.photo_url || staticMapThumbnail(place.latitude, place.longitude);
-  if (!photoUrl) return;
+  if (!photoUrl) return null;
 
   const userId = await getCurrentUserId();
-  if (!userId) return;
+  if (!userId) return null;
   await updateAtlasPlacesCache(userId, (current) => current.map((row) => (
     row.id === place.id ? { ...row, photo_url: photoUrl } : row
   )));
 
-  if (place.id.startsWith('local-')) return;
+  if (place.id.startsWith('local-')) return photoUrl;
   const { error } = await withTimeout(
     supabase.from('atlas_places').update({ photo_url: photoUrl }).eq('id', place.id),
     'Saving Atlas place photo timed out',
   );
   if (error) throw new Error(`Failed to save Atlas place photo: ${error.message}`);
+  return photoUrl;
 }
 
 /** Enrich an Atlas place after it is saved, one lookup at a time. */
-export function queueAtlasPlacePhotoBackfill(place: AtlasPlace): void {
-  atlasPhotoBackfillTail = atlasPhotoBackfillTail
+export function queueAtlasPlacePhotoBackfill(place: AtlasPlace): Promise<string | null> {
+  const existing = atlasPhotoBackfillRequests.get(place.id);
+  if (existing) return existing;
+  const task = atlasPhotoBackfillTail
     .catch(() => undefined)
-    .then(() => backfillAtlasPlacePhoto(place))
-    .catch((error) => console.warn('[atlasPlacesService] photo backfill failed:', error));
+    .then(() => backfillAtlasPlacePhoto(place));
+  // Keep enrichment sequential to avoid competing with map gestures and
+  // search traffic, while still returning this place's outcome to the caller.
+  atlasPhotoBackfillTail = task.then(() => undefined, () => undefined);
+  const request = task.catch((error) => {
+    console.warn('[atlasPlacesService] photo backfill failed:', error);
+    return null;
+  });
+  atlasPhotoBackfillRequests.set(place.id, request);
+  void request.finally(() => atlasPhotoBackfillRequests.delete(place.id));
+  return request;
 }
 
 export type AtlasPlacePatch = Pick<AtlasPlace, 'note' | 'sort_order' | 'timeline_day' | 'timeline_time'> & AtlasPlaceSnapshot;

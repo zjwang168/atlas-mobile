@@ -5,7 +5,7 @@ import { Text } from '@/components/ui/text';
 import { useHomeAtlases, useHomeLocation, useHomeOverlayActions, useHomePlaces } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
 import { discoverAtlasPlaces, geocodeAtlasArea, geocodePlaceSearch, getLandmarkSeeds, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
-import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
+import { addAtlasOwnedPlaces, addPlacesToAtlas, queueAtlasPlacePhotoBackfill, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
 import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
 import { createSearchSession, isAbortError, resolvePlace, suggestPlaces } from '@/services/place/placeSearchService';
@@ -1202,22 +1202,32 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const persistAddedPlace = useCallback(async (place: DraftPlace): Promise<string | undefined> => {
     if (!atlasId) return undefined;
     try {
+      let row;
       if (savedPlaces.some((saved) => saved.id === place.id)) {
-        const [row] = await addPlacesToAtlas(atlasId, [place.id], new Map([[place.id, atlasPlaceSnapshot(place)]]));
-        return row?.id;
+        [row] = await addPlacesToAtlas(atlasId, [place.id], new Map([[place.id, atlasPlaceSnapshot(place)]]));
+      } else {
+        [row] = await addAtlasOwnedPlaces(atlasId, [{
+          id: place.id,
+          name: place.name,
+          subtitle: place.subtitle,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          photo_url: place.photo_url,
+          external_place_id: place.id,
+          city: place.city,
+          region: place.region,
+          country: place.country,
+        }]);
       }
-      const [row] = await addAtlasOwnedPlaces(atlasId, [{
-        id: place.id,
-        name: place.name,
-        subtitle: place.subtitle,
-        latitude: place.latitude,
-        longitude: place.longitude,
-        photo_url: place.photo_url,
-        external_place_id: place.id,
-        city: place.city,
-        region: place.region,
-        country: place.country,
-      }]);
+      if (!row) return undefined;
+      // Only an item committed to the itinerary reaches this queue. Candidate
+      // pins deliberately stay network-free until the user presses Add.
+      void queueAtlasPlacePhotoBackfill(row).then((photoUrl) => {
+        if (!photoUrl) return;
+        setItems((current) => current.map((item) => (
+          item.id === place.id && !item.photo_url ? { ...item, photo_url: photoUrl } : item
+        )));
+      });
       return row?.id;
     } catch (error) {
       console.warn('[AtlasBuilder] autosave place failed', error);
