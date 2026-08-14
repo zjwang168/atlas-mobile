@@ -1,9 +1,13 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
 
-/** Screen-level visual feedback for an active hold-to-talk recording. */
+const WAVE_BARS = Array.from({ length: 46 }, (_, index) => index);
+
+/** Touch-through bottom voice field inspired by Doubao's hold-to-talk state. */
 export function VoiceRecordingBorder({ active }: { active: boolean }) {
   const pulse = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
     if (!active) {
       pulse.stopAnimation();
@@ -11,25 +15,36 @@ export function VoiceRecordingBorder({ active }: { active: boolean }) {
       return;
     }
     const animation = Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 1, duration: 850, useNativeDriver: true }),
-      Animated.timing(pulse, { toValue: 0, duration: 850, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 1, duration: 760, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0, duration: 760, useNativeDriver: true }),
     ]));
     animation.start();
     return () => animation.stop();
   }, [active, pulse]);
+
   if (!active) return null;
   return <View pointerEvents="none" style={styles.layer}>
-    <Animated.View style={[styles.fill, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.05, 0.16] }) }]} />
-    <Animated.View style={[styles.halo, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.26, 0.66] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.976, 1] }) }] }]} />
-    <Animated.View style={[styles.border, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.52, 0.92] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.988, 1] }) }] }]} />
+    <LinearGradient colors={['rgba(7,17,45,0)', 'rgba(21,92,184,0.13)', 'rgba(45,143,240,0.62)']} locations={[0, 0.38, 1]} style={styles.field} />
+    <Animated.View style={[styles.glow, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.48, 0.78] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1.08] }) }] }]} />
+    <View style={styles.waveRow}>
+      {WAVE_BARS.map((index) => {
+        const distance = Math.abs(index - (WAVE_BARS.length - 1) / 2) / (WAVE_BARS.length / 2);
+        const idleScale = 0.3 + (1 - distance) * 0.32;
+        const peakScale = 0.55 + (1 - distance) * 0.45;
+        const inverted = index % 3 === 0;
+        return <Animated.View key={index} style={[styles.waveBar, {
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.42 + (1 - distance) * 0.28, 0.78 + (1 - distance) * 0.22] }),
+          transform: [{ scaleY: pulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: inverted ? [peakScale, idleScale, peakScale] : [idleScale, peakScale, idleScale] }) }],
+        }]} />;
+      })}
+    </View>
   </View>;
 }
 
 const styles = StyleSheet.create({
-  // A broad edge-to-edge band leaves no dead gap between the display edge and
-  // the recording feedback while preserving the continuous iPhone corners.
-  layer: { ...StyleSheet.absoluteFill, zIndex: 999, elevation: 999, padding: 0, borderRadius: 52, overflow: 'hidden' },
-  fill: { ...StyleSheet.absoluteFill, borderRadius: 52, backgroundColor: '#F1FBF5' },
-  halo: { ...StyleSheet.absoluteFill, borderRadius: 52, borderWidth: 22, borderColor: '#E1F4E8' },
-  border: { flex: 1, borderRadius: 52, borderWidth: 4, borderColor: '#C7E8D3', shadowColor: '#DDF3E5', shadowOpacity: 0.58, shadowRadius: 20, shadowOffset: { width: 0, height: 0 } },
+  layer: { ...StyleSheet.absoluteFill, zIndex: 999, elevation: 999, overflow: 'hidden' },
+  field: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 330 },
+  glow: { position: 'absolute', alignSelf: 'center', bottom: -155, width: 620, height: 360, borderRadius: 310, backgroundColor: '#75C5FF', shadowColor: '#64B9FF', shadowOpacity: 0.72, shadowRadius: 42, shadowOffset: { width: 0, height: 0 } },
+  waveRow: { position: 'absolute', left: 0, right: 0, bottom: 82, height: 52, paddingHorizontal: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  waveBar: { width: 4, height: 48, borderRadius: 2, backgroundColor: '#FFFFFF' },
 });
