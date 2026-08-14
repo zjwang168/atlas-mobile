@@ -841,6 +841,7 @@ function AppContent() {
               const { inserted, duplicates } = await savePlaces(selected, {
                 region: parseResult.region,
                 url: importMeta?.sourceUrl || importText,
+                type: parseResult.sourceType,
               });
               setParsedPlaces([]);
               if (__DEV__) {
@@ -879,6 +880,7 @@ function AppContent() {
             const savePromise = savePlaces(selected, {
               region: parseResult.region,
               url: sourceUrl,
+              type: parseResult.sourceType,
             });
             void savePromise.catch((error) => {
               console.error('Background place save failed:', error);

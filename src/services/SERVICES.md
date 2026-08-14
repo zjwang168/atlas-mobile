@@ -126,7 +126,7 @@ Parsed place photos are saved from the backend response; this service does not c
 ```ts
 export type SavePlacesResult = { inserted: SavedPlace[]; duplicates: SavedPlace[] }  // `inserted` is what this call created (optimistic local rows when queued offline); `duplicates` is the existing row each skipped place matched
 
-export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string }): Promise<SavePlacesResult>  // per-place: externalId/externalSource/city/country when set. `region` is batch-level — it comes from `source`, not from any one place, so callers passing no source (place search) leave it null
+export async function savePlaces(places: ParsedPlace[], source?: { url?: string; region?: string; type?: string }): Promise<SavePlacesResult>  // per-place: description/address/externalId/externalSource/city/country when set. `region` and `type` are batch-level — they come from `source`, not from any one place, so callers passing no source (place search) leave them null
 export function isSamePlace(a: PlaceIdentity, b: PlaceIdentity): boolean  // place identity, shared by the save dedup and the "Saved" badges; accepts either a ParsedPlace or a SavedPlace on each side
 export function isSameProviderPlace(a: ProviderIdentity, b: ProviderIdentity): boolean  // the provider-id half of isSamePlace(), the only half that needs no coordinates — a false means "not known to be the same", not "different"
 export type ProviderIdentity = { externalId?, externalSource?, external_place_id?, external_source? }  // a provider id in either the camelCase or the DB-row shape
@@ -134,6 +134,8 @@ export async function fetchSavedPlaces(): Promise<SavedPlace[]>
 export async function deletePlace(id: string): Promise<void>
 export async function updatePlaceNote(id: string, note: string): Promise<void>  // writes to local cache immediately; syncs to Supabase, queued for retry when offline
 export function toPlaceDetail(row: SavedPlace): PlaceDetail  // `category` comes through both as a tag and on its own field, which is what PlaceCover buckets on
+export type PlaceSource = { id: string; source_type: string | null; source_url: string | null; ai_extracted_summary: string | null; created_at: string }
+export async function fetchPlaceSources(placeId: string): Promise<PlaceSource[]>  // every recorded origin for a place, newest first; [] rather than throwing, since a place imported before provenance was recorded simply has none
 export function resolvePlaceThumbnail(place: Pick<SavedPlace, 'photo_url' | 'latitude' | 'longitude'>, options?: { fallback?: 'staticMap' | 'none' }): string  // real photo if saved; `fallback` picks what stands in when there isn't one — default 'staticMap' generates a Mapbox pin, 'none' returns '' so the caller can render PlaceCover instead
 export function subscribeSavedPlaces(listener: (places: SavedPlace[]) => void): () => void
 ```

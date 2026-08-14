@@ -37,12 +37,12 @@ type Place = {
 };
 
 type PlaceDetail = Place & {
-  address: string;
+  address: string;        // the place's own address; falls back to the import's region on rows saved before it was persisted
   thumbnailUrl: string;   // the real saved photo, or '' — a photoless place renders PlaceCover instead
   schedule: DaySchedule[];
   tags: PlaceTag[];
   collections?: PlaceTag[];
-  summary: string;
+  summary: string;        // the AI's words about the place, from the source it was parsed out of
   visitStrategy: string;
   note?: string;
   phoneNumber?: string;

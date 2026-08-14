@@ -29,6 +29,12 @@ export type SavedPlace = {
   latitude: number;
   longitude: number;
   region: string | null;
+  /** The AI's own words about this place, from whatever source it was parsed
+      out of. Distinct from `subtitle`, which also carries the address. */
+  description?: string | null;
+  /** The place's own street address. Distinct from `region`, which is the
+      area a whole import was inferred to be in. */
+  address?: string | null;
   external_place_id?: string | null;
   external_source?: string | null;
   city?: string | null;
@@ -48,7 +54,7 @@ export type SpecialPlaceRole = NonNullable<SavedPlace['special_role']>;
  * that silently fall back to fuzzy matching.
  */
 const PLACE_COLUMNS =
-  'id, name, subtitle, category, latitude, longitude, region, external_place_id, external_source, city, country, photo_url, special_role, created_at';
+  'id, name, subtitle, description, address, note, category, latitude, longitude, region, external_place_id, external_source, city, country, photo_url, special_role, created_at';
 
 type SavedPlacesListener = (places: SavedPlace[]) => void;
 
@@ -272,7 +278,7 @@ export function queueSavedPlacePhotoBackfill(place: SavedPlace): void {
  */
 export async function savePlaces(
   places: ParsedPlace[],
-  source?: { url?: string; region?: string },
+  source?: { url?: string; region?: string; type?: string },
 ): Promise<SavePlacesResult> {
   if (places.length === 0) return { inserted: [], duplicates: [] };
   const userId = await getCurrentUserId();
@@ -322,6 +328,10 @@ export async function savePlaces(
   const rows = placesToInsert.map((p) => ({
     name: truncate(p.name, 255) ?? 'Unknown place',
     subtitle: truncate(p.subtitle, 255),
+    // Kept apart from `subtitle`, which historically concatenated the two and
+    // so could not be shown as either one on its own.
+    description: truncate(p.description, 2000),
+    address: truncate(p.address, 500),
     category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
@@ -346,6 +356,8 @@ export async function savePlaces(
     id: createLocalId(),
     name: row.name,
     subtitle: row.subtitle ?? '',
+    description: row.description,
+    address: row.address,
     category: row.category,
     latitude: row.latitude,
     longitude: row.longitude,
@@ -432,10 +444,14 @@ export async function savePlaces(
 
   // Record provenance (best-effort; a failure here shouldn't lose the places).
   if (source?.url && data) {
-    const sourceRows = data.map((row: { id: string }) => ({
+    // Index-aligned with `placesToInsert`, the same pairing the cache
+    // reconciliation above relies on, so each row keeps its own summary
+    // rather than the batch sharing one.
+    const sourceRows = data.map((row: { id: string }, index: number) => ({
       place_id: row.id,
-      source_type: 'link',
+      source_type: source.type || 'link',
       source_url: source.url,
+      ai_extracted_summary: truncate(placesToInsert[index]?.description, 2000),
     }));
     const { error: srcError } = await supabase.from('place_sources').insert(sourceRows);
     if (srcError) console.warn('[placeService] place_sources insert failed:', srcError.message);
@@ -501,6 +517,44 @@ export function resolvePlaceThumbnail(
   return options.fallback === 'none' ? '' : staticMapThumbnail(place.latitude, place.longitude);
 }
 
+/** One record of where a place came from, from `place_sources`. */
+export type PlaceSource = {
+  id: string;
+  source_type: string | null;
+  source_url: string | null;
+  ai_extracted_summary: string | null;
+  created_at: string;
+};
+
+/**
+ * Every recorded origin for a place, newest first. A place saved from more
+ * than one post has one row per post, each with that post's own summary.
+ *
+ * Returns [] rather than throwing: provenance is decoration, and a place
+ * imported before this was recorded simply has none.
+ */
+export async function fetchPlaceSources(placeId: string): Promise<PlaceSource[]> {
+  if (!placeId || placeId.startsWith('local-')) return [];
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('place_sources')
+        .select('id, source_type, source_url, ai_extracted_summary, created_at')
+        .eq('place_id', placeId)
+        .order('created_at', { ascending: false }),
+      'Loading place sources timed out',
+    );
+    if (error) {
+      console.warn('[placeService] place_sources read failed:', error.message);
+      return [];
+    }
+    return (data ?? []) as PlaceSource[];
+  } catch (error) {
+    console.warn('[placeService] place_sources read failed:', error);
+    return [];
+  }
+}
+
 /** Adapt a DB row to the PlaceDetail shape the detail screens expect.
     Fields we don't persist yet get sensible defaults. */
 export function toPlaceDetail(row: SavedPlace): PlaceDetail {
@@ -510,7 +564,9 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     subtitle: row.subtitle ?? '',
     latitude: row.latitude,
     longitude: row.longitude,
-    address: row.region ?? '',
+    // `region` is the batch's inferred area, not this place's address — only
+    // a fallback for rows saved before `address` was persisted.
+    address: row.address ?? row.region ?? '',
     // No static-map fallback: every screen rendering a PlaceDetail thumbnail
     // falls back to PlaceCover, which says more than a grey map tile.
     thumbnailUrl: resolvePlaceThumbnail(row, { fallback: 'none' }),
@@ -518,9 +574,11 @@ export function toPlaceDetail(row: SavedPlace): PlaceDetail {
     tags: row.category ? [{ id: row.category, label: row.category }] : [],
     // Also carried through raw, not only as a tag: PlaceCover buckets on it.
     category: row.category ?? undefined,
-    summary: row.subtitle ?? '',
+    description: row.description ?? undefined,
+    // Same fallback: pre-split rows have the description inside `subtitle`.
+    summary: row.description ?? row.subtitle ?? '',
     visitStrategy: '',
-    note: undefined,
+    note: row.note ?? undefined,
     savedAt: new Date(row.created_at).toLocaleDateString(),
     specialRole: row.special_role ?? null,
   };
@@ -640,8 +698,8 @@ export async function deletePlace(id: string): Promise<void> {
 }
 
 /**
- * Update a saved place's note locally. The current Supabase `places` table
- * does not have a `note` column, so this stays client-side only for now.
+ * Update a saved place's note, writing through the local cache first so the
+ * edit survives being made offline.
  *
  * @param id    The ID of the place to update.
  * @param note  The new note text (empty string clears the note).
@@ -655,7 +713,19 @@ export async function updatePlaceNote(id: string, note: string): Promise<void> {
     current.map((place) => (place.id === id ? { ...place, note: trimmed || null } : place)),
   );
 
-  // No-op on the server until the DB schema grows a note column.
+  // A row that only exists locally carries its note into the queued insert.
+  if (id.startsWith('local-')) return;
+
+  try {
+    const { error } = await withTimeout(
+      supabase.from('places').update({ note: trimmed || null }).eq('id', id),
+      'Updating place note timed out',
+    );
+    if (error) throw new Error(`Failed to update place note: ${error.message}`);
+  } catch (error) {
+    if (!isRetryableError(error)) throw error;
+    await enqueueWrite(userId, { kind: 'updateNote', placeId: id, note: trimmed });
+  }
 }
 
 /** Rename a saved place locally and persist the name when the row is remote. */

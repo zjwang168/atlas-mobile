@@ -20,7 +20,7 @@ type SavePlacesWrite = {
   createdAt: string;
   places: ParsedPlace[];
   localRows: SavedPlace[];
-  source?: { url?: string; region?: string };
+  source?: { url?: string; region?: string; type?: string };
 };
 
 type SaveSpecialPlaceWrite = {
@@ -198,6 +198,8 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   const rows = write.places.map((p, index) => ({
     name: truncate(p.name, 255) ?? 'Unknown place',
     subtitle: truncate(p.subtitle, 255),
+    description: truncate(p.description, 2000),
+    address: truncate(p.address, 500),
     category: truncate(p.type && p.type !== 'Place' ? p.type : null, 100),
     latitude: p.latitude,
     longitude: p.longitude,
@@ -213,7 +215,7 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   }));
 
   const { data, error } = await withTimeout(
-    supabase.from('places').insert(rows).select('id, name, subtitle, category, latitude, longitude, region, city, country, photo_url, created_at'),
+    supabase.from('places').insert(rows).select('id, name, subtitle, description, address, note, category, latitude, longitude, region, city, country, photo_url, created_at'),
   );
   if (error) throw new Error(`Failed to save queued places: ${error.message}`);
 
@@ -223,10 +225,11 @@ async function insertPlacesOnline(write: SavePlacesWrite): Promise<SavedPlace[]>
   }));
 
   if (write.source?.url && saved.length > 0) {
-    const sourceRows = saved.map((row) => ({
+    const sourceRows = saved.map((row, index) => ({
       place_id: row.id,
-      source_type: 'link',
+      source_type: write.source?.type || 'link',
       source_url: write.source?.url,
+      ai_extracted_summary: truncate(write.places[index]?.description, 2000),
     }));
     const { error: srcError } = await supabase.from('place_sources').insert(sourceRows);
     if (srcError) console.warn('[syncQueue] place_sources insert failed:', srcError.message);
@@ -311,10 +314,10 @@ async function deletePlaceOnline(placeId: string): Promise<void> {
 }
 
 async function updateNoteOnline(placeId: string, note: string): Promise<void> {
-  void placeId;
-  void note;
-  // The current Supabase `places` table does not expose a `note` column.
-  // Keep note edits local until the backend schema grows one.
+  const { error } = await withTimeout(
+    supabase.from('places').update({ note: note.trim() || null }).eq('id', placeId),
+  );
+  if (error) throw new Error(`Failed to update queued place note: ${error.message}`);
 }
 
 async function updatePlaceNameOnline(placeId: string, name: string): Promise<void> {
