@@ -21,7 +21,11 @@ export default {
     userInterfaceStyle: 'light',
     ios: {
       supportsTablet: true,
-      bundleIdentifier: 'com.anonymous.atlas-mobile',
+      // Not the Expo placeholder `com.anonymous.*`: that prefix is what every
+      // Expo project starts with, so it was already registered to another
+      // team and Apple would not issue this one a provisioning profile.
+      // Simulator builds never noticed, because they need no profile.
+      bundleIdentifier: 'com.ouratlas.mobile',
     },
     // Note: ios/ is checked in locally but gitignored, so a prebuild is what
     // applies the plugin config below to Info.plist. The same keys are also
@@ -42,6 +46,7 @@ export default {
     },
     plugins: [
       'expo-font',
+      './plugins/withoutPushEntitlement',
       
       ['expo-media-library', { photosPermission: 'Allow OurAtlas to save your shared atlas image.' }],
       'expo-sharing',
