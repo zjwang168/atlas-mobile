@@ -7,15 +7,17 @@ import { Text } from '@/components/ui/text';
 import { transcribeAtlasNoteAudio } from '@/services/api/apiService';
 
 import { styles } from './styles';
+import { AtlasTranscriptionIcon } from './AtlasTranscriptionIcon';
 
 type AtlasNoteButtonProps = {
   placeName: string;
   initialNote?: string | null;
   onSave: (note: string) => void;
+  onRecordingChange?: (recording: boolean) => void;
 };
 
 /** A self-contained note editor: tap for text, press and hold to dictate. */
-export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteButtonProps) {
+export function AtlasNoteButton({ placeName, initialNote, onSave, onRecordingChange }: AtlasNoteButtonProps) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [visible, setVisible] = useState(false);
   const [note, setNote] = useState('');
@@ -24,6 +26,8 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
   const [error, setError] = useState<string | null>(null);
   const longPressStartedRef = useRef(false);
   const releasedBeforeStartRef = useRef(false);
+
+  useEffect(() => onRecordingChange?.(recording), [onRecordingChange, recording]);
 
   const openEditor = useCallback(() => {
     setNote(initialNote ?? '');
@@ -71,8 +75,12 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
   const startRecording = useCallback(async () => {
     setNote(initialNote ?? '');
     setError(null);
+    // The enclosing full-screen border represents confirmed hold-to-talk,
+    // including the brief microphone preparation phase.
+    onRecordingChange?.(true);
     const permission = await AudioModule.requestRecordingPermissionsAsync();
     if (!permission.granted) {
+      onRecordingChange?.(false);
       setVisible(true);
       setError('Microphone access is required for voice notes.');
       return;
@@ -88,11 +96,12 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
       }
     } catch (cause) {
       console.warn('[AtlasNote] recorder could not start', cause);
+      onRecordingChange?.(false);
       await resetAudioMode();
       setVisible(true);
       setError('Voice input was not available. You can type your note instead.');
     }
-  }, [initialNote, recorder, resetAudioMode, transcribeRecording]);
+  }, [initialNote, onRecordingChange, recorder, resetAudioMode, transcribeRecording]);
 
   const cancel = useCallback(() => {
     if (recording) void recorder.stop().catch(() => undefined);
@@ -140,7 +149,7 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
       }}
       style={({ pressed }) => [styles.noteButton, pressed && styles.noteButtonPressed, recording && styles.noteButtonRecording]}
     >
-      {transcribing ? <ActivityIndicator size="small" color="#176C59" /> : <Ionicons name={recording ? 'mic' : 'book-outline'} size={18} color={recording ? '#FFFFFF' : '#176C59'} />}
+      {transcribing ? <ActivityIndicator size="small" color="#176C59" /> : recording ? <Ionicons name="mic" size={18} color="#FFFFFF" /> : <AtlasTranscriptionIcon />}
     </Pressable>
 
     <Modal transparent animationType="fade" visible={visible} statusBarTranslucent onRequestClose={cancel}>
@@ -148,7 +157,7 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
         <Pressable style={styles.noteModalDismiss} onPress={cancel} />
         <View accessibilityViewIsModal style={styles.noteModal}>
           <View style={styles.noteModalHeader}>
-            <View style={styles.noteModalIcon}><Ionicons name="book-outline" size={20} color="#176C59" /></View>
+            <View style={styles.noteModalIcon}><AtlasTranscriptionIcon size={20} /></View>
             <View style={styles.noteModalTitleWrap}><Text numberOfLines={1} style={styles.noteModalTitle}>Note for {placeName}</Text></View>
             <TouchableOpacity accessibilityLabel="Close note editor" onPress={cancel} style={styles.noteModalClose}><Ionicons name="close" size={18} color="#52615B" /></TouchableOpacity>
           </View>

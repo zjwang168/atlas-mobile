@@ -46,6 +46,7 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
     if (disabled || processing || recording) return;
     const permission = await AudioModule.requestRecordingPermissionsAsync();
     if (!permission.granted) {
+      onRecordingChange?.(false);
       onError?.('Microphone access is required to transcribe your voice.');
       return;
     }
@@ -68,10 +69,11 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       }
     } catch (error) {
       console.warn('[VoiceInputButton] could not start recording', error);
+      onRecordingChange?.(false);
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
       onError?.('We could not access a microphone. Check the Simulator audio input and try again.');
     }
-  }, [disabled, onError, processing, recorder, recording, setActive]);
+  }, [disabled, onError, onRecordingChange, processing, recorder, recording, setActive]);
 
   const stop = useCallback(async () => {
     if (!recording) return;
@@ -110,6 +112,9 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
       delayLongPress={360}
       onLongPress={() => {
         longPressStarted.current = true;
+        // Surface feedback at hold confirmation, before permission and audio
+        // setup finish. Otherwise a quick hold can feel like it never began.
+        onRecordingChange?.(true);
         void start();
       }}
       onPress={() => {
@@ -128,12 +133,12 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
     >
       {processing ? (
         <View style={styles.statusRow}>
-          <ActivityIndicator size="small" color="#0C8149" />
+          <ActivityIndicator size="small" color="#167A54" />
           {label ? <Text numberOfLines={1} style={styles.label}>Transcribing</Text> : null}
         </View>
       ) : label ? (
         <View style={styles.labelRow}>
-          <WaveformIcon size={18} weight="bold" color={recording ? '#FFFFFF' : '#0C8149'} />
+          <WaveformIcon size={18} weight="bold" color={recording ? '#FFFFFF' : '#167A54'} />
           <Text numberOfLines={1} style={[styles.label, recording && styles.labelRecording]}>{recording ? 'Release to send' : label}</Text>
         </View>
       ) : (
@@ -152,12 +157,12 @@ export default function VoiceInputButton({ onTranscript, onRecordingChange, disa
 
 const styles = StyleSheet.create({
   button: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  recording: { backgroundColor: '#0C8149', borderColor: '#0C8149' },
+  recording: { backgroundColor: '#167A54', borderColor: '#167A54' },
   iconWrap: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   voiceBadge: { position: 'absolute', right: -3, bottom: -2, width: 11, height: 11, borderRadius: 5.5, backgroundColor: '#0C8149', borderWidth: 1.5, borderColor: '#EEF6FD', alignItems: 'center', justifyContent: 'center' },
   voiceBadgeRecording: { backgroundColor: '#FFFFFF', borderColor: '#0C8149' },
   labelRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
   statusRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
-  label: { flexShrink: 1, color: '#0C8149', fontSize: 13, fontWeight: '700', letterSpacing: 0 },
+  label: { flexShrink: 1, color: '#167A54', fontSize: 13, fontWeight: '700', letterSpacing: 0 },
   labelRecording: { color: '#FFFFFF' },
 });

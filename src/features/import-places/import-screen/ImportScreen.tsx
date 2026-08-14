@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getLinkPreview, type LinkPreview } from '../../../services/api/apiService';
 import { useAppDialog } from '../../../components/feedback/AppDialog';
 import VoiceInputButton from '../../../components/voice-input/VoiceInputButton';
+import { VoiceRecordingBorder } from '../../../components/voice-input/VoiceRecordingBorder';
 import { typography } from '../../../theme/typography';
 
 export type ImportMode =
@@ -753,6 +754,8 @@ export default function ImportScreen({
                 <VoiceInputButton
                   onRecordingChange={setVoiceRecording}
                   onTranscript={(value) => setText((current) => current ? `${current} ${value}` : value)}
+                  accessibilityLabel="Hold to speak"
+                  style={styles.voiceTextButton}
                 />
               ) : null}
               <TouchableOpacity
@@ -934,6 +937,7 @@ export default function ImportScreen({
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <VoiceRecordingBorder active={voiceRecording} />
       <BottomSheet
         ref={sheetRef}
         index={0}
@@ -1307,6 +1311,15 @@ const styles = StyleSheet.create({
     borderRadius: 26,
     alignItems: 'flex-end',
     paddingBottom: 8,
+  },
+  voiceTextButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginHorizontal: 2,
+    backgroundColor: '#F0FAF4',
+    borderWidth: 1,
+    borderColor: '#D5F0E0',
   },
   inputLeadingIcon: {
     marginRight: 7,

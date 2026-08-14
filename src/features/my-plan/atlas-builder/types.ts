@@ -55,4 +55,6 @@ export type AtlasBuilderProps = {
   onCreateCameraSettled?: () => void;
   onBuildPlan?: (location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => void;
   onReturnToCreateSearch?: () => void;
+  /** Lets an enclosing full-screen Atlas surface display recording feedback. */
+  onNoteVoiceRecordingChange?: (recording: boolean) => void;
 };

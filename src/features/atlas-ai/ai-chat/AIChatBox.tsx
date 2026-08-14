@@ -48,6 +48,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/ui/text';
 import VoiceInputButton from '@/components/voice-input/VoiceInputButton';
+import { VoiceRecordingBorder } from '@/components/voice-input/VoiceRecordingBorder';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import { useHome } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
@@ -2199,6 +2200,7 @@ export default function AIChatBox({
       entering={reducedMotion ? undefined : CHAT_ENTER_TRANSITION}
       style={styles.screen}
     >
+      <VoiceRecordingBorder active={voiceRecording} />
       <View style={styles.container}>
         {landingVisible ? (
           <>
@@ -2811,7 +2813,8 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 6,
     left: 12,
-    right: 12,
+    // Keep the hold-to-talk control clear of the persistent send control.
+    right: 60,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2821,9 +2824,9 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#E9FBF1',
+    backgroundColor: '#F0FAF4',
     borderWidth: 1,
-    borderColor: '#C5EDD8',
+    borderColor: '#D5F0E0',
   },
   voiceModeKeyboard: {
     width: 42,

@@ -70,7 +70,7 @@ const CREATE_ATLAS_CAMERA_VERTICAL_OFFSET = 48;
 const EDIT_ATLAS_PINCH_HINT_DELAY_MS = 4000;
 const EDIT_ATLAS_PINCH_HINT_VISIBLE_MS = 3000;
 
-export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onCreateCameraSettled, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
+export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onCreateCameraSettled, onBuildPlan, onReturnToCreateSearch, onNoteVoiceRecordingChange }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces } = useHomePlaces();
   const { atlasPlaces, atlases } = useHomeAtlases();
@@ -1790,7 +1790,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
             {!item.timeline_time ? <TimeInsert onPress={() => openTimePicker(index)} /> : <TouchableOpacity accessibilityLabel="Edit scheduled time" onPress={() => openTimePicker(index)} style={styles.timeTagInline}><Text style={styles.timeTagText}>{item.timeline_day ? `Day ${item.timeline_day} · ${item.timeline_time}` : item.timeline_time}</Text></TouchableOpacity>}
             <TransportInsert mode={item.transport ?? null} onPress={() => setTransportModalIndex(index)} />
           </View>
-          <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNote={(note) => { commitItems(items.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note: encodeAtlasPlaceMetadata(note, item.transport) }).catch(console.warn); }} />
+          <AtlasItem item={item} index={index} onFocus={() => focus(item)} onRemove={() => removePlace(item)} onMove={movePlace} onNoteRecordingChange={onNoteVoiceRecordingChange} onNote={(note) => { commitItems(items.map((entry) => entry.id === item.id ? { ...entry, note } : entry)); if (item.joinId) updateAtlasPlace(item.joinId, { note: encodeAtlasPlaceMetadata(note, item.transport) }).catch(console.warn); }} />
         </Reanimated.View>)}
       </ScrollView>}
 
