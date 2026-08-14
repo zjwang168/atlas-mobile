@@ -140,7 +140,7 @@ function MyPlaces({
             scaleTo={0.9}
             style={styles.closeButton}
           >
-            <XIcon size={16} weight="bold" color="#717171" />
+            <XIcon size={20} weight="bold" color="#717171" />
           </PressableScale>
         </View>
       ) : (
@@ -281,7 +281,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: SEARCH_FOCUSED_HEIGHT,
     paddingHorizontal: 16,
-    borderRadius: CHIP_RADIUS,
+    borderRadius: 100,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     flexDirection: 'row',
@@ -304,7 +304,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingVertical: 0,
     color: '#1A1A1A',
-    fontSize: typography.body.fontSize,
-    fontWeight: typography.body.fontWeight,
+    fontSize: typography.bodyMedium.fontSize,
+    fontWeight: typography.bodyMedium.fontWeight,
   },
 });

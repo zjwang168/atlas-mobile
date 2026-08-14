@@ -14,6 +14,7 @@ import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ArrowsDownUpIcon } from 'phosphor-react-native/src/icons/ArrowsDownUp';
 import { CaretDownIcon } from 'phosphor-react-native/src/icons/CaretDown';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { XIcon } from 'phosphor-react-native/src/icons/X';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Animated, {
   useAnimatedStyle,
@@ -25,6 +26,7 @@ import {
   FlatList,
   Keyboard,
   Pressable,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -263,6 +265,14 @@ function Discover({
     searchHeight.value = withTiming(CONTROL_HEIGHT, { duration: 180 });
   }, [searchHeight]);
 
+  // Focusing took the sheet to `tall` to make room for results; closing gives
+  // that height back rather than leaving the user in a full-screen sheet.
+  const handleSearchClose = useCallback(() => {
+    setQuery('');
+    searchInputRef.current?.blur();
+    snapTo?.('default');
+  }, [setQuery, snapTo]);
+
   const {
     status: eventsStatus,
     events,
@@ -379,7 +389,15 @@ function Discover({
         </Text>
       ) : null}
 
-      <View style={styles.filtersRow}>
+      {/* Scrolls rather than squeezes: the three labels are wider than the
+          sheet once the longest timeframe and category are selected. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        style={styles.filtersScroller}
+        contentContainerStyle={styles.filtersRow}
+      >
         <FilterButton
           label={sortMode === 'distance' ? 'Nearest' : 'Soonest'}
           showIcon
@@ -398,7 +416,7 @@ function Discover({
           actions={timeframeActions}
           onSelect={(id) => setTimeframe(id as EventTimeframe)}
         />
-      </View>
+      </ScrollView>
 
       {eventsStatus === 'loading' && events.length === 0 ? (
         <View style={styles.listLoading}>
@@ -464,6 +482,17 @@ function Discover({
           ) : null}
           {status === 'searching' ? <ActivityIndicator size="small" /> : null}
         </AnimatedPressable>
+        {searchFocused ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Close search"
+            onPress={handleSearchClose}
+            scaleTo={0.9}
+            style={styles.closeButton}
+          >
+            <XIcon size={20} weight="bold" color="#717171" />
+          </PressableScale>
+        ) : null}
       </View>
 
       {/* Two lists rather than one branching list: the sample browse rows and
@@ -528,12 +557,24 @@ const styles = StyleSheet.create({
 
   // Search
   searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: 16,
     paddingBottom: 16,
   },
+  closeButton: {
+    width: SEARCH_FOCUSED_HEIGHT,
+    height: SEARCH_FOCUSED_HEIGHT,
+    borderRadius: SEARCH_FOCUSED_HEIGHT / 2,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   searchField: {
+    flex: 1,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: 100,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     flexDirection: 'row',
@@ -550,20 +591,26 @@ const styles = StyleSheet.create({
   },
   searchInputIdle: {
     height: CONTROL_HEIGHT,
-    fontSize: typography.bodySmall.fontSize,
-    fontWeight: typography.bodySmall.fontWeight,
+    fontSize: typography.bodySmallMedium.fontSize,
+    fontWeight: typography.bodySmallMedium.fontWeight,
   },
   searchInputFocused: {
     height: SEARCH_FOCUSED_HEIGHT,
-    fontSize: typography.body.fontSize,
-    fontWeight: typography.body.fontWeight,
+    fontSize: typography.bodyMedium.fontSize,
+    fontWeight: typography.bodyMedium.fontWeight,
   },
   // Filters
+  // Cancels the list's own horizontal padding so the row can scroll edge to
+  // edge, then re-applies it to the content.
+  filtersScroller: {
+    marginHorizontal: -16,
+  },
   filtersRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingBottom: 8,
+    paddingHorizontal: 16,
   },
   filterMenu: {
     alignSelf: 'flex-start',

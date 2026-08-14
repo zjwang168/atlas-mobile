@@ -281,8 +281,11 @@ function PlacesBottomSheet({
                         active={topMode === 'discover'}
                         // The sheet does not resize for the keyboard, so the
                         // list has to clear it itself or its last results sit
-                        // under it with no way to scroll them up.
-                        bottomInset={BOTTOM_BAR_CLEARANCE + keyboardHeight}
+                        // under it with no way to scroll them up. The two
+                        // never overlap: the tab bar is hidden while the
+                        // keyboard is up, so the clearance swaps rather than
+                        // stacking.
+                        bottomInset={keyboardHeight > 0 ? keyboardHeight : BOTTOM_BAR_CLEARANCE}
                         snapTo={handleSnapTo}
                         onSearchPress={onSearchPress}
                         verticalScrollEnabled={
@@ -301,7 +304,11 @@ function PlacesBottomSheet({
                 /> */}
               </View>
             </RNHostView>
-            {bottomBar ? (
+            {/* Dropped entirely while the keyboard is up. SwiftUI lifts this
+                overlay with the keyboard, and a floating tab bar riding above
+                the keys is not a state iOS has — countering the lift with a
+                transform left it a safe-area's worth out of place instead. */}
+            {bottomBar && keyboardHeight === 0 ? (
               <Overlay.Content>
                 {/* `matchContents` sizes this RNHostView to the RN tree's own
                     measured size instead of stretching to the base content's
@@ -312,10 +319,7 @@ function PlacesBottomSheet({
                     to align at the bottom. */}
                 <RNHostView matchContents>
                   <View
-                    style={[
-                      styles.bottomBarWrap,
-                      keyboardHeight > 0 && { transform: [{ translateY: keyboardHeight }] },
-                    ]}
+                    style={styles.bottomBarWrap}
                     pointerEvents="box-none"
                   >
                     {bottomBar}
