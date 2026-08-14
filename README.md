@@ -490,7 +490,15 @@ If this fails, ensure Uvicorn was started from the repository root and that port
 
 ### The app cannot reach the backend
 
-`http://localhost:8000` works only when the app and backend run in the same simulator environment. For a physical device, set `EXPO_PUBLIC_API_BASE_URL` to your development machine's reachable LAN address, then restart Expo.
+`http://localhost:8000` works only when the app and backend run in the same simulator environment — on a phone, `localhost` is the phone. For a physical device, set `EXPO_PUBLIC_API_BASE_URL` to your machine's LAN address (`ipconfig getifaddr en0`), then restart Expo.
+
+Also start the backend on all interfaces, or the phone still cannot reach it — Uvicorn's default binding accepts local connections only:
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+A Release build bakes this value in at compile time rather than reading it through Metro, so switching networks means rebuilding, and the backend must stay running — there is no Metro to fall back on.
 
 ### Map is blank, clipped, or lacks markers
 
