@@ -95,18 +95,15 @@ const STARTER_PROMPTS = [
   'Cozy cafes to work from near me',
   'Best date-night viewpoints',
   'A hidden gem tourists don’t know',
-  'Find the nearest car wash.',
-  'Find car wash near Stanford.',
-  'Find nearest car wash and gas.',
-  'Find car wash and gas near Stanford.',
-  'Save Santa Monica, Griffith, Grand Central.',
-  'Create an atlas for these 3 places.',
-  'Build a Seattle travel atlas.',
-  'Plan a 1-day NYC route with food.',
-  'Plan Yosemite stops from home.',
-  'Tell me where this place is.',
-  'Create a Breaking Bad filming atlas.',
-  "Show Trump's favorite NYC food.",
+  'Nearest car wash and gas',
+  'Bookmark Santa Monica, Griffith, Grand Central',
+  'Create an atlas for these 3 places...',
+  'Build a Seattle travel atlas',
+  'Plan a 1-day NYC route with food',
+  'Plan Yosemite stops from home',
+  'This place is? [import image]',
+  'Create a Breaking Bad filming atlas',
+  "Show Trump's favorite NYC food",
 ];
 const IMPORT_STARTER_PROMPTS = [
   'Build a day plan around these saved places',
@@ -682,6 +679,10 @@ export default function AIChatBox({
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [userName, setUserName] = useState('Traveler');
+  const [starterPrompts, setStarterPrompts] = useState<string[]>(() => pickStarterPrompts());
+  const starterPromptsOpacity = useRef(new NativeAnimated.Value(1)).current;
+  const starterPromptRotationBusyRef = useRef(false);
   const [inputText, setInputText] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -694,6 +695,71 @@ export default function AIChatBox({
   const [attachedImageBase64, setAttachedImageBase64] = useState<string | null>(null);
   const photoHydrationActiveRef = useRef(true);
   const scheduledChatPhotoKeysRef = useRef(new Set<string>());
+
+  const landingVisible = showLanding && !messages.some((message) => message.role === 'user');
+
+  useEffect(() => {
+    let active = true;
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (active) setUserName(displayNameForUser(data.session?.user));
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setUserName(displayNameForUser(session?.user));
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!landingVisible) return undefined;
+
+    const rotatePrompts = () => {
+      if (starterPromptRotationBusyRef.current) return;
+      starterPromptRotationBusyRef.current = true;
+
+      const showNextPrompts = () => {
+        setStarterPrompts((current) => pickStarterPrompts(current));
+        if (reducedMotion) {
+          starterPromptRotationBusyRef.current = false;
+          return;
+        }
+        NativeAnimated.timing(starterPromptsOpacity, {
+          toValue: 1,
+          duration: 220,
+          useNativeDriver: true,
+        }).start(() => {
+          starterPromptRotationBusyRef.current = false;
+        });
+      };
+
+      if (reducedMotion) {
+        showNextPrompts();
+        return;
+      }
+
+      NativeAnimated.timing(starterPromptsOpacity, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) showNextPrompts();
+        else starterPromptRotationBusyRef.current = false;
+      });
+    };
+
+    const interval = setInterval(rotatePrompts, 5000);
+    return () => {
+      clearInterval(interval);
+      starterPromptRotationBusyRef.current = false;
+      starterPromptsOpacity.stopAnimation();
+      starterPromptsOpacity.setValue(1);
+    };
+  }, [landingVisible, reducedMotion, starterPromptsOpacity]);
 
   useEffect(() => {
     photoHydrationActiveRef.current = visible;
@@ -2088,8 +2154,6 @@ export default function AIChatBox({
   const hasComposerText = inputText.length > 0;
   const canSendMessage = Boolean(inputText.trim() || attachedImageBase64);
   const imageAttachmentDisabled = pending || sessionInitializing || Boolean(attachedImageUri);
-  const landingVisible =
-    showLanding && !messages.some((message) => message.role === 'user');
   const headerTop = Math.max(insets.top, 56);
   const headerOverlayHeight = headerTop + 68;
   const composerHeight = attachedImageUri
@@ -2152,12 +2216,12 @@ export default function AIChatBox({
                   style={styles.landingMark}
                 />
                 <Text style={styles.landingTitle}>
-                  Hey Jay! Start explore{'\n'}with Atlas AI
+                  Hey {userName}! Start explore{'\n'}with Atlas AI
                 </Text>
               </View>
             </View>
-            <View style={styles.starterPrompts}>
-              {STARTER_PROMPTS.map((prompt) => (
+            <NativeAnimated.View style={[styles.starterPrompts, { opacity: starterPromptsOpacity }]}>
+              {starterPrompts.map((prompt) => (
                 <Pressable
                   key={prompt}
                   accessibilityRole="button"
@@ -2178,7 +2242,7 @@ export default function AIChatBox({
                   </Text>
                 </Pressable>
               ))}
-            </View>
+            </NativeAnimated.View>
           </>
         ) : null}
 
