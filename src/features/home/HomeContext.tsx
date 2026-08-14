@@ -163,6 +163,8 @@ export type AtlasMapState = {
   overlay?: ReactNode;
   /** Receives the live Edit atlas panel height so map overlays can follow it. */
   onPanelHeightChange?: (height: number) => void;
+  /** Lets the initial Create Atlas camera ease with its collapsing sheet. */
+  smoothPanelCameraFollow?: boolean;
   markerPopup?: { markerId: string; content: ReactNode } | null;
   hideTopSearchButton?: boolean;
   /** Briefly removes app chrome while an Atlas share image is captured. */

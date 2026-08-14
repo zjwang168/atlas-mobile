@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { ActivityIndicator, Animated, TouchableOpacity, View } from 'react-native';
 import { useEffect, useRef } from 'react';
 import { Text } from '@/components/ui/text';
+import { TypewriterHint } from './AtlasEmptySkeleton';
 import { styles } from './styles';
 import type { DraftPlace } from './types';
 
@@ -91,7 +92,7 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
       
       <View style={styles.candidateActions}>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAddClip, { width: addWidth, opacity: addOpacity }]} pointerEvents={saveActionsOpen ? 'none' : 'auto'}>
-          <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><Text numberOfLines={1} style={styles.candidateAddEmptyText}>Click a pin to add</Text><Ionicons name="location-outline" size={19} color="#899590" /></View>
+          <View style={[styles.candidateAdd, styles.candidateAddEmpty]}><View style={styles.candidateAddEmptyCopy}><TypewriterHint text="Select a place to add" textStyle={styles.candidateAddEmptyCharacter} /></View><Ionicons name="location-outline" size={19} color="#899590" /></View>
         </Animated.View>
         <Animated.View style={[styles.candidateActionClip, styles.candidateSaveClip, { width: saveWidth, opacity: saveOpacity, transform: [{ translateX: saveShift }] }]} pointerEvents={saveActionsOpen ? 'auto' : 'none'}><TouchableOpacity accessibilityLabel="Save Atlas" disabled={savingKind !== null} onPress={() => onSave(false)} style={styles.candidateSave}>{savingKind === 'atlas' ? <ActivityIndicator size="small" color="#155E46" /> : <><Ionicons name="bookmark-outline" size={14} color="#155E46" /><Text style={styles.candidateSaveText}>Save</Text></>}</TouchableOpacity></Animated.View>
         <Animated.View style={[styles.candidateActionClip, styles.candidateAskClip, { width: askWidth, opacity: saveOpacity, transform: [{ translateX: saveShift }] }]} pointerEvents={saveActionsOpen ? 'auto' : 'none'}><TouchableOpacity accessibilityLabel="Save Atlas and ask AI" disabled={savingKind !== null} onPress={() => onSave(true)} style={styles.candidateAsk}>{savingKind === 'ai' ? <ActivityIndicator size="small" color="#FFFFFF" /> : <><Ionicons name="sparkles" size={15} color="#FFFFFF" /><Text style={styles.candidateAskText}>Save and Ask AI</Text></>}</TouchableOpacity></Animated.View>

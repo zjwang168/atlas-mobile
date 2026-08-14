@@ -7,7 +7,7 @@ from backend.services.content_classifier import classify_location_content
 from backend.services.performance_logger import PipelineMetrics
 from backend.services.smart_text_service import analyze_smart_text
 from backend.services.translation import needs_english_translation
-from backend.services.youtube_places_service import _build_geocode_queries, _matches_inferred_region
+from backend.services.youtube_places_service import _build_geocode_queries, _matches_inferred_region as matches_youtube_region
 from backend.services.reddit_fetcher import _extract_comments
 from backend.services.web_scraper import _is_usable_reddit_post
 from backend.services.agent_orchestrator import _matches_inferred_region
@@ -68,13 +68,18 @@ class ImportPerformanceTests(unittest.IsolatedAsyncioTestCase):
             [{"name": "Verde", "context": "Philadelphia"}], "Philadelphia"
         )
         self.assertEqual(queries, [{"query": "Verde, Philadelphia", "name": "Verde"}])
-        self.assertTrue(_matches_inferred_region(
+        self.assertTrue(matches_youtube_region(
             {"full_address": "Dilworth Park, Philadelphia, PA, United States"}, "Philadelphia"
         ))
-        self.assertFalse(_matches_inferred_region(
+        self.assertTrue(matches_youtube_region(
+            {"full_address": "Wangfujing Street, Dongcheng District, China", "is_exact": True},
+            "Beijing",
+            "Beijing",
+        ))
+        self.assertFalse(matches_youtube_region(
             {"full_address": "500 Pearl Street, New York, NY, United States"}, "Philadelphia"
         ))
-        self.assertFalse(_matches_inferred_region(
+        self.assertFalse(matches_youtube_region(
             {"full_address": "Verde, Batangas City, Philippines"}, "Philadelphia"
         ))
 

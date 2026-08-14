@@ -68,7 +68,12 @@ async def parse_youtube_url(url: str, request_id: str | None = None) -> dict:
         progress.stream_note(request_id, "analysis:region", {"region": inferred_region, "tagline": region_tagline})
     geocoded = await batch_geocode(
         _build_geocode_queries(location_names, inferred_region),
-        city_name=inferred_region,
+        # Each query already carries the extracted place context (for example
+        # "Paris, France" or "Wangfujing Street, Beijing"). Passing the broad
+        # inferred region here makes the generic geocoder add a country filter
+        # to every request, which can resolve Paris to Hong Kong when the
+        # video also mentions China. Validate the result below instead.
+        city_name=None,
     )
 
     locations = []
@@ -76,7 +81,7 @@ async def parse_youtube_url(url: str, request_id: str | None = None) -> dict:
     for loc, geo in zip(location_names, geocoded):
         if not geo:
             continue
-        if not _matches_inferred_region(geo, inferred_region):
+        if not _matches_inferred_region(geo, inferred_region, loc.get("context")):
             removed_noise.append({
                 "name": loc.get("name", ""),
                 "reason": f"Geocoding result is outside the video's inferred region: {inferred_region}",
@@ -129,7 +134,11 @@ def _build_geocode_queries(locations: list[dict], inferred_region: str | None) -
     return queries
 
 
-def _matches_inferred_region(geocoded: dict, inferred_region: str | None) -> bool:
+def _matches_inferred_region(
+    geocoded: dict,
+    inferred_region: str | None,
+    location_context: str | None = None,
+) -> bool:
     """Reject a globally valid match when it conflicts with video context."""
     if not inferred_region:
         return True
@@ -142,7 +151,18 @@ def _matches_inferred_region(geocoded: dict, inferred_region: str | None) -> boo
         for part in inferred_region.split(",")
     ]
     candidates = [part for part in candidates if len(part) > 2 and part not in ignored_parts]
-    return any(re.search(rf"\b{re.escape(candidate)}\b", address) for candidate in candidates)
+    if any(re.search(rf"\b{re.escape(candidate)}\b", address) for candidate in candidates):
+        return True
+
+    # POI addresses often omit the city name and only include a district or
+    # postal area. If the extractor supplied the same inferred-region context,
+    # trust an exact POI geocode rather than dropping a valid landmark.
+    context = (location_context or "").lower()
+    context_matches = any(
+        re.search(rf"\b{re.escape(candidate)}\b", re.sub(r"[^a-z0-9]+", " ", context))
+        for candidate in candidates
+    )
+    return context_matches and bool(geocoded.get("is_exact"))
 
 
 async def _build_source_text(url: str) -> YouTubeSource:

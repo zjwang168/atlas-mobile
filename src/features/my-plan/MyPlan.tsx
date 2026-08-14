@@ -72,12 +72,22 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
     setBuilderVisible(true);
   }, []);
   const openBuildPlan = useCallback((_location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => {
+    // Create Atlas may be resting at its compact preview detent. Every editor
+    // entry needs the middle-height workspace before its candidate controls
+    // and map padding are calculated.
+    snapTo?.('default');
     setBuildLocation(_location);
     setBuildSeed(candidates);
     setBuildCenter(center);
     setBuildBounds(bounds);
     setBuilderVisible(true);
-  }, []);
+  }, [snapTo]);
+  const collapseCreateAtlasAfterCameraSettles = useCallback(() => {
+    // The Create screen intentionally enters at the default detent so its
+    // country camera can fit against a stable viewport. Once Mapbox is idle,
+    // reveal more of that finished view through the compact detent.
+    snapTo?.('short');
+  }, [snapTo]);
   const openSavedAtlasChat = useCallback(async (atlasId: string, mapView?: AtlasSavedMapView) => {
     if (!mapView) return;
     const title = mapView.title || atlases.find((atlas) => atlas.id === atlasId)?.title || 'New Atlas';
@@ -138,7 +148,7 @@ function MyPlan({ onAvatarPress, compact = false, snapTo, active = false, onExit
   }
 
   if (builderVisible) {
-    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} autoFocusCreateSearch={autoFocusCreateSearch} onItemsChange={setDraftItems} onClose={closeBuilder} onBuildPlan={openBuildPlan} onReturnToCreateSearch={returnToCreateSearch} onSaved={(atlasId, askAI, mapView) => {
+    return <AtlasBuilder key={builderKey} initialCandidates={buildSeed ?? undefined} initialItems={draftItems} initialCenter={buildCenter} initialBounds={buildBounds} initialLocation={buildLocation} started={buildSeed !== null} autoFocusCreateSearch={autoFocusCreateSearch} onItemsChange={setDraftItems} onClose={closeBuilder} onCreateCameraSettled={collapseCreateAtlasAfterCameraSettles} onBuildPlan={openBuildPlan} onReturnToCreateSearch={returnToCreateSearch} onSaved={(atlasId, askAI, mapView) => {
       // Saving transitions directly into the completed Atlas. Do not use
       // closeBuilder here: it calls onExit and visibly returns to My Places.
       const completedCamera = mapView ? atlasCameraFromStops(mapView.markers.map((marker) => ({

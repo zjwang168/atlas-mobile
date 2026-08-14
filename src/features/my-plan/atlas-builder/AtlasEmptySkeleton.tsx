@@ -1,23 +1,23 @@
 import { useEffect, useRef } from 'react';
-import { Animated, View } from 'react-native';
+import { Animated, type StyleProp, type TextStyle, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import Reanimated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { styles } from './styles';
 
-function TypewriterCharacter({ character, index, progress }: { character: string; index: number; progress: { value: number } }) {
+function TypewriterCharacter({ character, index, progress, textStyle }: { character: string; index: number; progress: { value: number }; textStyle?: StyleProp<TextStyle> }) {
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: interpolate(progress.value, [index - 0.25, index + 0.55], [0, 1], Extrapolation.CLAMP),
   }));
-  return <Reanimated.View style={animatedStyle}><Text style={styles.emptyAtlasHint}>{character}</Text></Reanimated.View>;
+  return <Reanimated.View style={animatedStyle}><Text style={[styles.emptyAtlasHint, textStyle]}>{character}</Text></Reanimated.View>;
 }
 
-function TypewriterHint({ text = 'Tap a pin, and add it.' }: { text?: string }) {
+export function TypewriterHint({ text = 'Tap a pin, and add it.', textStyle }: { text?: string; textStyle?: StyleProp<TextStyle> }) {
   const characters = text.split('');
   const progress = useSharedValue(0);
   useEffect(() => {
     progress.value = withRepeat(withTiming(characters.length + 0.5, { duration: 2500 }), -1, false);
   }, [characters.length, progress]);
-  return <View style={styles.typewriterLine}>{characters.map((character, index) => <TypewriterCharacter key={`${character}-${index}`} character={character} index={index} progress={progress} />)}</View>;
+  return <View style={styles.typewriterLine}>{characters.map((character, index) => <TypewriterCharacter key={`${character}-${index}`} character={character} index={index} progress={progress} textStyle={textStyle} />)}</View>;
 }
 
 export function AtlasEmptySkeleton() {
@@ -50,7 +50,7 @@ export function AtlasEmptySkeleton() {
         <View style={styles.emptyAtlasCopy}>
           {index === 0 ? <>
             <TypewriterHint />
-            <Text style={styles.emptyAtlasHintSub}>Now, add your first pin.</Text>
+            <Text style={styles.emptyAtlasHintSub}>Now, add your first place to the atlas.</Text>
           </> : index === 1 ? <>
             <TypewriterHint text="Or search a place to add." />
             <View style={[styles.emptyAtlasLine, styles.emptyAtlasLineShort]} />

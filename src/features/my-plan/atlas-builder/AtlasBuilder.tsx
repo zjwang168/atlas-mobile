@@ -66,8 +66,11 @@ export type { AtlasSavedMapView, DraftPlace } from './types';
 // Roughly 0.5 cm on an iPhone 17 Pro Max. Applied only to the blank Create
 // landing camera so the GPS-country map sits a little higher above the sheet.
 const CREATE_ATLAS_CAMERA_VERTICAL_OFFSET = 48;
+// Tune these while checking the Edit Atlas onboarding hint on device.
+const EDIT_ATLAS_PINCH_HINT_DELAY_MS = 4000;
+const EDIT_ATLAS_PINCH_HINT_VISIBLE_MS = 3000;
 
-export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
+export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandidates, initialItems, initialCenter, initialBounds, initialLocation, started = false, autoFocusCreateSearch = false, onItemsChange, onFirstPlaceAdded, onCreateCameraSettled, onBuildPlan, onReturnToCreateSearch }: AtlasBuilderProps) {
   const { show: showDialog } = useAppDialog();
   const { savedPlaces } = useHomePlaces();
   const { atlasPlaces, atlases } = useHomeAtlases();
@@ -122,11 +125,15 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const [localMustSeesVisible, setLocalMustSeesVisible] = useState(false);
   const [localMustSeesPending, setLocalMustSeesPending] = useState(false);
   const [nearbyPromptVisible, setNearbyPromptVisible] = useState(false);
+  const [pinchHintVisible, setPinchHintVisible] = useState(false);
   const [nearbyRecommending, setNearbyRecommending] = useState(false);
   const isCreateAtlasLanding = !atlasId && !started && !handoffStarted;
   const searchAppear = useRef(new Animated.Value(0)).current;
   const localMustSeesOpacity = useRef(new Animated.Value(0)).current;
   const nearbyPromptOpacity = useRef(new Animated.Value(0)).current;
+  const pinchHintOpacity = useRef(new Animated.Value(0)).current;
+  const pinchHintScale = useRef(new Animated.Value(0.94)).current;
+  const pinchHintGesture = useRef(new Animated.Value(0)).current;
   const localMustSeesShownRef = useRef(false);
   const localMustSeesVisibleRef = useRef(false);
   const nearbyPromptEligibleRef = useRef(false);
@@ -139,6 +146,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   const nearbyAfterLocalNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearbyPromptDismissedRef = useRef(false);
   const nearbyPromptVisibleRef = useRef(false);
+  const pinchHintShownRef = useRef(false);
+  const pinchHintShowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pinchHintHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pinchHintGestureAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
   // Each mounted editor owns one recommendation conversation. Closing an
   // Atlas and entering Edit Atlas again mounts a fresh editor and new session.
   const aiRecommendationSessionId = useRef(`atlas-edit-${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
@@ -150,12 +161,56 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   // against the upper, unobscured map viewport rather than the full screen.
   const pendingCreateCountryBoundsRef = useRef<{ ne: [number, number]; sw: [number, number] } | null>(null);
   const createCountryBoundsAlignedRef = useRef(false);
+  const createCameraAwaitingIdleRef = useRef(false);
+  const createCameraSettledRef = useRef(false);
+  const createCameraSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const panelHeightRef = useRef(0);
   const initialPlaceSelected = useRef(false);
   const timeConflictTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Saving hands the shared map directly to the completed Atlas. Its unmount
   // must not clear that handoff before the detail page has hydrated its rows.
   const preserveMapOnUnmountRef = useRef(false);
+
+  const schedulePinchHint = useCallback(() => {
+    if (isCreateAtlasLanding || pinchHintShownRef.current) return;
+    pinchHintShownRef.current = true;
+    if (pinchHintShowTimerRef.current) clearTimeout(pinchHintShowTimerRef.current);
+    if (pinchHintHideTimerRef.current) clearTimeout(pinchHintHideTimerRef.current);
+    pinchHintShowTimerRef.current = setTimeout(() => {
+      setPinchHintVisible(true);
+      Animated.parallel([
+        Animated.timing(pinchHintOpacity, { toValue: 1, duration: 240, useNativeDriver: true }),
+        Animated.spring(pinchHintScale, { toValue: 1, damping: 16, stiffness: 190, useNativeDriver: true }),
+      ]).start();
+      pinchHintGestureAnimationRef.current?.stop();
+      pinchHintGesture.setValue(0);
+      pinchHintGestureAnimationRef.current = Animated.loop(Animated.sequence([
+        Animated.timing(pinchHintGesture, { toValue: 1, duration: 760, useNativeDriver: true }),
+        Animated.timing(pinchHintGesture, { toValue: 0, duration: 760, useNativeDriver: true }),
+      ]));
+      pinchHintGestureAnimationRef.current.start();
+      pinchHintHideTimerRef.current = setTimeout(() => {
+        pinchHintGestureAnimationRef.current?.stop();
+        Animated.parallel([
+          Animated.timing(pinchHintOpacity, { toValue: 0, duration: 220, useNativeDriver: true }),
+          Animated.timing(pinchHintScale, { toValue: 0.96, duration: 220, useNativeDriver: true }),
+        ]).start(({ finished }) => {
+          if (finished) setPinchHintVisible(false);
+        });
+      }, EDIT_ATLAS_PINCH_HINT_VISIBLE_MS);
+    }, EDIT_ATLAS_PINCH_HINT_DELAY_MS);
+  }, [isCreateAtlasLanding, pinchHintGesture, pinchHintOpacity, pinchHintScale]);
+
+  const finishCreateCameraSettle = useCallback(() => {
+    if (!isCreateAtlasLanding || createCameraSettledRef.current) return;
+    createCameraAwaitingIdleRef.current = false;
+    createCameraSettledRef.current = true;
+    if (createCameraSettleTimerRef.current) {
+      clearTimeout(createCameraSettleTimerRef.current);
+      createCameraSettleTimerRef.current = null;
+    }
+    onCreateCameraSettled?.();
+  }, [isCreateAtlasLanding, onCreateCameraSettled]);
 
   const showTimeConflict = useCallback((message: string) => {
     if (timeConflictTimer.current) clearTimeout(timeConflictTimer.current);
@@ -169,6 +224,17 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   useEffect(() => () => {
     if (timeConflictTimer.current) clearTimeout(timeConflictTimer.current);
   }, []);
+
+  useEffect(() => () => {
+    if (pinchHintShowTimerRef.current) clearTimeout(pinchHintShowTimerRef.current);
+    if (pinchHintHideTimerRef.current) clearTimeout(pinchHintHideTimerRef.current);
+    pinchHintGestureAnimationRef.current?.stop();
+    if (createCameraSettleTimerRef.current) clearTimeout(createCameraSettleTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    schedulePinchHint();
+  }, [schedulePinchHint]);
 
   useEffect(() => {
     if (initialLocation && normalize(initialLocation) !== 'your area') setFocusLabel(initialLocation);
@@ -252,6 +318,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         setMapBounds(countryBounds);
         setMapZoom(viewportZoomRef.current);
         setCameraKey(`atlas-country-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        // Mapbox normally confirms this command through onMapIdle. Start the
+        // same once-only fallback here too, because a reused native map can
+        // occasionally skip the bounds-applied callback during first mount.
+        if (createCameraSettleTimerRef.current) clearTimeout(createCameraSettleTimerRef.current);
+        createCameraSettleTimerRef.current = setTimeout(finishCreateCameraSettle, 1800);
       } catch (error) {
         // Location and country lookup are a presentation enhancement; search
         // remains available when either service is unavailable.
@@ -261,7 +332,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     return () => {
       cancelled = true;
     };
-  }, [isCreateAtlasLanding, refreshUserLocation]);
+  }, [finishCreateCameraSettle, isCreateAtlasLanding, refreshUserLocation]);
 
   useEffect(() => {
     setTabBarVisible(false);
@@ -817,13 +888,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
 
   const recommendNearby = useCallback(async () => {
     if (nearbyRecommending) return;
+    hideNearbyPrompt();
     setNearbyRecommending(true);
     const [longitude, latitude] = viewportCenterRef.current;
     try {
-      // Use the same structured Wikidata landmark index as the first default
-      // candidate. Nearby discovery must stay fast and deterministic; it does
-      // not need to wait for an AI recommendation round trip.
-      const landmarks = await getLandmarkSeeds([longitude, latitude], 20);
+      const recommendationCount = 3;
+      // The seed endpoint caps radius_km at 12. Keeping this request within
+      // its contract prevents FastAPI from rejecting the button tap with 422.
+      const landmarks = await getLandmarkSeeds([longitude, latitude], 12);
       const existingPlaces = [...items, ...recommendedPlaces, ...savedPlaces];
       const nearby = landmarks.reduce<DraftPlace[]>((places, landmark) => {
         const candidate: DraftPlace = {
@@ -841,13 +913,29 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
           source: 'recommended',
         };
         if (
-          places.length >= 5
+          places.length >= recommendationCount
           || existingPlaces.some((place) => isMarkerOverlap(place, candidate))
           || places.some((place) => isMarkerOverlap(place, candidate))
         ) return places;
         places.push(candidate);
         return places;
       }, []);
+      // Dense areas normally have enough indexed landmarks. When they do not,
+      // complete this tap's promised three purple pins with new, nearby AI
+      // recommendations while preserving the same duplicate checks.
+      if (nearby.length < recommendationCount) {
+        existingPlaces.forEach((place) => aiRecommendedNamesRef.current.add(normalize(place.name)));
+        nearby.forEach((place) => aiRecommendedNamesRef.current.add(normalize(place.name)));
+        const city = focused?.city || focusLabel || 'the current map area';
+        const aiNearby = await discoverDeepSeekPlaces(city, recommendationCount - nearby.length, [longitude, latitude]);
+        aiNearby.forEach((candidate) => {
+          if (
+            nearby.length < recommendationCount
+            && !existingPlaces.some((place) => isMarkerOverlap(place, candidate))
+            && !nearby.some((place) => isMarkerOverlap(place, candidate))
+          ) nearby.push(candidate);
+        });
+      }
       console.info('[AtlasNearby] wikidata-landmarks', {
         center: [longitude, latitude],
         received: landmarks.length,
@@ -870,7 +958,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
       setNearbyRecommending(false);
       scheduleNearbyPrompt(viewportCenterRef.current);
     }
-  }, [items, nearbyRecommending, recommendedPlaces, savedPlaces, scheduleNearbyPrompt]);
+  }, [discoverDeepSeekPlaces, focusLabel, focused?.city, hideNearbyPrompt, items, nearbyRecommending, recommendedPlaces, savedPlaces, scheduleNearbyPrompt]);
 
   const handoffToPlan = useCallback((location: string, candidates: DraftPlace[], center?: [number, number], bounds?: FocusArea['bounds']) => {
     setHandoffStarted(true);
@@ -1558,9 +1646,10 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     !savingKind ? <>
       {mapSearchOverlay}
       {localMustSeesVisible ? <Animated.View pointerEvents="none" style={[styles.localMustSeesToast, { opacity: localMustSeesOpacity }]}><View style={styles.localMustSeesDot} /><Text style={styles.localMustSeesText}>Local must-sees, handpicked by OurAtlas.</Text></Animated.View> : null}
+      {pinchHintVisible ? <Animated.View pointerEvents="none" style={[styles.pinchHint, { opacity: pinchHintOpacity, transform: [{ scale: pinchHintScale }] }]}><View style={styles.pinchHintGesture}><Animated.View style={[styles.pinchHintTouch, { transform: [{ translateX: pinchHintGesture.interpolate({ inputRange: [0, 1], outputRange: [-6, -14] }) }] }]} /><Animated.View style={[styles.pinchHintTouch, { transform: [{ translateX: pinchHintGesture.interpolate({ inputRange: [0, 1], outputRange: [6, 14] }) }] }]} /></View><Text style={styles.pinchHintText}>Pinch the map to explore nearby places</Text></Animated.View> : null}
       {searchCandidateVisible && focused ? <View pointerEvents="box-none" style={[styles.searchCandidateLayer, { bottom: searchCandidateBottom }]}><View pointerEvents="auto" style={styles.searchCandidateCard}><View style={styles.searchCandidateCopy}><Text numberOfLines={1} style={styles.searchCandidateName}>{focused.name}</Text><Text numberOfLines={1} style={styles.searchCandidateAddress}>{focused.subtitle}</Text></View><TouchableOpacity accessibilityLabel={`Add ${focused.name} to Atlas`} onPress={() => addPlace(focused)} style={styles.searchCandidateAdd}><Ionicons name="add" size={19} color="#FFFFFF" /></TouchableOpacity></View></View> : null}
     </> : null
-  ), [addPlace, focused, localMustSeesOpacity, localMustSeesVisible, mapSearchOverlay, savingKind, searchCandidateBottom, searchCandidateVisible]);
+  ), [addPlace, focused, localMustSeesOpacity, localMustSeesVisible, mapSearchOverlay, pinchHintGesture, pinchHintOpacity, pinchHintScale, pinchHintVisible, savingKind, searchCandidateBottom, searchCandidateVisible]);
 
   const handlePanelHeightChange = useCallback((height: number) => {
     panelHeightRef.current = height;
@@ -1578,10 +1667,34 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     setCameraKey(`atlas-country-panel-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   }, [isCreateAtlasLanding]);
 
+  const handleBoundsCameraApplied = useCallback(() => {
+    if (isCreateAtlasLanding && !createCameraSettledRef.current) {
+      createCameraAwaitingIdleRef.current = true;
+      if (createCameraSettleTimerRef.current) clearTimeout(createCameraSettleTimerRef.current);
+      // HomeScreen gives Atlas cameras a 1.5 s transition. Mapbox normally
+      // reports its completion through onMapIdle; this protects the sheet
+      // transition when that native event is skipped during initial mount.
+      createCameraSettleTimerRef.current = setTimeout(finishCreateCameraSettle, 1800);
+    }
+    // Bounds are a one-shot fit command, not a permanent camera lock.
+    // Leaving them in shared state makes unrelated editor updates re-own
+    // the native map camera and blocks later pan/zoom gestures.
+    setMapBounds((current) => current ? undefined : current);
+  }, [finishCreateCameraSettle, isCreateAtlasLanding]);
+
+  const handleViewportChanged = useCallback((center: [number, number], zoom: number) => {
+    viewportCenterRef.current = center;
+    viewportZoomRef.current = zoom;
+    scheduleNearbyPrompt(center);
+    if (!isCreateAtlasLanding || !createCameraAwaitingIdleRef.current || createCameraSettledRef.current) return;
+    finishCreateCameraSettle();
+  }, [finishCreateCameraSettle, isCreateAtlasLanding, scheduleNearbyPrompt]);
+
   useLayoutEffect(() => {
     setAtlasMapState({
       markers: mapMarkers,
       cameraVerticalOffset: isCreateAtlasLanding ? CREATE_ATLAS_CAMERA_VERTICAL_OFFSET : 0,
+      smoothPanelCameraFollow: isCreateAtlasLanding,
       // The editor sheet occupies the lower screen. Let HomeScreen pass its
       // measured height as camera padding so both a GPS-country camera and an
       // Edit Atlas focus area center in the remaining upper map viewport.
@@ -1611,21 +1724,14 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         }
       },
       onMapPress: hideTransientUI,
-      onViewportChanged: (center, zoom) => {
-        viewportCenterRef.current = center;
-        viewportZoomRef.current = zoom;
-        scheduleNearbyPrompt(center);
-      },
+      onViewportChanged: handleViewportChanged,
       onPanelHeightChange: handlePanelHeightChange,
-      // Bounds are a one-shot fit command, not a permanent camera lock.
-      // Leaving them in shared state makes unrelated editor updates re-own
-      // the native map camera and blocks later pan/zoom gestures.
-      onBoundsCameraApplied: () => setMapBounds((current) => current ? undefined : current),
+      onBoundsCameraApplied: handleBoundsCameraApplied,
       overlay: atlasMapOverlay,
       hideTopSearchButton: true,
       markerPopup: null,
     });
-  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handlePanelHeightChange, hideTransientUI, isCreateAtlasLanding, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, scheduleNearbyPrompt, setAtlasMapState]);
+  }, [atlasId, atlasMapOverlay, atlasPlaces, cameraKey, focus, focused, handleBoundsCameraApplied, handlePanelHeightChange, handleViewportChanged, hideTransientUI, isCreateAtlasLanding, mapBounds, mapCenter, mapMarkers, mapZoom, recommendedPlaces, removingPlace?.id, route?.route, savedPlaces, setAtlasMapState]);
 
   useEffect(() => () => {
     if (!preserveMapOnUnmountRef.current) setAtlasMapState(null);

@@ -745,6 +745,7 @@ export default function AIChatBox({
   const chatSaveNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestChatMapStateKeyRef = useRef<string | null>(null);
   const resolvingActionIdsRef = useRef(new Set<string>());
+  const [resolvingActionIds, setResolvingActionIds] = useState<Set<string>>(() => new Set());
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const streamCancelledRef = useRef(false);
 
@@ -1671,6 +1672,7 @@ export default function AIChatBox({
       ?? message?.pendingAction;
     if (!action || !sessionId || resolvingActionIdsRef.current.has(action.action_id)) return;
     resolvingActionIdsRef.current.add(action.action_id);
+    setResolvingActionIds((current) => new Set(current).add(action.action_id));
 
     // A confirmed place save has an optimistic local row. Do not hold the chat
     // open for Supabase, background photo enrichment, or action bookkeeping.
@@ -1711,7 +1713,14 @@ export default function AIChatBox({
             tone: 'warning',
           });
         })
-        .finally(() => resolvingActionIdsRef.current.delete(action.action_id));
+        .finally(() => {
+          resolvingActionIdsRef.current.delete(action.action_id);
+          setResolvingActionIds((current) => {
+            const next = new Set(current);
+            next.delete(action.action_id);
+            return next;
+          });
+        });
       onClose();
       return;
     }
@@ -1807,6 +1816,11 @@ export default function AIChatBox({
       });
     } finally {
       resolvingActionIdsRef.current.delete(action.action_id);
+      setResolvingActionIds((current) => {
+        const next = new Set(current);
+        next.delete(action.action_id);
+        return next;
+      });
     }
   };
 
@@ -1926,6 +1940,7 @@ export default function AIChatBox({
                   pendingAction={item.pendingAction}
                   pendingActions={item.pendingActions}
                   completedAction={item.completedAction}
+                  resolvingActionIds={resolvingActionIds}
                   onOpenMap={() => openPresentationMap(item.presentation!)}
                   onConfirm={(actionId) => { void resolveAction(item.id, true, actionId); }}
                   onCancel={(actionId) => { void resolveAction(item.id, false, actionId); }}

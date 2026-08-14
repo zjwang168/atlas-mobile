@@ -362,7 +362,10 @@ function HomeScreenContent({
     // zoom with the Camera's previous state.
     if (!currentAtlasMapState?.lockCameraToScreen && !currentAtlasMapState?.bounds) {
       const verticalOffset = currentAtlasMapState?.cameraVerticalOffset ?? 0;
-      mapRef.current?.setPaddingBottom(bottomPanelActive ? Math.max(0, height + verticalOffset) : 0, 0);
+      mapRef.current?.setPaddingBottom(
+        bottomPanelActive ? Math.max(0, height + verticalOffset) : 0,
+        currentAtlasMapState?.smoothPanelCameraFollow ? undefined : 0,
+      );
     }
     currentAtlasMapState?.onPanelHeightChange?.(height);
   }, [bottomPanelActive, nativeMainPanelActive]);

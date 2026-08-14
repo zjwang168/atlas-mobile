@@ -60,11 +60,6 @@ const ATLAS_DETAIL_CAMERA_VERTICAL_OFFSET = 28;
 // Keep its orange-pin overview centered in the exposed upper map area, not at
 // the physical center underneath the panel.
 const ATLAS_DETAIL_CAMERA_SCREEN_OFFSET_Y = -250;
-// Let the My Places surface take over before replacing the Atlas-owned map
-// markers with the full saved-places set. Updating both at once can make the
-// native Mapbox marker reconciliation block the close tap for several seconds.
-const ATLAS_MAP_RELEASE_DELAY_MS = 320;
-
 function getMapPresentation(items: ItineraryItem[], route: Atlas['route_geojson']): MapPresentation {
   if (!items.length) return { markers: [], centerCoordinate: undefined, zoomLevel: 6 };
   const camera = atlasCameraFromStops(items.map((item) => ({
@@ -315,30 +310,14 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     setRouteCamera(null);
     setHomeSelectedPlaceId(null);
     setHomeSelectedPlaceCoordinate(null);
-
-    // Hide Atlas-owned map controls synchronously. The marker set itself stays
-    // briefly so its expensive native replacement cannot delay this close tap.
-    if (latestAtlasMapStateRef.current) {
-      const mapWithoutControls = {
-        ...latestAtlasMapStateRef.current,
-        overlay: null,
-        routeGeoJSON: undefined,
-        routeDistanceLabels: [],
-        selectedMarkerId: null,
-      };
-      latestAtlasMapStateRef.current = mapWithoutControls;
-      setAtlasMapState(mapWithoutControls);
-    }
-    onDismiss();
-
-    // The completed page is gone immediately. Defer only the expensive shared
-    // map ownership switch until its UI handoff has settled.
     if (pendingMapReleaseRef.current) clearTimeout(pendingMapReleaseRef.current);
-    pendingMapReleaseRef.current = setTimeout(() => {
-      pendingMapReleaseRef.current = null;
-      latestAtlasMapStateRef.current = null;
-      setAtlasMapState(null);
-    }, ATLAS_MAP_RELEASE_DELAY_MS);
+    pendingMapReleaseRef.current = null;
+    // My Places must take map ownership before its panel closes. Deferring
+    // this release sometimes left the completed Atlas's orange markers in the
+    // shared map after returning home.
+    latestAtlasMapStateRef.current = null;
+    setAtlasMapState(null);
+    onDismiss();
   }, [onDismiss, setAtlasMapState, setHomeSelectedPlaceCoordinate, setHomeSelectedPlaceId]);
 
   const handleRoutePanelHeight = useCallback((_height: number) => {}, []);
@@ -500,11 +479,9 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
       setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-hidden-${Date.now()}`, 500));
       return;
     }
-    if (routeFeature) {
-      setDisplayedRoute(routeFeature);
-      setRouteCamera(atlasOverviewCamera(`${detailCameraKey}-${atlas.id}-stored-route-${Date.now()}`, 500));
-      return;
-    }
+    // A persisted route can belong to an older Atlas order (or to a route
+    // optimization that was later dismissed). Always rebuild from the current
+    // itinerary sequence so Show route means item 1 -> 2 -> 3 -> 4 exactly.
     routeInFlightRef.current = true;
     const requestToken = ++routePlaybackRef.current;
     setRouteBusy(true);
@@ -538,7 +515,7 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     }).catch(() => {
       if (requestToken === routePlaybackRef.current) setOptimizingRoute(false);
     });
-  }, [atlas, atlasOverviewCamera, detailCameraKey, displayedRoute, items, routeBusy, routeFeature]);
+  }, [atlas, atlasOverviewCamera, detailCameraKey, displayedRoute, items, routeBusy]);
 
   const openOptimizationReview = useCallback(() => {
     if (!optimizedRoute || optimizedItems.length !== items.length) return;

@@ -51,6 +51,8 @@ export type AtlasBuilderProps = {
   autoFocusCreateSearch?: boolean;
   onItemsChange?: (items: DraftPlace[]) => void;
   onFirstPlaceAdded?: () => void;
+  /** Called after the blank Create Atlas country camera has reached Mapbox idle. */
+  onCreateCameraSettled?: () => void;
   onBuildPlan?: (location: string, candidates: DraftPlace[], center?: [number, number], bounds?: { ne: [number, number]; sw: [number, number] }) => void;
   onReturnToCreateSearch?: () => void;
 };

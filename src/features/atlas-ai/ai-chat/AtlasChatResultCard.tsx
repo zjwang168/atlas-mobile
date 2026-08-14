@@ -4,7 +4,7 @@ import { CheckIcon } from 'phosphor-react-native/src/icons/Check';
 import { MapTrifoldIcon } from 'phosphor-react-native/src/icons/MapTrifold';
 import { NavigationArrowIcon } from 'phosphor-react-native/src/icons/NavigationArrow';
 import { XIcon } from 'phosphor-react-native/src/icons/X';
-import { Image, Linking, Pressable, StyleSheet, View, type ImageStyle } from 'react-native';
+import { ActivityIndicator, Image, Linking, Pressable, StyleSheet, View, type ImageStyle } from 'react-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Text } from '@/components/ui/text';
 
@@ -28,6 +28,7 @@ type Props = {
     special_role: 'home' | 'office' | 'school';
     placeName: string;
   } | null;
+  resolvingActionIds?: ReadonlySet<string>;
   onConfirm?: (actionId: string) => void;
   onCancel?: (actionId: string) => void;
   onOpenMap?: () => void;
@@ -66,7 +67,7 @@ function boundsForPlaces(places: AtlasChatPresentation['places']) {
   };
 }
 
-export default function AtlasChatResultCard({ presentation, pendingAction, pendingActions, completedAction, onConfirm, onCancel, onOpenMap }: Props) {
+export default function AtlasChatResultCard({ presentation, pendingAction, pendingActions, completedAction, resolvingActionIds, onConfirm, onCancel, onOpenMap }: Props) {
   const actions = pendingActions?.length ? pendingActions : pendingAction ? [pendingAction] : [];
   const hasActionStatus = actions.length > 0 || Boolean(completedAction);
   const featuredPlace = presentation.places[0];
@@ -197,6 +198,7 @@ export default function AtlasChatResultCard({ presentation, pendingAction, pendi
             </Animated.View>
           </Animated.View> : null}
           {actions.map((action) => {
+            const resolving = resolvingActionIds?.has(action.action_id) ?? false;
             const actionPlaceName = action.places[0]?.name?.trim();
             const actionRole = action.special_role;
             const prompt = action.kind === 'create_atlas' ? 'Create Atlas?'
@@ -209,12 +211,11 @@ export default function AtlasChatResultCard({ presentation, pendingAction, pendi
             return <Animated.View key={action.action_id} entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)} style={styles.confirmContent}>
               <Text style={styles.confirmText}>{prompt}</Text>
               <View style={styles.actions}>
-                <Pressable accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={() => onCancel?.(action.action_id)} style={styles.cancelButton}>
-                  <XIcon size={17} color="#52525B" weight="bold" />
+                <Pressable disabled={resolving} accessibilityRole="button" accessibilityLabel="Cancel proposed action" onPress={() => onCancel?.(action.action_id)} style={({ pressed }) => [styles.cancelButton, (pressed || resolving) && styles.actionPressed, resolving && styles.actionDisabled]}>
+                  {resolving ? <ActivityIndicator size="small" color="#52525B" /> : <XIcon size={17} color="#52525B" weight="bold" />}
                 </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={() => onConfirm?.(action.action_id)} style={styles.confirmButton}>
-                  <CheckIcon size={17} color="#FFFFFF" weight="bold" />
-                  <Text style={styles.confirmButtonText}>{label}</Text>
+                <Pressable disabled={resolving} accessibilityRole="button" accessibilityLabel="Confirm proposed action" onPress={() => onConfirm?.(action.action_id)} style={({ pressed }) => [styles.confirmButton, (pressed || resolving) && styles.actionPressed, resolving && styles.actionDisabled]}>
+                  {resolving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <><CheckIcon size={17} color="#FFFFFF" weight="bold" /><Text style={styles.confirmButtonText}>{label}</Text></>}
                 </Pressable>
               </View>
             </Animated.View>;
@@ -271,6 +272,7 @@ const styles = StyleSheet.create({
   cancelButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#F4F4F5', alignItems: 'center', justifyContent: 'center' },
   confirmButton: { minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#121212', flexDirection: 'row', alignItems: 'center', gap: 6 },
   confirmButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  actionDisabled: { opacity: 0.72 },
   savedButton: { minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#E4E4E7', flexDirection: 'row', alignItems: 'center', gap: 6 },
   savedButtonText: { color: '#71717A', fontSize: 13, fontWeight: '700' },
   googleMapsRow: { minHeight: 58, paddingHorizontal: 2, paddingTop: 12, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 10 },
