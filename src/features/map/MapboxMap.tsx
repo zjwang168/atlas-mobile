@@ -344,7 +344,12 @@ function labelWidthForTitle(title: string): number {
 }
 
 function viewportIsLocal(viewport: MapViewport): boolean {
-  if (!viewport.bounds) return false;
+  // `onMapIdle` is not guaranteed to fire after a cold native-map mount.
+  // Before that first camera event we still have the requested centre/zoom,
+  // but no native bounds yet. Treat ordinary, local zoom levels as local so
+  // an isolated saved (blue) point does not lose its label for the entire
+  // first map session.
+  if (!viewport.bounds) return viewport.zoom >= 5;
   const [neLongitude, neLatitude] = viewport.bounds.ne;
   const [swLongitude, swLatitude] = viewport.bounds.sw;
   const latitudeSpanKm = Math.abs(neLatitude - swLatitude) * 111.32;
@@ -930,6 +935,23 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
     () => visibleLabelIds(layerLabelOwnerPoints, viewport, width, height, markerPopup?.markerId, selectedMarkerId),
     [height, layerLabelOwnerPoints, markerPopup?.markerId, selectedMarkerId, viewport, width],
   );
+  const labelDebugSnapshot = useMemo(() => JSON.stringify({
+    mapLoaded,
+    mapSize: mapSize ? `${mapSize.width}x${mapSize.height}` : 'unmeasured',
+    viewport: {
+      center: viewport.center.map((value) => Number(value.toFixed(5))),
+      zoom: Number(viewport.zoom.toFixed(2)),
+      hasBounds: Boolean(viewport.bounds),
+      isLocal: viewportIsLocal(viewport),
+    },
+    markers: renderedMarkers.map((marker) => ({ id: marker.id, tone: marker.tone ?? 'saved', title: Boolean(marker.title) })),
+    annotationLabelIds: [...labelIds],
+    layerLabelIds: [...layerLabelIds],
+  }), [labelIds, layerLabelIds, mapLoaded, mapSize, renderedMarkers, viewport]);
+
+  useEffect(() => {
+    if (__DEV__) console.debug('[MapboxMap][labels]', labelDebugSnapshot);
+  }, [labelDebugSnapshot]);
   const routeDistanceGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
     const seen = new Set<string>();
     return {
@@ -1184,7 +1206,10 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
         // idle, so pins do not trade places at collision thresholds mid-pan.
         onCameraChanged={(event) => queueViewportUpdate(event, false)}
         onMapIdle={(event) => queueViewportUpdate(event, true)}
-        onDidFinishLoadingMap={() => setMapLoaded(true)}
+        onDidFinishLoadingMap={() => {
+          if (__DEV__) console.debug('[MapboxMap][lifecycle] native map loaded');
+          setMapLoaded(true);
+        }}
       >
         <MapboxGL.Camera
           ref={cameraRef}
