@@ -88,7 +88,7 @@ function atlasCoverPhotoUrls(atlases: Atlas[], atlasPlaces: AtlasPlace[], savedP
   return uniquePhotoUrls(atlases.flatMap((atlas) => {
     const rows = atlasPlaces.filter((row) => row.atlas_id === atlas.id).sort((a, b) => a.sort_order - b.sort_order);
     for (const row of rows) {
-      const uri = row.place_id ? savedById.get(row.place_id)?.photo_url : row.photo_url;
+      const uri = row.photo_url ?? (row.place_id ? savedById.get(row.place_id)?.photo_url : null);
       if (uri) return [uri];
     }
     return [];

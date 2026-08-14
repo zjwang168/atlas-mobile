@@ -211,8 +211,14 @@ async function backfillAtlasPlacePhoto(place: AtlasPlace): Promise<string | null
   if (place.photo_url) return place.photo_url;
   if (!place.place_name || place.latitude == null || place.longitude == null) return null;
 
-  const response = await getPlacePhoto(place.place_name);
-  const photoUrl = response.photo_url || staticMapThumbnail(place.latitude, place.longitude);
+  // A representative photo is best-effort. A temporary API failure must not
+  // leave the Atlas permanently without a cover when its coordinates are
+  // already known; fall back to the inexpensive static Mapbox thumbnail.
+  const response = await getPlacePhoto(place.place_name).catch((error) => {
+    console.warn('[atlasPlacesService] place photo lookup failed; using map thumbnail:', error);
+    return null;
+  });
+  const photoUrl = response?.photo_url || staticMapThumbnail(place.latitude, place.longitude);
   if (!photoUrl) return null;
 
   const userId = await getCurrentUserId();

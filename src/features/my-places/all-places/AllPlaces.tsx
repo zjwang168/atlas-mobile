@@ -3,6 +3,7 @@ import { PlaceTagChip } from '@/components/place-tag-chip/PlaceTagChip';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
+import { queueAtlasPlacePhotoBackfill } from '@/services/atlas/atlasPlacesService';
 import { toPlaceDetail } from '@/services/place/placeService';
 import { typography } from '@/theme/typography';
 import type { PlaceDetail } from '@/types/place';
@@ -675,6 +676,7 @@ function AllPlaces({
     atlasPlaces,
     userLocation,
   } = useHome();
+  const queuedAtlasCoverRowsRef = useRef(new Set<string>());
 
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
@@ -928,6 +930,22 @@ function AllPlaces({
     [filteredPlaces],
   );
 
+  useEffect(() => {
+    // This is the Atlas list shown in the All tab. Restore covers for older
+    // rows as well, but request just one stop per Atlas and let the shared
+    // service queue serialize the work.
+    atlases.forEach((atlas) => {
+      const rows = atlasPlaces
+        .filter((row) => row.atlas_id === atlas.id)
+        .sort((a, b) => a.sort_order - b.sort_order);
+      const hasCover = rows.some((row) => row.photo_url || (row.place_id && savedPlaces.some((place) => place.id === row.place_id && place.photo_url)));
+      const candidate = rows.find((row) => !row.photo_url && row.place_name && row.latitude != null && row.longitude != null);
+      if (hasCover || !candidate || queuedAtlasCoverRowsRef.current.has(candidate.id)) return;
+      queuedAtlasCoverRowsRef.current.add(candidate.id);
+      void queueAtlasPlacePhotoBackfill(candidate);
+    });
+  }, [atlasPlaces, atlases, savedPlaces]);
+
   const atlasPreviews = useMemo<AtlasPreview[]>(() => atlases
     .filter((atlas) => {
       if (includesQuery([atlas.title, atlas.description], normalizedQuery)) return true;
@@ -958,7 +976,10 @@ function AllPlaces({
         title: atlas.title,
         emoji: atlas.emoji,
         placeCount: memberRows.length,
-        thumbnailUrl: memberPlaces[0]?.thumbnailUrl,
+        // Atlas-owned stops (AI and direct Atlas search) are intentionally
+        // not My Places records. Their photo lives on the join row, so use it
+        // before falling back to a linked saved place.
+        thumbnailUrl: memberRows.find((row) => Boolean(row.photo_url))?.photo_url ?? memberPlaces.find((place) => Boolean(place.thumbnailUrl))?.thumbnailUrl,
         createdAt: atlas.created_at,
         countryKeys,
       };
