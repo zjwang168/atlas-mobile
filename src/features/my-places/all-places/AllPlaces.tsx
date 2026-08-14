@@ -1492,7 +1492,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   placesListSeparator: {
-    height: 16,
+    height: 24,
   },
   atlasListSeparator: {
     height: 8,
@@ -1500,7 +1500,7 @@ const styles = StyleSheet.create({
   listItem: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 24,
+    gap: 16,
   },
   listImageShadow: {
     width: LIST_THUMBNAIL_SIZE,
