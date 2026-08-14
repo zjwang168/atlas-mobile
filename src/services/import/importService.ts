@@ -53,6 +53,14 @@ export type ParsedPlace = {
    */
   city?: string;
   country?: string;
+  /**
+   * The AI's own words about this place, extracted from the source content,
+   * persisted to `places.description`. Kept separate from `subtitle`, which
+   * concatenates this with the address for the import screens' single line.
+   */
+  description?: string;
+  /** The place's own street address, persisted to `places.address`. */
+  address?: string;
 };
 
 export type ParseResult = {
@@ -64,6 +72,9 @@ export type ParseResult = {
   centerCoordinate: [number, number];
   /** Region/city the places were grouped under, if any. */
   region?: string;
+  /** Which kind of source this came from — 'youtube', 'tiktok', and so on.
+      Recorded on `place_sources.source_type` when the places are saved. */
+  sourceType?: string;
   places: ParsedPlace[];
 };
 
@@ -86,6 +97,7 @@ type BackendParseResponse = {
   source_thumbnail?: string | null;
   locations: BackendLocation[];
   inferred_region?: string | null;
+  source_type?: string | null;
 };
 
 /** True for strings that look like a pasteable URL. */
@@ -116,6 +128,8 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
     }),
     name: loc.name,
     subtitle: formatSubtitle(loc),
+    description: (loc.description || '').trim() || undefined,
+    address: (loc.full_address || '').trim() || undefined,
     type: loc.category || 'Place',
     latitude: loc.latitude,
     longitude: loc.longitude,
@@ -131,6 +145,7 @@ function adaptResponse(backend: BackendParseResponse): ParseResult {
     sourceThumbnail: backend.source_thumbnail || undefined,
     centerCoordinate: medianCenter(backend.locations ?? []),
     region: backend.inferred_region ?? undefined,
+    sourceType: backend.source_type ?? undefined,
     places,
   };
 }
