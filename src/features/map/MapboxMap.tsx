@@ -551,16 +551,17 @@ function MarkerLabel({
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(7)).current;
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const shouldShow = visible || selected;
 
   useEffect(() => {
     animationRef.current?.stop();
     animationRef.current = Animated.parallel([
-      Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: visible ? 220 : 130, useNativeDriver: true }),
-      Animated.timing(translateY, { toValue: visible ? 0 : 7, duration: visible ? 220 : 130, useNativeDriver: true }),
+      Animated.timing(opacity, { toValue: shouldShow ? 1 : 0, duration: shouldShow ? 220 : 130, useNativeDriver: true }),
+      Animated.timing(translateY, { toValue: shouldShow ? 0 : 7, duration: shouldShow ? 220 : 130, useNativeDriver: true }),
     ]);
     animationRef.current.start();
     return () => animationRef.current?.stop();
-  }, [opacity, translateY, visible]);
+  }, [opacity, shouldShow, translateY]);
 
   const width = labelWidthForTitle(title);
 
@@ -570,7 +571,7 @@ function MarkerLabel({
       style={[
         styles.markerLabel,
         selected && styles.markerLabelSelected,
-        { width, marginLeft: -width / 2, opacity: selected ? 1 : opacity, transform: [{ translateY: selected ? 0 : translateY }] },
+        { width, marginLeft: -width / 2, opacity, transform: [{ translateY }] },
       ]}
     >
       <View style={styles.markerLabelContent}>
@@ -1199,6 +1200,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
           <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
             <MapboxGL.LineLayer
               id="routeCasing"
+              belowLayerID="placeClusterCircle"
               style={{
                 lineColor: routeVariant === 'commute' ? '#8BB8F2' : '#C9693C',
                 lineWidth: 13,
@@ -1210,6 +1212,7 @@ const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(function MapboxMap
             />
             <MapboxGL.LineLayer
               id="routeLine"
+              belowLayerID="placeClusterCircle"
               style={{
                 lineColor: routeVariant === 'commute' ? '#6FA7EE' : '#F29A69',
                 lineWidth: 8,

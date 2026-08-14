@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { ActivityIndicator, Animated, TouchableOpacity, View } from 'react-native';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text } from '@/components/ui/text';
 import { TypewriterHint } from './AtlasEmptySkeleton';
 import { styles } from './styles';
@@ -13,12 +13,13 @@ type AtlasCandidateCardProps = {
   savingKind: 'atlas' | 'ai' | null;
   finishDisabled: boolean;
   promptFirstAdd: boolean;
+  showFinishHint: boolean;
   onAdd: () => void;
   onToggleSaveActions: () => void;
   onSave: (askAI: boolean) => void;
 };
 
-export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, finishDisabled, promptFirstAdd, onAdd, onToggleSaveActions, onSave }: AtlasCandidateCardProps) {
+export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, finishDisabled, promptFirstAdd, showFinishHint, onAdd, onToggleSaveActions, onSave }: AtlasCandidateCardProps) {
   const unavailable = Boolean(place?.provisional);
   const description = unavailable ? 'Verifying map position...' : place?.subtitle;
   const expand = useRef(new Animated.Value(saveActionsOpen ? 1 : 0)).current;
@@ -48,6 +49,8 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
   const completeRotation = expand.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-90deg'] });
   const closeRotation = expand.interpolate({ inputRange: [0, 1], outputRange: ['90deg', '0deg'] });
   const addGlow = useRef(new Animated.Value(0)).current;
+  const finishHintOpacity = useRef(new Animated.Value(0)).current;
+  const [finishHintVisible, setFinishHintVisible] = useState(showFinishHint);
   const showFirstAddPrompt = promptFirstAdd && Boolean(place) && !added && !unavailable && !saveActionsOpen;
   const showCancelHint = Boolean(place) && !added && !unavailable && !saveActionsOpen;
   useEffect(() => {
@@ -63,6 +66,16 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
     pulse.start();
     return () => pulse.stop();
   }, [addGlow, showFirstAddPrompt]);
+  useEffect(() => {
+    if (showFinishHint) {
+      setFinishHintVisible(true);
+      Animated.timing(finishHintOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+      return;
+    }
+    Animated.timing(finishHintOpacity, { toValue: 0, duration: 150, useNativeDriver: true }).start(({ finished }) => {
+      if (finished) setFinishHintVisible(false);
+    });
+  }, [finishHintOpacity, showFinishHint]);
   const glowStyle = {
     opacity: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.04, 0.22] }),
     transform: [{ scale: addGlow.interpolate({ inputRange: [0, 1], outputRange: [0.99, 1.1] }) }],
@@ -105,7 +118,7 @@ export function AtlasCandidateCard({ place, added, saveActionsOpen, savingKind, 
       </View>
     </>}
     <View pointerEvents="none" style={styles.candidateCancelHintSlot}>
-      <Text style={[styles.candidateCancelHint, !showCancelHint && styles.candidateCancelHintHidden]}>Tap anywhere to cancel</Text>
+      {finishHintVisible ? <Animated.View style={{ opacity: finishHintOpacity }}><Text style={styles.candidateCancelHint}>Click check to finish creating</Text></Animated.View> : <Text style={[styles.candidateCancelHint, !showCancelHint && styles.candidateCancelHintHidden]}>Tap anywhere to cancel</Text>}
     </View>
   </View>;
 }

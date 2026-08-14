@@ -876,6 +876,13 @@ export async function retrievePlace(
   );
 }
 
+/** Fallback for local-language and pinyin POIs not indexed by Mapbox Search Box. */
+export async function geocodePlaceSearch(query: string, signal?: AbortSignal): Promise<GeocodedLocation | null> {
+  const search = new URLSearchParams({ q: query.trim() });
+  const response = await getJson<PlaceRetrieveResponse>(`/places/geocode?${search.toString()}`, signal, false);
+  return response.locations[0] ?? null;
+}
+
 export async function fetchMemories(): Promise<MemoryRecord[]> {
   const data = await getJson<{ memories: MemoryRecord[] }>('/memories');
   return data.memories || [];

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { useHomeAtlases, useHomeLocation, useHomeOverlayActions, useHomePlaces } from '@/features/home/HomeContext';
 import type { MapMarker } from '@/features/map/MapboxMap';
-import { discoverAtlasPlaces, geocodeAtlasArea, getLandmarkSeeds, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
+import { discoverAtlasPlaces, geocodeAtlasArea, geocodePlaceSearch, getLandmarkSeeds, requestAtlasRoute, type AtlasRouteResponse } from '@/services/api/apiService';
 import { addAtlasOwnedPlaces, addPlacesToAtlas, removePlaceFromAtlas, reorderAtlasPlaces, updateAtlasPlaces, updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
 import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas, updateAtlas } from '@/services/atlas/atlasService';
@@ -372,7 +372,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     Animated.timing(nearbyPromptOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
   }, [atlasId, nearbyPromptOpacity, started]);
 
-  const scheduleNearbyPrompt = useCallback((center: [number, number], delay = 10_000) => {
+  const scheduleNearbyPrompt = useCallback((center: [number, number], delay = 3_000) => {
     viewportCenterRef.current = center;
     if ((!atlasId && !started) || !nearbyPromptEligibleRef.current || nearbyPromptDismissedRef.current || localMustSeesVisibleRef.current || nearbyPromptVisibleRef.current) return;
     if (nearbyIdleTimerRef.current) clearTimeout(nearbyIdleTimerRef.current);
@@ -492,7 +492,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         ? { proximity: mapCenter, types: 'poi,place,locality,district,region,country', includeNonPoi: true }
         : { ...(mapCenter ? { proximity: mapCenter } : {}), ...(editFocusBbox ? { bbox: editFocusBbox } : {}) },
       controller.signal,
-    ).then((remote) => {
+    ).then(async (remote) => {
       if (controller.signal.aborted) return;
       if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] response', { ...logContext, received: remote.length, names: remote.map((item) => item.name) });
       const normalizedQuery = normalize(trimmed);
@@ -506,7 +506,24 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         .sort((left, right) => searchScore(left) - searchScore(right) || left.name.localeCompare(right.name))
         .slice(0, isCreateAtlasLanding ? 8 : 2)
         .map((suggestion): SearchResult => ({ kind: 'remote', externalId: suggestion.external_id, name: suggestion.name, subtitle: suggestion.place_formatted ?? suggestion.full_address ?? '', featureType: suggestion.feature_type }));
-      const nextResults = isCreateAtlasLanding ? withGeographicResult(uniqueRemote) : uniqueRemote.slice(0, 4);
+      let nextResults = isCreateAtlasLanding ? withGeographicResult(uniqueRemote) : uniqueRemote.slice(0, 4);
+      // Search Box does not reliably index local-language and pinyin POIs.
+      // Only when it produced no usable POI do we ask the existing geocoder
+      // for one fallback, then keep the same Atlas-area boundary guarantee.
+      if (!isCreateAtlasLanding && nextResults.length === 0 && trimmed.length >= 2) {
+        const fallback = await geocodePlaceSearch(trimmed, controller.signal);
+        if (controller.signal.aborted) return;
+        if (fallback && (!editFocusBounds || isWithinBounds({ latitude: fallback.latitude, longitude: fallback.longitude }, editFocusBounds))) {
+          nextResults = [{
+            kind: 'remote',
+            externalId: `geocoder-${fallback.longitude},${fallback.latitude}`,
+            name: fallback.name,
+            subtitle: fallback.full_address,
+            featureType: fallback.category ?? 'poi',
+            coordinate: [fallback.longitude, fallback.latitude],
+          }];
+        }
+      }
       if (!isCreateAtlasLanding) console.info('[AtlasEditSearch] displayed', { ...logContext, count: nextResults.length, names: nextResults.map((item) => item.kind === 'remote' ? item.name : item.place.name) });
       setResults(nextResults);
     }).catch((error) => {
@@ -1477,11 +1494,11 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
   }, [atlasId, items, route, showDialog]);
 
   const renameAtlas = useCallback(() => {
-    if (!atlasId || !existingAtlas) return;
+    if (!atlasId) return;
     showDialog({
       title: 'Rename Atlas',
       message: 'Choose a title that makes this trip easy to find.',
-      input: { placeholder: 'Atlas title', initialValue: atlasTitle || existingAtlas.title },
+      input: { placeholder: 'Atlas title', initialValue: atlasTitle || existingAtlas?.title || 'Untitled Atlas' },
       actions: [
         { label: 'Cancel' },
         { label: 'Save', variant: 'primary', onPress: (name) => {
@@ -1492,7 +1509,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         } },
       ],
     });
-  }, [atlasId, atlasTitle, existingAtlas, showDialog]);
+  }, [atlasId, atlasTitle, existingAtlas?.title, showDialog]);
 
   const closeEditor = useCallback(() => {
     // AtlasDetail synchronously restores the completed Atlas overview. Keep the
@@ -1633,7 +1650,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
     </View>
     {seedNoteVisible ? <Animated.View pointerEvents="none" style={[styles.seedNote, { opacity: seedNoteOpacity }]}><Text style={styles.seedNoteText}>Tap any point on the map or search to choose a different place to add.</Text></Animated.View> : null}
     {nearbyPromptVisible ? <Animated.View pointerEvents="box-none" style={[styles.nearbyPromptRow, { opacity: nearbyPromptOpacity }]}><View pointerEvents="auto" style={styles.nearbyPrompt}><TouchableOpacity accessibilityLabel="More nearby must-sees" disabled={nearbyRecommending} onPress={() => { void recommendNearby(); }} style={styles.nearbyPromptMain}><Ionicons name="sparkles" size={13} color="#6446B4" />{nearbyRecommending ? <><ActivityIndicator size="small" color="#6446B4" /><Text style={styles.nearbyPromptText}>Finding nearby must-sees...</Text></> : <Text style={styles.nearbyPromptText}>More nearby must-sees</Text>}</TouchableOpacity></View></Animated.View> : null}
-    {results.length > 0 ? <View pointerEvents="auto" style={styles.results}><ScrollView nestedScrollEnabled showsVerticalScrollIndicator style={styles.searchResultsScroll}>{results.map((result) => {
+    {results.length > 0 ? <View pointerEvents="auto" style={styles.results}><ScrollView nestedScrollEnabled keyboardShouldPersistTaps="always" showsVerticalScrollIndicator style={styles.searchResultsScroll}>{results.map((result) => {
       const key = result.kind === 'saved' ? result.place.id : result.externalId;
       const createSearchAction = isCreateAtlasLanding && !focusSearchActive;
       const resultContent = <><View style={styles.resultTitleRow}><Text numberOfLines={1} style={styles.resultName}>{result.kind === 'saved' ? result.place.name : result.name}</Text>{result.kind === 'saved' ? <View style={styles.savedTag}><Text style={styles.savedTagText}>Saved</Text></View> : null}</View><Text numberOfLines={1} style={styles.resultAddress}>{result.kind === 'saved' ? result.place.subtitle : result.subtitle}</Text></>;
@@ -1767,7 +1784,7 @@ export default function AtlasBuilder({ onClose, onSaved, atlasId, initialCandida
         </Reanimated.View>)}
       </ScrollView>}
 
-      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} finishDisabled={saveDisabled} promptFirstAdd={Boolean(atlasId) && items.length === 0} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
+      {atlasId || started || handoffStarted ? <AtlasCandidateCard place={focused} added={Boolean(focused && items.some((item) => item.id === focused.id))} saveActionsOpen={saveActionsOpen} savingKind={savingKind} finishDisabled={saveDisabled} promptFirstAdd={Boolean(atlasId) && items.length === 0} showFinishHint={items.length > 0 && !focused && !saveActionsOpen} onAdd={() => { if (focused) addPlace(focused); }} onToggleSaveActions={() => setSaveActionsOpen((open) => !open)} onSave={(askAI) => { setSaveActionsOpen(false); void persist(askAI); }} /> : null}
 
       <TimePickerModal visible={timeModalIndex !== null} day={pendingDay} time={pendingTime} dayLocked={undefinedDayLocked} hasExisting={timeModalIndex !== null && Boolean(items[timeModalIndex]?.timeline_time)} validationMessage={timeConflictMessage} onChangeDay={setPendingDay} onChangeTime={setPendingTime} onClose={() => { setTimeConflictMessage(null); setTimeModalIndex(null); }} onRemove={() => { if (timeModalIndex === null) return; const existing = items[timeModalIndex]; commitItems(items.map((entry, index) => index === timeModalIndex ? { ...entry, timeline_day: null, timeline_time: null } : entry)); if (existing?.joinId) updateAtlasPlace(existing.joinId, { timeline_day: null, timeline_time: null }).catch(console.warn); setTimeModalIndex(null); }} onSave={saveTimeDivider} />
       <TransportPickerModal visible={transportModalIndex !== null} selected={transportModalIndex === null ? null : items[transportModalIndex]?.transport ?? null} onSelect={saveTransport} onRemove={() => saveTransport(null)} onClose={() => setTransportModalIndex(null)} />

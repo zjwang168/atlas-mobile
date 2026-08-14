@@ -6,6 +6,7 @@ import {
 import { BlurView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import type { User } from '@supabase/supabase-js';
 import { visionImageBase64 } from '@/services/import/visionImage';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Icon } from 'phosphor-react-native';
@@ -68,6 +69,7 @@ import { addAtlasOwnedPlaces, queueAtlasPlacePhotoBackfill } from '@/services/at
 import { encodeAtlasPlaceMetadata } from '@/services/atlas/atlasPlaceMetadata';
 import { createAtlas } from '@/services/atlas/atlasService';
 import { deletePlace, isSamePlace, queueSavedPlacePhotoBackfill, savePlaces, saveSpecialPlace } from '@/services/place/placeService';
+import { supabase } from '@/services/supabase/supabaseClient';
 import type { ParsedPlace } from '@/services/import/importService';
 import { typography } from '@/theme/typography';
 
@@ -93,7 +95,19 @@ const STARTER_PROMPTS = [
   'Cozy cafes to work from near me',
   'Best date-night viewpoints',
   'A hidden gem tourists don’t know',
-] as const;
+  'Find the nearest car wash.',
+  'Find car wash near Stanford.',
+  'Find nearest car wash and gas.',
+  'Find car wash and gas near Stanford.',
+  'Save Santa Monica, Griffith, Grand Central.',
+  'Create an atlas for these 3 places.',
+  'Build a Seattle travel atlas.',
+  'Plan a 1-day NYC route with food.',
+  'Plan Yosemite stops from home.',
+  'Tell me where this place is.',
+  'Create a Breaking Bad filming atlas.',
+  "Show Trump's favorite NYC food.",
+];
 const IMPORT_STARTER_PROMPTS = [
   'Build a day plan around these saved places',
   'Group these places by neighborhood',
@@ -110,6 +124,36 @@ const CHAT_PLACE_PHOTO_CONCURRENCY = 2;
 let activeChatPlacePhotoRequests = 0;
 const queuedChatPlacePhotoRequests: Array<() => void> = [];
 const IMAGE_TEXT_REQUEST_RE = /\b(?:read|extract|recognize|recognise|scan|ocr) (?:the )?(?:text|words|writing)|(?:图片|图像|照片).{0,8}(?:文字|读字|识别文字)|(?:识别|读取).{0,8}(?:图片|图像|照片).{0,8}(?:文字|文本)/i;
+
+function displayNameForUser(user?: User | null): string {
+  const metadata = user?.user_metadata ?? {};
+  const metadataName = metadata.full_name ?? metadata.display_name ?? metadata.name;
+  if (typeof metadataName === 'string' && metadataName.trim()) return metadataName.trim();
+
+  const emailName = user?.email?.split('@')[0]?.trim();
+  if (emailName) {
+    return emailName
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  return 'Traveler';
+}
+
+function pickStarterPrompts(previous: readonly string[] = []): string[] {
+  const source = STARTER_PROMPTS.filter((prompt) => !previous.includes(prompt));
+  const candidates = source.length >= 3 ? source : STARTER_PROMPTS;
+  const shuffled = [...candidates];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  return shuffled.slice(0, 3);
+}
 
 type Message = {
   id: string;

@@ -69,6 +69,7 @@ from backend.services.place_image_service.place_image_service import (
 from backend.services import events_service
 from backend.services import place_search_service
 from backend.services import landmark_service
+from backend.services.geocoder import geocode
 from backend.services.link_preview import build_link_preview
 from backend.services.translation import translate_to_english
 from backend.langgraph.atlas_graph import app as atlas_graph_app
@@ -1275,6 +1276,40 @@ async def places_retrieve(
 
     return PlaceRetrieveResponse(
         locations=[LocationItem(**item) for item in locations],
+        attribution=place_search_service.ATTRIBUTION,
+    )
+
+
+@app.get("/places/geocode", response_model=PlaceRetrieveResponse)
+async def places_geocode(
+    q: str = Query(..., min_length=2, description="POI name, including local-language or pinyin input"),
+) -> PlaceRetrieveResponse:
+    """Resolve a POI only when Search Box has no usable typeahead result.
+
+    The shared geocoder covers local-language and pinyin names that Mapbox
+    Search Box does not index as POI suggestions. The client still validates
+    the returned coordinate against the active Atlas search area.
+    """
+    result = await geocode(q.strip())
+    if not result:
+        return PlaceRetrieveResponse(locations=[], attribution=place_search_service.ATTRIBUTION)
+
+    address = str(result.get("full_address") or "")
+    display_name = address.split(",", 1)[0].strip() or str(result.get("name") or q.strip())
+    return PlaceRetrieveResponse(
+        locations=[LocationItem(
+            name=display_name,
+            latitude=result["latitude"],
+            longitude=result["longitude"],
+            full_address=address or display_name,
+            category=result.get("category") or "Place",
+            confidence=result.get("confidence"),
+            geocode_verified=True,
+            source=result.get("source") or "geocoder",
+            city=result.get("city"),
+            region=result.get("region"),
+            country=result.get("country"),
+        )],
         attribution=place_search_service.ATTRIBUTION,
     )
 

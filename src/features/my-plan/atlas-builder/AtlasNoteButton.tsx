@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { Text } from '@/components/ui/text';
 import { transcribeAtlasNoteAudio } from '@/services/api/apiService';
@@ -102,6 +102,15 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
     setVisible(false);
   }, [recorder, recording, resetAudioMode]);
 
+  const saveNote = useCallback(() => {
+    const savedNote = note.trim();
+    // Close the keyboard and modal before the parent row re-renders from the
+    // persisted note, avoiding the visible layout bounce on iOS.
+    Keyboard.dismiss();
+    setVisible(false);
+    requestAnimationFrame(() => onSave(savedNote));
+  }, [note, onSave]);
+
   useEffect(() => () => {
     void resetAudioMode();
   }, [resetAudioMode]);
@@ -160,7 +169,7 @@ export function AtlasNoteButton({ placeName, initialNote, onSave }: AtlasNoteBut
           {error ? <Text style={styles.noteError}>{error}</Text> : null}
           <View style={styles.noteModalActions}>
             <TouchableOpacity accessibilityLabel="Cancel note" disabled={recording || transcribing} onPress={cancel} style={styles.noteCancel}><Text style={styles.noteCancelText}>Cancel</Text></TouchableOpacity>
-            <TouchableOpacity accessibilityLabel="Save note" disabled={recording || transcribing} onPress={() => { onSave(note.trim()); setVisible(false); }} style={[styles.noteSave, (recording || transcribing) && styles.noteSaveDisabled]}><Text style={styles.noteSaveText}>Save</Text></TouchableOpacity>
+            <TouchableOpacity accessibilityLabel="Save note" disabled={recording || transcribing} onPress={saveNote} style={[styles.noteSave, (recording || transcribing) && styles.noteSaveDisabled]}><Text style={styles.noteSaveText}>Save</Text></TouchableOpacity>
           </View>
         </View>
       </KeyboardAvoidingView>
