@@ -101,52 +101,79 @@
   font-size: 28px;
   line-height: 34px;
   font-weight: 600;
+  letter-spacing: -0.28px;
 }
 @utility h2 {
   font-size: 22px;
   line-height: 28px;
   font-weight: 600;
-  letter-spacing: -0.11px;
+  letter-spacing: -0.22px;
 }
 @utility h3 {
-  font-size: 17px;
-  line-height: 22px;
+  font-size: 20px;
+  line-height: 26px;
   font-weight: 600;
+  letter-spacing: -0.2px;
 }
 @utility subheader {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+@utility body {
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+@utility bodyMedium {
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+@utility bodyEmphasis {
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+@utility bodySmall {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+@utility bodySmallMedium {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+@utility bodySmallEmphasis {
   font-size: 15px;
   line-height: 20px;
   font-weight: 600;
-}
-@utility body {
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-}
-@utility bodyEmphasis {
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 600;
-}
-@utility bodySmall {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 400;
-}
-@utility bodySmallEmphasis {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 600;
+  letter-spacing: 0;
 }
 @utility caption {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 18px;
   font-weight: 400;
+  letter-spacing: 0;
+}
+@utility captionMedium {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
 }
 @utility captionEmphasis {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 18px;
   font-weight: 600;
+  letter-spacing: 0;
 }
 @utility labelTab {
   font-size: 11px;

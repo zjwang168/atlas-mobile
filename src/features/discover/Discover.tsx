@@ -6,6 +6,7 @@ import { Text } from '@/components/ui/text';
 import { useHomeLocation, useHomeOverlay, useHomePlaces } from '@/features/home/HomeContext';
 import { MIN_QUERY_LENGTH } from '@/services/place/placeSearchService';
 import { usePlaceSearch } from '@/services/place/usePlaceSearch';
+import { typography } from '@/theme/typography';
 import type { EventCategory, LocalEvent } from '@/types/event';
 import type { PlaceSaveOutcome } from '@/types/place';
 import type { PlaceSuggestion } from '@/types/route';
@@ -14,6 +15,11 @@ import { ArrowsDownUpIcon } from 'phosphor-react-native/src/icons/ArrowsDownUp';
 import { CaretDownIcon } from 'phosphor-react-native/src/icons/CaretDown';
 import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import {
   ActivityIndicator,
   FlatList,
@@ -72,6 +78,13 @@ function eventKeyExtractor(item: LocalEvent): string {
 /** Same reason as CardGap, for the horizontal featured strip. The width is
     shared with the strip's snap interval, so a card always lands flush. */
 const FEATURED_GAP = 10;
+// Search field and the filter/sort pills share one height across both modes.
+const CONTROL_HEIGHT = 38;
+// Focusing the field grows it and steps the text up a size, so the query the
+// user is actually typing reads at body size rather than at chip size.
+const SEARCH_FOCUSED_HEIGHT = 44;
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 function FeaturedGap() {
   return <View style={styles.featuredGap} />;
@@ -169,7 +182,7 @@ function FilterButton({
         style={styles.filterButton}
       >
         {showIcon ? <ArrowsDownUpIcon size={16} weight="bold" color="#717171" /> : null}
-        <Text style={styles.filterButtonLabel}>{label}</Text>
+        <Text style={[typography.bodySmallEmphasis, styles.filterButtonLabel]}>{label}</Text>
         <CaretDownIcon size={12} weight="fill" color="#717171" />
       </View>
     </MenuView>
@@ -235,7 +248,20 @@ function Discover({
   // Results are unusable at the shorter detents — a third of the screen, and
   // the hosts disable this list's scrolling below `tall`. Focusing the field is
   // the moment the user commits to searching, so take the height then.
-  const handleSearchFocus = useCallback(() => snapTo?.('tall'), [snapTo]);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchHeight = useSharedValue(CONTROL_HEIGHT);
+  const searchFieldStyle = useAnimatedStyle(() => ({ height: searchHeight.value }));
+
+  const handleSearchFocus = useCallback(() => {
+    setSearchFocused(true);
+    searchHeight.value = withTiming(SEARCH_FOCUSED_HEIGHT, { duration: 180 });
+    snapTo?.('tall');
+  }, [searchHeight, snapTo]);
+
+  const handleSearchBlur = useCallback(() => {
+    setSearchFocused(false);
+    searchHeight.value = withTiming(CONTROL_HEIGHT, { duration: 180 });
+  }, [searchHeight]);
 
   const {
     status: eventsStatus,
@@ -409,31 +435,35 @@ function Discover({
   return (
     <View style={styles.root}>
       <View style={styles.searchRow}>
-        <Pressable
+        <AnimatedPressable
           accessibilityRole="search"
           onPress={() => {
             if (active) searchInputRef.current?.focus();
           }}
-          style={styles.searchField}
+          style={[styles.searchField, searchFieldStyle]}
         >
-          <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
+          <MagnifyingGlassIcon size={20} weight="bold" color="#717171" />
           {active ? (
             <TextInput
               ref={searchInputRef}
               value={query}
               onChangeText={setQuery}
               onFocus={handleSearchFocus}
+              onBlur={handleSearchBlur}
               placeholder="Search places of interests..."
-              placeholderTextColor="#8A8A8A"
+              placeholderTextColor="#717171"
               returnKeyType="search"
               autoCapitalize="none"
               autoCorrect={false}
               clearButtonMode="while-editing"
-              style={styles.searchInput}
+              style={[
+                styles.searchInput,
+                searchFocused ? styles.searchInputFocused : styles.searchInputIdle,
+              ]}
             />
           ) : null}
           {status === 'searching' ? <ActivityIndicator size="small" /> : null}
-        </Pressable>
+        </AnimatedPressable>
       </View>
 
       {/* Two lists rather than one branching list: the sample browse rows and
@@ -502,23 +532,31 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   searchField: {
-    height: 36,
-    paddingHorizontal: 12,
-    borderRadius: 30,
+    paddingHorizontal: 16,
+    borderRadius: 20,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
+  // Takes size/weight from bodySmallMedium but deliberately drops its
+  // lineHeight: on iOS a lineHeight on TextInput breaks vertical centring.
   searchInput: {
     flex: 1,
-    height: 36,
     paddingHorizontal: 0,
     paddingVertical: 0,
     color: '#1A1A1A',
-    fontSize: 14,
-    fontWeight: '400',
+  },
+  searchInputIdle: {
+    height: CONTROL_HEIGHT,
+    fontSize: typography.bodySmall.fontSize,
+    fontWeight: typography.bodySmall.fontWeight,
+  },
+  searchInputFocused: {
+    height: SEARCH_FOCUSED_HEIGHT,
+    fontSize: typography.body.fontSize,
+    fontWeight: typography.body.fontWeight,
   },
   // Filters
   filtersRow: {
@@ -531,9 +569,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   filterButton: {
-    minHeight: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    height: CONTROL_HEIGHT,
+    paddingHorizontal: 12,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: '#E0E0E0',
@@ -545,8 +582,6 @@ const styles = StyleSheet.create({
   },
   filterButtonLabel: {
     color: '#717171',
-    fontSize: 14,
-    fontWeight: '600',
   },
 
   // Featured strip

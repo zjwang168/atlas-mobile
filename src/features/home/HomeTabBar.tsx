@@ -35,7 +35,13 @@ const COLOR = {
 
 const LIQUID_GLASS_AVAILABLE =
   isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
-const TAB_WIDTH = 60;
+// Cell = 28px icon + 20px horizontal / 10px vertical padding, per the design.
+const TAB_WIDTH = 68;
+const TAB_HEIGHT = 48;
+const TAB_ICON_SIZE = 28;
+const BAR_PADDING = 4;
+const BAR_WIDTH = TAB_WIDTH * 4 + BAR_PADDING * 2;
+const BAR_HEIGHT = TAB_HEIGHT + BAR_PADDING * 2;
 
 type HomeTabBarProps = {
   activeTab: string;
@@ -196,6 +202,9 @@ function HomeTabBar({
                   key={item.key}
                   accessibilityLabel="Open Chat. Hold to speak."
                   icon={ChatTeardropIcon}
+                  iconSize={TAB_ICON_SIZE}
+                  iconWeight="regular"
+                  iconColor={COLOR.icon}
                   onShortPress={onChatPress}
                   onTranscript={onChatVoiceTranscript}
                   onError={onChatVoiceError}
@@ -217,7 +226,7 @@ function HomeTabBar({
                 ]}
               >
                 <IconComponent
-                  size={24}
+                  size={TAB_ICON_SIZE}
                   weight={selected ? 'fill' : 'regular'}
                   color={selected ? COLOR.active : COLOR.icon}
                 />
@@ -237,20 +246,20 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    height: 52,
+    height: BAR_HEIGHT,
     alignItems: 'center',
     zIndex: 30,
   },
   barShadow: {
-    width: 248,
-    height: 52,
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
     borderRadius: 32,
     boxShadow: '0 8px 40px rgba(0,0,0,0.20)',
   },
   bar: {
-    width: 248,
-    height: 52,
-    padding: 4,
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
+    padding: BAR_PADDING,
     borderRadius: 32,
     borderCurve: 'continuous',
     overflow: 'hidden',
@@ -260,7 +269,7 @@ const styles = StyleSheet.create({
   },
   tab: {
     width: TAB_WIDTH,
-    height: 44,
+    height: TAB_HEIGHT,
     borderRadius: 30,
     borderCurve: 'continuous',
     alignItems: 'center',
@@ -268,10 +277,10 @@ const styles = StyleSheet.create({
   },
   selector: {
     position: 'absolute',
-    left: 4,
-    top: 4,
+    left: BAR_PADDING,
+    top: BAR_PADDING,
     width: TAB_WIDTH,
-    height: 44,
+    height: TAB_HEIGHT,
     borderRadius: 30,
     borderCurve: 'continuous',
     overflow: 'hidden',

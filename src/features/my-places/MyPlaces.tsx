@@ -32,6 +32,14 @@ type MyPlacesProps = {
   onDeleteInitiated?: (place: PlaceDetail) => void;
 };
 
+// Filter-row chips. RN clamps borderRadius to half the height, so at CHIP_HEIGHT
+// these render as pills either way — CHIP_RADIUS records the design's intent.
+const CHIP_HEIGHT = 38;
+const CHIP_RADIUS = 20;
+// The expanded search bar only exists while the field has focus, so it is
+// always in the taller of the two states Discover animates between.
+const SEARCH_FOCUSED_HEIGHT = 44;
+
 const FILTERS: Array<{
   value: PlacesView;
   label: string;
@@ -105,15 +113,16 @@ function MyPlaces({
             onPress={() => searchInputRef.current?.focus()}
             style={styles.searchField}
           >
-            <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
+            <MagnifyingGlassIcon size={20} weight="bold" color="#717171" />
             <TextInput
               ref={searchInputRef}
+              autoFocus
               editable={active}
               showSoftInputOnFocus={active}
               value={query}
               onChangeText={setQuery}
               placeholder="Search places of interests..."
-              placeholderTextColor="#8A8A8A"
+              placeholderTextColor="#717171"
               returnKeyType="search"
               autoCapitalize="none"
               autoCorrect={false}
@@ -143,7 +152,7 @@ function MyPlaces({
             scaleTo={0.94}
             style={styles.searchButton}
           >
-            <MagnifyingGlassIcon size={16} weight="bold" color="#717171" />
+            <MagnifyingGlassIcon size={20} weight="bold" color="#717171" />
           </PressableScale>
 
           {FILTERS.map(({ value, label, icon: Icon }) => {
@@ -215,27 +224,28 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#09090B',
   },
+  // No fixed height — the row is sized by CHIP_HEIGHT so the gap below stays
+  // constant whatever the chips do.
   filterRow: {
-    height: 52,
     paddingTop: 4,
-    paddingBottom: 12,
+    paddingBottom: 16,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
   searchButton: {
-    width: 48,
-    height: 36,
-    borderRadius: 30,
+    width: 52,
+    height: CHIP_HEIGHT,
+    borderRadius: CHIP_RADIUS,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   filterChip: {
-    height: 36,
-    borderRadius: 30,
+    height: CHIP_HEIGHT,
+    borderRadius: CHIP_RADIUS,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     paddingHorizontal: 12,
@@ -252,24 +262,26 @@ const styles = StyleSheet.create({
   },
   filterLabel: {
     color: '#717171',
-    letterSpacing: -0.14,
   },
   filterLabelActive: {
     color: '#FFFFFF',
   },
+  // Swaps in place for filterRow — keep the vertical rhythm identical so
+  // toggling search doesn't shift the list below.
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 4,
-    marginBottom: 12,
+    marginBottom: 16,
     marginHorizontal: 16,
     gap: 8,
   },
+  // Matches Discover's search field — the two are the same control in two modes.
   searchField: {
     flex: 1,
-    height: 36,
-    paddingHorizontal: 12,
-    borderRadius: 30,
+    height: SEARCH_FOCUSED_HEIGHT,
+    paddingHorizontal: 16,
+    borderRadius: CHIP_RADIUS,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(0,0,0,0.05)',
     flexDirection: 'row',
@@ -277,21 +289,22 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: SEARCH_FOCUSED_HEIGHT,
+    height: SEARCH_FOCUSED_HEIGHT,
+    borderRadius: SEARCH_FOCUSED_HEIGHT / 2,
     backgroundColor: 'rgba(0,0,0,0.05)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Takes size/weight from bodySmallMedium but deliberately drops its
+  // lineHeight: on iOS a lineHeight on TextInput breaks vertical centring.
   searchInput: {
     flex: 1,
-    height: 36,
+    height: SEARCH_FOCUSED_HEIGHT,
     paddingHorizontal: 0,
     paddingVertical: 0,
     color: '#1A1A1A',
-    fontSize: 14,
-    fontWeight: '400',
-    letterSpacing: -0.14,
+    fontSize: typography.body.fontSize,
+    fontWeight: typography.body.fontWeight,
   },
 });
