@@ -28,6 +28,7 @@ import HomeTabBar, {
 import SearchPanel from '../search/SearchPanel';
 import AccountModal from '../auth/AccountModal';
 import ProfileSettings from '../profile/ProfileSettings';
+import { isSanFranciscoLocationTestEnabled } from '@/services/location/locationService';
 
 const HOME_PANEL_SNAP_GROUP = 'home-main';
 const CONTINENTAL_US_BOUNDS = { ne: [-66.9, 49.4] as [number, number], sw: [-124.85, 24.4] as [number, number] };
@@ -165,8 +166,17 @@ function HomeScreenContent({
 
   const mapMarkers = useMemo(() => {
     if (atlasMapState) return atlasMapState.markers;
-    return savedMarkers;
-  }, [atlasMapState, savedMarkers]);
+    if (!isSanFranciscoLocationTestEnabled) return savedMarkers;
+    return [{
+      id: 'test-user-location',
+      longitude: userLocation[0],
+      latitude: userLocation[1],
+      title: 'You',
+      tone: 'location' as const,
+      pulsing: true,
+      alwaysShowLabel: true,
+    }, ...savedMarkers];
+  }, [atlasMapState, savedMarkers, userLocation]);
 
   // 动态 zoom 级别
   const mapZoom = useMemo(() => {
@@ -533,7 +543,7 @@ function HomeScreenContent({
         // bring it back on the home map.
         compassEnabled={false}
         markerPopup={atlasMapState?.markerPopup}
-        showUserLocation={locationStatus === 'granted'}
+        showUserLocation={locationStatus === 'granted' && !isSanFranciscoLocationTestEnabled}
       />
 
       {!atlasMapState?.hideChrome ? (

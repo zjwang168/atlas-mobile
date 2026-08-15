@@ -9,7 +9,7 @@ import type { ParsedPlace } from '../../services/import/importService';
 import type { LocalEvent } from '../../types/event';
 import { clearUserCache, getCurrentUserId } from '../../services/local/localStore';
 import type { LocationPermissionStatus } from '../../services/location/locationService';
-import { requestUserLocation } from '../../services/location/locationService';
+import { isSanFranciscoLocationTestEnabled, requestUserLocation, SAN_FRANCISCO_TEST_COORDINATE } from '../../services/location/locationService';
 import { flushQueue } from '../../services/local/syncQueue';
 import type { SavedPlace } from '../../services/place/placeService';
 import { deletePlace, fetchSavedPlaces, subscribeSavedPlaces, updatePlaceNote } from '../../services/place/placeService';
@@ -425,6 +425,10 @@ export function HomeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
+      if (isSanFranciscoLocationTestEnabled) {
+        if (mounted) setUserLocation(SAN_FRANCISCO_TEST_COORDINATE);
+        return;
+      }
       try {
         const permission = await Location.requestForegroundPermissionsAsync();
         if (!permission.granted) return;

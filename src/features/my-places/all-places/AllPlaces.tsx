@@ -17,12 +17,14 @@ import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { ListDashesIcon } from 'phosphor-react-native/src/icons/ListDashes';
 import { MapPinIcon } from 'phosphor-react-native/src/icons/MapPin';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   ActivityIndicator,
   FlatList,
   Image,
+  LayoutAnimation,
   Modal,
   Pressable,
   ScrollView,
@@ -32,6 +34,8 @@ import {
   type NativeSyntheticEvent,
   type ViewToken,
 } from 'react-native';
+import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
+import Reanimated, { type SharedValue, useAnimatedStyle } from 'react-native-reanimated';
 
 // gray-200 in THEME.md's palette. Shared by every rule in this file so the
 // home sheet and the full-list pages can't drift apart again.
@@ -80,6 +84,49 @@ type PlaceTileProps = {
   place: PlaceDetail;
   onPress: (place: PlaceDetail) => void;
 };
+
+const SWIPE_DELETE_WIDTH = 72;
+
+function SwipeDeleteAction({ progress, onDelete }: { progress: SharedValue<number>; onDelete: () => void }) {
+  const animatedStyle = useAnimatedStyle(() => {
+    const amount = Math.min(1, Math.max(0, progress.value));
+    return { opacity: amount, transform: [{ scale: 0.82 + amount * 0.18 }] };
+  });
+
+  return (
+    <Reanimated.View style={[styles.swipeDeleteAction, animatedStyle]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Delete"
+        onPress={onDelete}
+        style={({ pressed }) => [styles.swipeDeleteButton, pressed && styles.swipeDeleteButtonPressed]}
+      >
+        <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+      </Pressable>
+    </Reanimated.View>
+  );
+}
+
+function SwipeToDelete({ children, onDelete }: { children: React.ReactNode; onDelete: () => void }) {
+  const ref = useRef<SwipeableMethods>(null);
+  const handleDelete = useCallback(() => {
+    ref.current?.close();
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    onDelete();
+  }, [onDelete]);
+
+  return (
+    <ReanimatedSwipeable
+      ref={ref}
+      friction={2}
+      rightThreshold={SWIPE_DELETE_WIDTH / 2}
+      overshootRight={false}
+      renderRightActions={(progress) => <SwipeDeleteAction progress={progress} onDelete={handleDelete} />}
+    >
+      {children}
+    </ReanimatedSwipeable>
+  );
+}
 
 type DistancePlaceItem = {
   place: PlaceDetail;
@@ -326,15 +373,17 @@ const PlaceTile = memo(function PlaceTile({ place, onPress }: PlaceTileProps) {
 const SavedPlaceListItem = memo(function SavedPlaceListItem({
   place,
   onPress,
-}: PlaceTileProps) {
+  onDelete,
+}: PlaceTileProps & { onDelete: () => void }) {
   return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={place.name}
-      onPress={() => onPress(place)}
-      scaleTo={0.985}
-      style={styles.listItem}
-    >
+    <SwipeToDelete onDelete={onDelete}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={place.name}
+        onPress={() => onPress(place)}
+        scaleTo={0.985}
+        style={styles.listItem}
+      >
       <View style={styles.listImageShadow}>
         <View style={styles.listImageClip}>
           {place.thumbnailUrl ? (
@@ -364,7 +413,8 @@ const SavedPlaceListItem = memo(function SavedPlaceListItem({
           </View>
         ) : null}
       </View>
-    </PressableScale>
+      </PressableScale>
+    </SwipeToDelete>
   );
 });
 
@@ -447,17 +497,19 @@ type AtlasPreview = {
 type AtlasRowProps = {
   atlas: AtlasPreview;
   onPress: (atlasId: string) => void;
+  onDelete: () => void;
 };
 
-const AtlasRow = memo(function AtlasRow({ atlas, onPress }: AtlasRowProps) {
+const AtlasRow = memo(function AtlasRow({ atlas, onPress, onDelete }: AtlasRowProps) {
   return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`${atlas.title}, ${atlas.placeCount} places`}
-      onPress={() => onPress(atlas.id)}
-      scaleTo={0.985}
-      style={styles.atlasRow}
-    >
+    <SwipeToDelete onDelete={onDelete}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={`${atlas.title}, ${atlas.placeCount} places`}
+        onPress={() => onPress(atlas.id)}
+        scaleTo={0.985}
+        style={styles.atlasRow}
+      >
       <View style={styles.atlasThumbnail}>
         {atlas.thumbnailUrl ? (
           <Image
@@ -478,7 +530,8 @@ const AtlasRow = memo(function AtlasRow({ atlas, onPress }: AtlasRowProps) {
         </Text>
       </View>
       <CaretRightIcon size={16} weight="bold" color="#8A8A8A" />
-    </PressableScale>
+      </PressableScale>
+    </SwipeToDelete>
   );
 });
 
@@ -486,10 +539,12 @@ function AtlasSection({
   atlases,
   onHeaderPress,
   onAtlasPress,
+  onAtlasDelete,
 }: {
   atlases: AtlasPreview[];
   onHeaderPress: () => void;
   onAtlasPress: (atlasId: string) => void;
+  onAtlasDelete: (atlasId: string) => void;
 }) {
   return (
     <View style={styles.section}>
@@ -516,6 +571,7 @@ function AtlasSection({
               key={atlas.id}
               atlas={atlas}
               onPress={onAtlasPress}
+              onDelete={() => onAtlasDelete(atlas.id)}
             />
           ))}
         </View>
@@ -671,6 +727,8 @@ function AllPlaces({
   const {
     overlay,
     savedPlaces,
+    deleteSavedPlace,
+    deleteAtlas,
     setOverlay,
     atlases,
     atlasPlaces,
@@ -1026,13 +1084,27 @@ function AllPlaces({
     setOverlay({ kind: 'atlasDetail', atlasId });
   }, [setOverlay]);
 
+  const handlePlaceDelete = useCallback((place: PlaceDetail) => {
+    // HomeContext removes the cached row immediately and syncs in the background.
+    void deleteSavedPlace(place.id);
+  }, [deleteSavedPlace]);
+
+  const handleAtlasDelete = useCallback((atlasId: string) => {
+    // Atlas deletion also clears cached atlas_places; saved places remain intact.
+    void deleteAtlas(atlasId);
+  }, [deleteAtlas]);
+
   const renderPlaceItem = useCallback(({ item }: { item: DistancePlaceItem }) => (
-    <SavedPlaceListItem place={item.place} onPress={handlePlacePress} />
-  ), [handlePlacePress]);
+    <SavedPlaceListItem
+      place={item.place}
+      onPress={handlePlacePress}
+      onDelete={() => handlePlaceDelete(item.place)}
+    />
+  ), [handlePlaceDelete, handlePlacePress]);
 
   const renderAtlasItem = useCallback(({ item }: { item: AtlasPreview }) => (
-    <AtlasRow atlas={item} onPress={handleAtlasPress} />
-  ), [handleAtlasPress]);
+    <AtlasRow atlas={item} onPress={handleAtlasPress} onDelete={() => handleAtlasDelete(item.id)} />
+  ), [handleAtlasDelete, handleAtlasPress]);
 
   const showPlaces = filter === 'all' || filter === 'places';
   const showAtlases = filter === 'all' || filter === 'atlas';
@@ -1273,6 +1345,7 @@ function AllPlaces({
             atlases={atlasPreviews}
             onHeaderPress={() => onFilterChange?.('atlas')}
             onAtlasPress={handleAtlasPress}
+            onAtlasDelete={handleAtlasDelete}
           />
         ) : null}
       </ScrollView>
@@ -1287,6 +1360,23 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     position: 'relative',
+  },
+  swipeDeleteAction: {
+    width: SWIPE_DELETE_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swipeDeleteButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#D84A4A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swipeDeleteButtonPressed: {
+    transform: [{ scale: 0.9 }],
+    backgroundColor: '#B93636',
   },
   placesDivider: {
     height: StyleSheet.hairlineWidth,

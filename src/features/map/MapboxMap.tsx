@@ -637,7 +637,7 @@ function MarkerDot({
   }, [hasActiveSelection, selected, selectedProgress, tone]);
   const animatedStyle = useAnimatedStyle(() => {
     const atlasPin = tone === 'atlas';
-    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#12C170' : specialPlace ? specialPlaceColor : '#007AFF';
+    const baseColor = tone === 'atlas' ? '#E77B32' : tone === 'recommended' ? '#885CF6' : tone === 'location' ? '#0A84FF' : specialPlace ? specialPlaceColor : '#007AFF';
     // Green is the explicit current-choice state in the editor. AI pins stay
     // purple only while unselected; an orange Atlas pin keeps its route color.
     const selectedColor = tone === 'atlas'

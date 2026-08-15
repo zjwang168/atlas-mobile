@@ -12,6 +12,10 @@ import * as Location from 'expo-location';
 
 import { DEFAULT_MAP_CENTER } from '@/utils/constants';
 
+/** Development-only device-location override for repeatable map testing. */
+export const SAN_FRANCISCO_TEST_COORDINATE: [number, number] = [-122.4194, 37.7749];
+export const isSanFranciscoLocationTestEnabled = __DEV__;
+
 export type LocationPermissionStatus = 'undetermined' | 'granted' | 'denied';
 
 export type UserLocationResult = {
@@ -30,6 +34,7 @@ const FALLBACK: UserLocationResult = {
 
 /** Whether permission is already granted, without prompting for it. */
 export async function getLocationPermissionStatus(): Promise<LocationPermissionStatus> {
+  if (isSanFranciscoLocationTestEnabled) return 'granted';
   try {
     const { granted, canAskAgain } = await Location.getForegroundPermissionsAsync();
     if (granted) return 'granted';
@@ -47,6 +52,9 @@ export async function getLocationPermissionStatus(): Promise<LocationPermissionS
  * tap.
  */
 export async function requestUserLocation(): Promise<UserLocationResult> {
+  if (isSanFranciscoLocationTestEnabled) {
+    return { coordinate: SAN_FRANCISCO_TEST_COORDINATE, status: 'granted', isFallback: false };
+  }
   try {
     const { granted } = await Location.requestForegroundPermissionsAsync();
     if (!granted) return FALLBACK;
