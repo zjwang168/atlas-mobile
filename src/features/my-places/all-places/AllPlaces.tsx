@@ -5,6 +5,7 @@ import { Text } from '@/components/ui/text';
 import { useHome } from '@/features/home/HomeContext';
 import { queueAtlasPlacePhotoBackfill } from '@/services/atlas/atlasPlacesService';
 import { toPlaceDetail } from '@/services/place/placeService';
+import { elevation } from '@/theme/elevation';
 import { typography } from '@/theme/typography';
 import type { PlaceDetail } from '@/types/place';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
@@ -109,6 +110,11 @@ function SwipeDeleteAction({ progress, onDelete }: { progress: SharedValue<numbe
 
 function SwipeToDelete({ children, onDelete }: { children: React.ReactNode; onDelete: () => void }) {
   const ref = useRef<SwipeableMethods>(null);
+  // The row's own Pressable belongs to RN's touch system, which never learns
+  // that RNGH's pan claimed the gesture — so an opened row would still fire its
+  // onPress and navigate away before the delete button could be hit. While open,
+  // a transparent layer over the row swallows the tap and closes it instead.
+  const [open, setOpen] = useState(false);
   const handleDelete = useCallback(() => {
     ref.current?.close();
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -121,9 +127,20 @@ function SwipeToDelete({ children, onDelete }: { children: React.ReactNode; onDe
       friction={2}
       rightThreshold={SWIPE_DELETE_WIDTH / 2}
       overshootRight={false}
+      containerStyle={styles.swipeContainer}
+      onSwipeableWillOpen={() => setOpen(true)}
+      onSwipeableWillClose={() => setOpen(false)}
       renderRightActions={(progress) => <SwipeDeleteAction progress={progress} onDelete={handleDelete} />}
     >
       {children}
+      {open ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close delete action"
+          onPress={() => ref.current?.close()}
+          style={StyleSheet.absoluteFill}
+        />
+      ) : null}
     </ReanimatedSwipeable>
   );
 }
@@ -522,7 +539,7 @@ const AtlasRow = memo(function AtlasRow({ atlas, onPress, onDelete }: AtlasRowPr
         )}
       </View>
       <View style={styles.atlasCopy}>
-        <Text numberOfLines={1} style={[typography.bodyEmphasis, styles.atlasTitle]}>
+        <Text numberOfLines={1} style={[typography.bodyMedium, styles.atlasTitle]}>
           {atlas.title}
         </Text>
         <Text style={[typography.bodySmallMedium, styles.atlasCount]}>
@@ -1788,6 +1805,11 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
   },
+  // Lets a swiped row travel past the 16pt gutter instead of being cut off at
+  // it, and stops the container clipping the row's own shadow.
+  swipeContainer: {
+    overflow: 'visible',
+  },
   atlasRow: {
     paddingLeft: 8,
     paddingRight: 20,
@@ -1800,7 +1822,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    boxShadow: '0 7px 7px rgba(0,0,0,0.03)',
+    ...elevation.card,
   },
   atlasThumbnail: {
     width: 72,
