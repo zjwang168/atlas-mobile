@@ -145,6 +145,12 @@
   font-weight: 400;
   letter-spacing: 0;
 }
+@utility bodySmallRelaxed {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
 @utility bodySmallMedium {
   font-size: 15px;
   line-height: 20px;

@@ -2,6 +2,8 @@
 
 Design tokens are defined in `tokens.css` and consumed via NativeWind utility classes. Do not hardcode hex colors in components — use token classes.
 
+Type tokens live in `typography.ts`, shadow tokens in `elevation.ts`. For *which* token to reach for, plus the rules that have no token (radius, spacing, icons), see [DESIGN-SPEC.md](DESIGN-SPEC.md).
+
 ## Token Reference
 
 Full token definitions are in `tokens.css`. Quick reference:
@@ -57,6 +59,7 @@ Backgrounds for `PlaceCover`, the fallback thumbnail a place gets when it has no
 | Body Medium | `bodyMedium` | 17px / 24px / 500, 0% tracking |
 | Body Emphasis | `bodyEmphasis` | 17px / 24px / 600, 0% tracking |
 | Body Small | `bodySmall` | 15px / 20px / 400, 0% tracking |
+| Body Small Relaxed | `bodySmallRelaxed` | 15px / 22px / 400, 0% tracking — multi-line prose |
 | Body Small Medium | `bodySmallMedium` | 15px / 20px / 500, 0% tracking |
 | Body Small Emphasis | `bodySmallEmphasis` | 15px / 20px / 600, 0% tracking |
 | Caption | `caption` | 14px / 18px / 400, 0% tracking |

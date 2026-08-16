@@ -33,6 +33,9 @@ export const typography = {
   bodyEmphasis: { fontSize: 17, fontWeight: '600', lineHeight: 24, letterSpacing: 0 },
   /** Body Small — Regular 15/20 */
   bodySmall: { fontSize: 15, fontWeight: '400', lineHeight: 20, letterSpacing: 0 },
+  /** Body Small Relaxed — Regular 15/22 (looser leading than `bodySmall`: sized for
+      multi-line prose, e.g. a place's summary, rather than one- or two-line rows) */
+  bodySmallRelaxed: { fontSize: 15, fontWeight: '400', lineHeight: 22, letterSpacing: 0 },
   /** Body Small Medium — Medium 15/20 */
   bodySmallMedium: { fontSize: 15, fontWeight: '500', lineHeight: 20, letterSpacing: 0 },
   /** Body Small Emphasis — Semibold 15/20 */
