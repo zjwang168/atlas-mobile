@@ -114,7 +114,7 @@ function HomeScreenContent({
     savedPlaces,
     atlasMapState,
   } = useHome();
-  const [groupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
+  const [groupSnapState, setGroupSnapState] = useContentPanelSnapGroup(HOME_PANEL_SNAP_GROUP, 'default');
   // `groupSnapState` now updates ~1 frame after a drag-release (broadcast early so a
   // panel switching mid-spring doesn't inherit a stale value) — but this screen's own
   // subscription drives the map's discrete camera-padding recenter below, which is
@@ -730,7 +730,17 @@ function HomeScreenContent({
 
       <PlaceDetail
         placeId={overlay.kind === 'placeDetail' ? overlay.placeId : null}
-        onDismiss={() => setOverlay(overlay.kind === 'placeDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
+        onDismiss={() => {
+          const next = overlay.kind === 'placeDetail'
+            ? (overlay.returnTo ?? { kind: 'none' as const })
+            : { kind: 'none' as const };
+          // A PlaceDetail dragged to 'full' leaves 'full' in the shared snap group,
+          // which the home panel then inherits. The home panel's resting height is
+          // 'default', so reset the group when dismissing back to it — panels that
+          // hand off to another overlay keep the group as-is.
+          if (next.kind === 'none') setGroupSnapState('default');
+          setOverlay(next);
+        }}
         onEdit={(place) => {
           if (__DEV__) console.log('[HomeScreen] Edit place:', place.name);
         }}
@@ -740,7 +750,14 @@ function HomeScreenContent({
 
       <EventDetail
         event={overlay.kind === 'eventDetail' ? overlay.event : null}
-        onDismiss={() => setOverlay(overlay.kind === 'eventDetail' ? (overlay.returnTo ?? { kind: 'none' }) : { kind: 'none' })}
+        onDismiss={() => {
+          const next = overlay.kind === 'eventDetail'
+            ? (overlay.returnTo ?? { kind: 'none' as const })
+            : { kind: 'none' as const };
+          // Same shared-snap-group reset as PlaceDetail above.
+          if (next.kind === 'none') setGroupSnapState('default');
+          setOverlay(next);
+        }}
         snapGroup={HOME_PANEL_SNAP_GROUP}
         onHeightChange={overlay.kind === 'eventDetail' ? handlePanelHeightChange : undefined}
       />

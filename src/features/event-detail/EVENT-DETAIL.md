@@ -31,7 +31,7 @@ The hero uses whatever `image_url` the backend resolved through its chain (the e
 ```ts
 type EventDetailProps = {
   event: LocalEvent | null;      // null hides the panel; the host keeps it mounted either way
-  onDismiss: () => void;         // wired by HomeScreen to the overlay's `returnTo`
+  onDismiss: () => void;         // wired by HomeScreen to the overlay's `returnTo`; dismissing all the way back to the home screen also resets the shared snap group to `default`, so a panel dragged to full height doesn't leave the home panel full-screen
   snapGroup?: string;            // joins the shared `home-main` snap group
   onHeightChange?: (height: number) => void;  // forwarded to the map's camera padding
 };
