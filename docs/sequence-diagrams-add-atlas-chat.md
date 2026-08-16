@@ -80,7 +80,7 @@ sequenceDiagram
         API->>Progress: mark cancelled and task.cancel() when registered
         Progress-->>Pipeline: Cooperative cancellation signal
         API-->>APIClient: {cancelled: true/false}
-        App->>App: Return to ImportScreen; do not save candidates
+        App->>App: Return to ImportScreen, do not save candidates
     else User closes analysis UI but keeps task running
         User->>App: Dismiss analysis overlay
         App->>App: Keep request alive in background
@@ -194,7 +194,7 @@ sequenceDiagram
         Discover-->>API: ParseResponse with locations and provisional metadata
         API-->>APIClient: Recommendations
         APIClient-->>Builder: Candidate DraftPlace list
-        Builder->>Builder: Up to three fill attempts; local name/radius/bounds filtering
+        Builder->>Builder: Up to three fill attempts, local name/radius/bounds filtering
         Builder->>Home: Render green recommendation markers
         User->>Builder: Accept or dismiss individual recommendations
         Builder->>Builder: Move accepted candidates into ordered items
@@ -338,7 +338,7 @@ sequenceDiagram
                 APIClient-->>ChatUI: Update status without exposing arguments/reasoning
             end
             alt propose_create_atlas or research_screen_locations returns proposal
-                Agent->>Agent: Stop loop; proposal is user-visible completion state
+                Agent->>Agent: Stop loop, proposal is user-visible completion state
             else Six steps exhausted without safe result
                 Agent->>Agent: Return partial/max-steps response or narrow-request message
             end
@@ -348,7 +348,7 @@ sequenceDiagram
     alt Timeout at 90 seconds
         Agent-->>API: {status: timeout, partial: true}
         API-->>APIClient: complete/error-compatible response
-        APIClient-->>ChatUI: Show retry message; do not attach stale card
+        APIClient-->>ChatUI: Show retry message, do not attach stale card
     else Agent exception
         Agent-->>API: {status: error, partial: true}
         API-->>APIClient: NDJSON error event
@@ -369,7 +369,7 @@ sequenceDiagram
         ChatUI->>APIClient: AbortController.abort()
         APIClient-->>ChatUI: Stop local token queue and mark request inactive
         ChatUI->>ChatUI: Ignore any late complete payload from old request
-        Note over API,Agent: Server/provider work may still finish; Chat Stop is not a guaranteed provider kill switch
+        Note over API,Agent: Server/provider work may still finish, Chat Stop is not a guaranteed provider kill switch
     else No pending action
         ChatUI-->>User: Continue normal conversation
     else User rejects proposal
@@ -379,7 +379,7 @@ sequenceDiagram
         API->>Session: Record rejection audit event and clear action
         Session->>DB: Persist confirmation event
         API-->>ChatUI: {status: recorded}
-        ChatUI->>ChatUI: Remove action card; no domain write
+        ChatUI->>ChatUI: Remove action card, no domain write
     else User accepts save places proposal
         User->>ChatUI: Tap Save
         ChatUI->>Domain: savePlaces(action.places)
@@ -416,7 +416,7 @@ sequenceDiagram
 
     alt Domain write fails after user acceptance
         Domain-->>ChatUI: Error
-        ChatUI-->>User: “We could not apply this change”; do not record successful confirmation
+        ChatUI-->>User: “We could not apply this change”, do not record successful confirmation
         ChatUI->>ChatUI: Keep proposal actionable for retry
     end
 ```
@@ -457,4 +457,3 @@ sequenceDiagram
 3. 工具结果为空、候选无法 geocode、区域不匹配或外部 provider 超时，都不能自动变成已保存地点。
 4. 模型循环最多 6 个步骤、总计 90 秒；proposal 形成后立即结束循环。耗尽步骤、超时或异常时返回 partial/error/timeout，而不是无限调用。
 5. `pending_action` 不是持久化成功标志。只有 `AIChatBox` 在用户点击确认后调用 `savePlaces()`、`createAtlas()`、`addAtlasOwnedPlaces()` 或 special-place domain service，才会产生真实数据写入；`/chat/actions/confirm` 随后记录审计事实。
-
