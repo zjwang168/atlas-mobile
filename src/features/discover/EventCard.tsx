@@ -9,6 +9,7 @@
 
 import { sizedEventImage } from '@/services/events/eventsService';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { elevation } from '@/theme/elevation';
 import { Text } from '@/components/ui/text';
 import type { EventCategory, LocalEvent } from '@/types/event';
 import { CalendarBlankIcon } from 'phosphor-react-native/src/icons/CalendarBlank';
@@ -141,15 +142,21 @@ export const EventCard = memo(function EventCard({ event, onPress }: EventCardPr
   const { Icon, color, label } = categoryStyle(event.category);
   const when = formatWhen(event);
 
+  // Shell, thumbnail and copy all mirror AllPlaces' atlasRow — the two panes of
+  // the places sheet render the same list, so they can't drift apart.
   return (
     <PressableScale
       accessibilityRole="button"
       accessibilityLabel={event.title}
       onPress={handlePress}
       scaleTo={0.985}
+      style={elevation.card}
       className="flex-row items-center gap-4 rounded-[20px] border-[0.5px] border-border bg-card py-2 pl-2 pr-5"
     >
-      <View className="h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-xl bg-muted">
+      <View
+        style={{ borderCurve: 'continuous', backgroundColor: 'rgba(60,60,67,0.06)' }}
+        className="h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-xl"
+      >
         {event.image_url ? (
           <Image
             source={{ uri: sizedEventImage(event.image_url, ROW_THUMBNAIL_WIDTH)! }}
@@ -162,12 +169,12 @@ export const EventCard = memo(function EventCard({ event, onPress }: EventCardPr
       </View>
 
       <View className="flex-1 gap-1">
-        <Text numberOfLines={1} className="text-base font-semibold leading-[22px] text-text-primary">
+        <Text numberOfLines={1} className="bodyMedium text-text-primary">
           {event.title}
         </Text>
 
         {when ? (
-          <Text numberOfLines={1} className="text-[13px] leading-[18px] text-text-secondary">
+          <Text numberOfLines={1} className="bodySmallMedium text-text-secondary">
             {when}
           </Text>
         ) : null}
@@ -186,7 +193,7 @@ export const EventCard = memo(function EventCard({ event, onPress }: EventCardPr
         </View>
       </View>
 
-      <CaretRightIcon size={16} weight="bold" color="#C7C7C7" />
+      <CaretRightIcon size={16} weight="bold" color="#8A8A8A" />
     </PressableScale>
   );
 });

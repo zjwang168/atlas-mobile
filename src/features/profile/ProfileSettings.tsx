@@ -37,6 +37,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mockUser } from '../../../mock-data/mockUser';
 import { fetchPlans } from '../../services/plan/planService';
 import { signOut, supabase } from '../../services/supabase/supabaseClient';
+import { elevation } from '../../theme/elevation';
 import { typography } from '../../theme/typography';
 import TopBlurFade from '../../components/ui/top-blur-fade';
 import { useHome } from '../home/HomeContext';
@@ -49,7 +50,7 @@ const COLOR = {
   secondary: '#717171',
   tertiary: '#B0B0B0',
   border: '#EBEBEB',
-  destructive: '#FF3B4D',
+  destructive: '#E5484D',
 } as const;
 
 const NOTIFICATIONS_KEY = '@atlas/profile/notifications-enabled';
@@ -128,7 +129,7 @@ function StatCard({ value, label }: { value: number; label: string }) {
   return (
     <View style={styles.statCard}>
       <Text style={[typography.h3, styles.statValue]}>{value}</Text>
-      <Text style={[typography.bodySmall, styles.statLabel]}>{label}</Text>
+      <Text style={[typography.captionMedium, styles.statLabel]}>{label}</Text>
     </View>
   );
 }
@@ -491,15 +492,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  headerTitle: { color: COLOR.text, letterSpacing: -0.17 },
+  headerTitle: { color: COLOR.text },
   glassButtonShadow: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 24,
+    ...elevation.floatingButton,
   },
   glassButton: {
     width: 44,
@@ -536,12 +534,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  profileName: { maxWidth: '86%', color: COLOR.text, fontWeight: '500', letterSpacing: -0.22 },
+  // h2 at Medium with no tracking — a one-off, so it overrides the token here
+  // rather than earning one of its own.
+  profileName: { maxWidth: '86%', color: COLOR.text, fontWeight: '500', letterSpacing: 0 },
   statsRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginTop: 24 },
   statCard: {
     flex: 1,
     minWidth: 0,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 16,
     borderCurve: 'continuous',
@@ -554,12 +554,13 @@ const styles = StyleSheet.create({
     shadowRadius: 9,
   },
   statValue: { color: COLOR.text, textAlign: 'center' },
-  statLabel: { color: COLOR.secondary },
+  // -1% tracking, which the shared captionMedium token doesn't carry.
+  statLabel: { color: COLOR.secondary, letterSpacing: -0.14 },
   sections: { gap: 16, marginTop: 24 },
   sectionLabel: { color: COLOR.tertiary, paddingHorizontal: 16, marginBottom: 4 },
   card: {
     marginHorizontal: 16,
-    borderRadius: 18,
+    borderRadius: 20,
     borderCurve: 'continuous',
     overflow: 'hidden',
     backgroundColor: COLOR.card,
@@ -567,7 +568,7 @@ const styles = StyleSheet.create({
   multiRowCard: {
     paddingHorizontal: 16,
     paddingVertical: 14,
-    gap: 20,
+    gap: 24,
   },
   settingsRow: {
     minHeight: 52,
@@ -584,9 +585,9 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   rowLeading: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
-  rowLabel: { color: COLOR.text, letterSpacing: -0.16 },
+  rowLabel: { color: COLOR.text },
   rowPressed: { backgroundColor: 'rgba(0,0,0,0.035)' },
   trailingName: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 },
-  trailingText: { color: COLOR.secondary, letterSpacing: -0.16, flexShrink: 1 },
+  trailingText: { color: COLOR.secondary, flexShrink: 1 },
   destructiveText: { color: COLOR.destructive },
 });

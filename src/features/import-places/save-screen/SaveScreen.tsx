@@ -538,7 +538,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   rowText: { flex: 1, gap: 4 },
-  rowName: { ...typography.h3, color: COLOR.textPrimary, letterSpacing: -0.17 },
+  rowName: { ...typography.h3, color: COLOR.textPrimary },
   rowSubtitle: { ...typography.bodySmall, color: COLOR.textSecondary, letterSpacing: -0.14 },
   sentimentChip: {
     alignSelf: 'flex-start',

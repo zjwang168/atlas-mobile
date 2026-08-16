@@ -993,7 +993,6 @@ const styles = StyleSheet.create({
   menuTitle: {
     ...typography.h3,
     color: COLOR.textPrimary,
-    letterSpacing: -0.17,
   },
   menuBody: {
     gap: 20,
@@ -1032,18 +1031,12 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   menuCardTitle: {
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: '600',
+    ...typography.subheader,
     color: COLOR.textPrimary,
-    letterSpacing: -0.16,
   },
   menuCardSubtitle: {
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '400',
+    ...typography.caption,
     color: COLOR.textSecondary,
-    letterSpacing: -0.14,
   },
   menuIllustrationSlot: {
     width: 56,

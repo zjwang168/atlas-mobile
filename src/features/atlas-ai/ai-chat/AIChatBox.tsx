@@ -72,6 +72,7 @@ import { createAtlas } from '@/services/atlas/atlasService';
 import { deletePlace, isSamePlace, queueSavedPlacePhotoBackfill, savePlaces, saveSpecialPlace } from '@/services/place/placeService';
 import { supabase } from '@/services/supabase/supabaseClient';
 import type { ParsedPlace } from '@/services/import/importService';
+import { elevation } from '@/theme/elevation';
 import { typography } from '@/theme/typography';
 
 const COLOR = {
@@ -2492,7 +2493,7 @@ const styles = StyleSheet.create({
     width: 96,
     height: 44,
     borderRadius: 22,
-    boxShadow: '0 10px 26px rgba(0,0,0,0.16)',
+    ...elevation.floatingButton,
   },
   headerActionGroupShadowSingle: {
     width: 48,
@@ -2522,7 +2523,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    boxShadow: '0 10px 26px rgba(0,0,0,0.16)',
+    ...elevation.floatingButton,
   },
   glassButton: {
     width: 44,
