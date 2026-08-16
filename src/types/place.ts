@@ -53,6 +53,10 @@ export type PlaceDetail = Place & {
   note?: string;
   phoneNumber?: string;
   links?: PlaceLink[];
+  /** Star rating out of 5. No column backs this yet — the detail header's
+      rating chip is gated on it, so it stays absent rather than showing a
+      placeholder, and appears the day a rating is persisted. */
+  rating?: number;
   savedAt: string;
   // Below: mirror `places` table columns not yet surfaced by any UI — optional
   // and unwired until a feature needs them.

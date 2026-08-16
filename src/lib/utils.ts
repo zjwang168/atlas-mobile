@@ -17,6 +17,7 @@ const twMerge = extendTailwindMerge({
         'bodyMedium',
         'bodyEmphasis',
         'bodySmall',
+        'bodySmallRelaxed',
         'bodySmallMedium',
         'bodySmallEmphasis',
         'caption',

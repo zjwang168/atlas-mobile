@@ -1,14 +1,18 @@
 import { Text } from '@/components/ui/text';
+import { typography } from '@/theme/typography';
 import type { Icon } from 'phosphor-react-native';
 import { CoffeeBeanIcon } from 'phosphor-react-native/src/icons/CoffeeBean';
 import { ForkKnifeIcon } from 'phosphor-react-native/src/icons/ForkKnife';
 import { memo } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
+type PlaceTagChipSize = 'sm' | 'md';
+
 type PlaceTagChipProps = {
   label: string;
   icon?: Icon;
   iconColor?: string;
+  size?: PlaceTagChipSize;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -26,15 +30,18 @@ export const PlaceTagChip = memo(function PlaceTagChip({
   label,
   icon,
   iconColor,
+  size = 'sm',
   style,
 }: PlaceTagChipProps) {
   const derived = iconForLabel(label);
   const Glyph = icon ?? derived.icon;
 
   return (
-    <View style={[styles.chip, style]}>
+    <View style={[styles.chip, size === 'md' && styles.chipMd, style]}>
       <Glyph size={14} weight="fill" color={iconColor ?? derived.color} />
-      <Text numberOfLines={1} style={styles.label}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.label, size === 'md' && styles.labelMd]}>
+        {label}
+      </Text>
     </View>
   );
 });
@@ -51,6 +58,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 3,
   },
+  // The label sits closer to the leading glyph than to the pill's trailing
+  // edge, so the horizontal padding is asymmetric rather than centred.
+  chipMd: {
+    minHeight: 28,
+    paddingLeft: 8,
+    paddingRight: 10,
+  },
   // 13pt Medium — the type scale has no 13 tier, so this stays a local style.
   label: {
     flexShrink: 1,
@@ -58,5 +72,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     lineHeight: 18,
+  },
+  labelMd: {
+    ...typography.captionMedium,
   },
 });

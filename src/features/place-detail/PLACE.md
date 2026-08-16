@@ -2,100 +2,79 @@
 
 ## Overview
 
-`PlaceDetail` is a floating panel that renders rich information about a single saved place. It is triggered by tapping a map marker or list row, and sits above the map as an independent overlay. The panel has three discrete snap states driven by a drag handle.
+`PlaceDetail` is a floating panel that renders what we know about a single saved place — the AI's summary, the posts it was parsed out of, the user's own note — triggered by tapping a map marker or list row, and sitting above the map as an independent overlay.
 
 ## File Structure
 
 ```
 src/features/place-detail/
-  PlaceDetail.tsx                        ← panel container, snap logic, PlaceHeader, PlaceCompactView
+  PlaceDetail.tsx                        ← panel container; composes the header and the card stack
   place-detail-sections/
-    PlaceOverviewSection.tsx             ← thumbnail, address, open status, action row
-    PlaceInfoSection.tsx                 ← tags, summary, visit strategy, links, note
+    DetailCard.tsx                       ← shared card shell + row divider
+    PlaceDetailHeader.tsx                ← thumbnail, name, chips, dismiss
+    PlaceAboutCard.tsx                   ← AI summary + photos
+    PlaceSourcesCard.tsx                 ← the posts this place came from
+    PlaceNoteCard.tsx                    ← the user's own note
+    PlaceCommunityNotesCard.tsx          ← what other people said (no data yet)
+    PlaceLocationCard.tsx                ← address / phone rows
+    sourceMeta.ts                        ← source_type → platform label, logo, colour
   utils/
     placeHours.ts                        ← getOpenStatus() — derives open/closed at runtime
+    usePlaceSources.ts                   ← loads a place's provenance
   PLACE.md                               ← this document
 ```
 
 Related files outside this directory:
 ```
 src/types/place.ts                         ← canonical types: Place, PlaceDetail, DaySchedule, PlaceTag, PlaceLink
-src/services/place/placeService.ts         ← toPlaceDetail(row) adapts a saved-place DB row to PlaceDetail
+src/services/place/placeService.ts         ← toPlaceDetail(row), fetchPlaceSources(placeId)
 ```
 
 ## Data Model
 
-`Place` is the base type — minimal identity used for map markers and list rows. `PlaceDetail` extends it with rich content needed by the detail panel.
+`Place` is the base type — minimal identity used for map markers and list rows. `PlaceDetail` extends it with the rich content this panel renders. See [TYPES.md](../../types/TYPES.md).
 
-```ts
-type Place = {
-  id: string;
-  name: string;
-  subtitle: string;       // e.g. "Omakase · Belltown"
-  latitude: number;
-  longitude: number;
-};
+Not everything on `PlaceDetail` is populated. `summary` (`places.description`), `address`, `note`, `category` and the thumbnail are real; `schedule`, `visitStrategy`, `links`, `phoneNumber` and `rating` have nothing writing to them yet. Sections gate on their own data rather than rendering empty frames — see [PLACE-DETAIL-SECTIONS.md](place-detail-sections/PLACE-DETAIL-SECTIONS.md).
 
-type PlaceDetail = Place & {
-  address: string;        // the place's own address; falls back to the import's region on rows saved before it was persisted
-  thumbnailUrl: string;   // the real saved photo, or '' — a photoless place renders PlaceCover instead
-  schedule: DaySchedule[];
-  tags: PlaceTag[];
-  collections?: PlaceTag[];
-  summary: string;        // the AI's words about the place, from the source it was parsed out of
-  visitStrategy: string;
-  note?: string;
-  phoneNumber?: string;
-  links?: PlaceLink[];
-};
-```
-
-## Snap States
-
-| State | Height | Content |
-|---|---|---|
-| `compact` | Dynamic (measured from layout) | `PlaceCompactView` — name, address, share/map/close |
-| `default` | 60% of screen | `PlaceHeader` + `PlaceOverviewSection` + `PlaceInfoSection` |
-| `full` | 100% of screen | Same as default, with `paddingTop: insets.top` |
+Provenance is loaded separately from the place row: `usePlaceSources(placeId)` reads `place_sources`, which is one row per post a place was parsed out of, each carrying that post's own AI summary. This is the one-to-many that makes "several posts describing the same place from different angles" expressible.
 
 ## Component Hierarchy
 
 ```
 PlaceDetail (ContentPanel)
-├── [compact snap]
-│   └── PlaceCompactView      ← tap anywhere → expand to default
-│       ├── name + address
-│       └── share / map / dismiss buttons
-│
-└── [default / full snap]
-    ├── PlaceHeader            ← place.name title + dismiss button
-    └── ScrollView
-        ├── PlaceOverviewSection   ← thumbnail, address, open status, action row (fills height to align buttons with the thumbnail bottom)
-        └── PlaceInfoSection       ← tags, summary, collections, visit strategy, links, note
+├── PlaceDetailHeader          ← fixed; thumbnail, name, chips, dismiss
+├── ScrollView                 ← the card stack
+│   ├── PlaceAboutCard
+│   ├── PlaceSourcesCard
+│   ├── PlaceNoteCard
+│   ├── PlaceCommunityNotesCard
+│   └── PlaceLocationCard
+└── TopBlurFade (edge="bottom")  ← fades the stack out at the sheet's bottom edge
 ```
 
 ## Behaviour
 
-In `PlaceInfoSection`, **Tags** and **Note** always render their section header regardless of content; every other section (Summary, Collection, Visit Strategy, Links) is hidden entirely when it has no content to show.
+The header stays fixed while the card stack scrolls under it, so dismiss is always reachable.
 
-The address line under the place name is dropped entirely — element and its spacing — when the place has no address, rather than rendering blank and holding its row height.
+`usePlaceSources` clears before each read, so the previous place's sources never linger under a new place's name. It returns `[]` for both "no provenance" and "not loaded yet" — `fetchPlaceSources` never throws — so sections treat `[]` as nothing to show rather than as a loading state.
 
-**Note** is editable: tapping its pencil button swaps the static text for a multiline input (draft state, not yet saved); the header then shows cancel/save (✕/✓) instead of the pencil. Save calls `HomeContext.updateSavedPlaceNote(id, note)`, which writes through the local cache immediately (offline-safe) and syncs to Supabase in the background. Cancel discards the draft. Switching to a different place resets any in-progress edit.
+Per-section states (sources expand/collapse, name and note editing) are documented in [PLACE-DETAIL-SECTIONS.md](place-detail-sections/PLACE-DETAIL-SECTIONS.md).
 
-## Props
+## API
 
 ```ts
 type PlaceDetailProps = {
   placeId: string | null;        // null = hidden; non-null = slide up and show
   onDismiss: () => void;
   onEdit: (place: PlaceDetail) => void;
-  onHeightChange?: (height: number) => void;  // reports live panel height so the caller can pad the map to match, same as HomePanel
+  snapGroup?: string;            // shared settled-snap memory, see CONTENT-PANEL.md
+  onHeightChange?: (height: number) => void;  // live panel height, so the caller can pad the map to match
 };
 ```
 
 Changing `placeId` from `null → string` triggers the enter animation and looks the place up in `HomeContext.savedPlaces` (converted via `toPlaceDetail`). If no saved place matches the id, a "Place not found" state is shown instead. Changing back to `null` triggers the dismiss animation.
 
-`PlaceDetail` is opened via `HomeContext`'s `placeDetail` overlay (`{ kind: 'placeDetail'; placeId; returnTo?: Overlay }`, see `HOME.md`). `HomeScreen` owns the single `<PlaceDetail>` instance and restores `overlay` to `returnTo` on dismiss instead of always going to `{ kind: 'none' }`, so closing the panel returns to whichever panel opened it (e.g. `AtlasDetail`) rather than the home screen. The trigger is responsible for passing its own current overlay as `returnTo` — see `PlaceCard.tsx` (`../my-places/all-places/PlaceCard.tsx`), the only place that opens this overlay.
+`PlaceDetail` is opened via `HomeContext`'s `placeDetail` overlay (`{ kind: 'placeDetail'; placeId; returnTo?: Overlay }`, see `HOME.md`). `HomeScreen` owns the single `<PlaceDetail>` instance and restores `overlay` to `returnTo` on dismiss instead of always going to `{ kind: 'none' }`, so closing the panel returns to whichever panel opened it (e.g. `AtlasDetail`) rather than the home screen. The trigger is responsible for passing its own current overlay as `returnTo` — see `PlaceCard.tsx` (`../my-places/all-places/PlaceCard.tsx`), the only place that opens this overlay. Dismissing all the way back to the home screen also resets the shared snap group to `default`, so a panel the user dragged to full height doesn't leave the home panel stuck full-screen; dismissing into another overlay leaves the group alone.
 
 ## Hours Utility (`utils/placeHours.ts`)
 
@@ -116,8 +95,23 @@ export function formatDaySlots(slots: TimeSlot[]): string
 export const orderedDays: DayOfWeek[]
 ```
 
+No section calls this today: nothing populates `schedule`, and an empty one makes `getOpenStatus` report every place as closed. The utility is kept for the day hours are persisted.
+
+## Sources Hook (`utils/usePlaceSources.ts`)
+
+```ts
+// A place's recorded origins, newest first; [] until the read lands, and [] for a place with none
+export function usePlaceSources(placeId: string | null): PlaceSource[]
+```
+
 ## Styling
 
-- NativeWind utility classes for layout and spacing
-- `useColorScheme` for icon colors (never hardcode light-mode hex in dark-mode-aware components)
-- `expo-blur` `BlurView` for the panel background (iOS system material)
+- NativeWind token classes for colour; `src/theme/typography.ts` tokens for type
+- `useColorScheme` for icon colours (never hardcode light-mode hex in dark-mode-aware components)
+- `expo-blur` `BlurView` for the panel background, via `ContentPanel`
+
+## Related docs
+
+- [PLACE-DETAIL-SECTIONS.md](place-detail-sections/PLACE-DETAIL-SECTIONS.md) — the header and every card
+- [CONTENT-PANEL.md](../../components/content-panel/CONTENT-PANEL.md) — the sheet this renders into
+- [SERVICES.md](../../services/SERVICES.md) — `toPlaceDetail`, `fetchPlaceSources`

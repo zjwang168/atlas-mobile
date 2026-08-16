@@ -1,21 +1,24 @@
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import { useEffect, useState } from 'react';
-import {
-  Pressable,
-  ScrollView,
-  TextInput,
-  useColorScheme,
-  View,
-} from 'react-native';
+import TopBlurFade from '@/components/ui/top-blur-fade';
+import { MagnifyingGlassIcon } from 'phosphor-react-native/src/icons/MagnifyingGlass';
+import { useEffect, useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { useHomePlaces } from '../home/HomeContext';
-import { toPlaceDetail, updatePlaceName } from '../../services/place/placeService';
 import ContentPanel from '../../components/content-panel/ContentPanel';
+import { toPlaceDetail } from '../../services/place/placeService';
 import { PlaceDetail as PlaceDetailType } from '../../types/place';
-import PlaceInfoSection from './place-detail-sections/PlaceInfoSection';
-import PlaceOverviewSection from './place-detail-sections/PlaceOverviewSection';
+import { useHomePlaces } from '../home/HomeContext';
+import { PlaceAboutCard } from './place-detail-sections/PlaceAboutCard';
+import {
+  PlaceCommunityNotesCard,
+  type CommunityNote,
+} from './place-detail-sections/PlaceCommunityNotesCard';
+import { PlaceDetailHeader } from './place-detail-sections/PlaceDetailHeader';
+import { PlaceLocationCard } from './place-detail-sections/PlaceLocationCard';
+import { PlaceNoteCard } from './place-detail-sections/PlaceNoteCard';
+import { PlaceSourcesCard } from './place-detail-sections/PlaceSourcesCard';
+import { usePlaceSources } from './utils/usePlaceSources';
 
 type PlaceDetailProps = {
   placeId: string | null;
@@ -25,11 +28,24 @@ type PlaceDetailProps = {
   onHeightChange?: (height: number) => void;
 };
 
-export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapGroup, onHeightChange }: PlaceDetailProps) {
+/** Height of the white scrim that fades the card stack out at the sheet's bottom edge. */
+const BOTTOM_FADE_HEIGHT = 68;
+
+/** Nothing produces other people's notes yet — see PlaceCommunityNotesCard. */
+const NO_COMMUNITY_NOTES: CommunityNote[] = [];
+
+export default function PlaceDetail({
+  placeId,
+  onDismiss,
+  onEdit: _onEdit,
+  snapGroup,
+  onHeightChange,
+}: PlaceDetailProps) {
   const { savedPlaces } = useHomePlaces();
   const [place, setPlace] = useState<PlaceDetailType | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const sources = usePlaceSources(placeId);
 
   useEffect(() => {
     if (placeId) {
@@ -48,6 +64,13 @@ export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapG
     }
   }, [placeId, savedPlaces]);
 
+  // Only ever one photo today (Wikipedia's, matched on the place name), but the
+  // About card takes a list so extra photos need no change here.
+  const photos = useMemo(
+    () => (place?.thumbnailUrl ? [place.thumbnailUrl] : []),
+    [place?.thumbnailUrl],
+  );
+
   return (
     <ContentPanel
       snapGroup={snapGroup}
@@ -61,18 +84,12 @@ export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapG
           if (notFound) {
             return (
               <View className="flex-1 items-center justify-center px-8">
-                <Ionicons name="search-outline" size={48} color="#999" />
-                <Text className="mt-4 text-lg font-medium text-foreground">
-                  Place not found
-                </Text>
+                <MagnifyingGlassIcon size={48} color="#999" />
+                <Text className="mt-4 text-lg font-medium text-foreground">Place not found</Text>
                 <Text className="mt-2 text-center text-sm text-text-tertiary">
-                  We couldn't find details for this place. It may have been removed.
+                  We couldn&apos;t find details for this place. It may have been removed.
                 </Text>
-                <Button
-                  className="mt-6"
-                  variant="outline"
-                  onPress={onDismiss}
-                >
+                <Button className="mt-6" variant="outline" onPress={onDismiss}>
                   <Text>Go back</Text>
                 </Button>
               </View>
@@ -80,22 +97,29 @@ export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapG
           }
           return null;
         }
+
         return (
           <>
-            <PlaceHeader
-              place={place}
-              onDismiss={onDismiss}
-            />
+            <PlaceDetailHeader place={place} onDismiss={onDismiss} />
+
             <ScrollView
               bounces
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
               onScroll={(e) => reportScrollY(e.nativeEvent.contentOffset.y)}
-              contentContainerStyle={{ paddingBottom: bottomInset + 56 }}
+              contentContainerStyle={[
+                styles.stack,
+                { paddingBottom: bottomInset + BOTTOM_FADE_HEIGHT },
+              ]}
             >
-              <PlaceOverviewSection place={place} />
-              <PlaceInfoSection place={place} />
+              <PlaceAboutCard summary={place.summary} photos={photos} />
+              <PlaceSourcesCard sources={sources} />
+              <PlaceNoteCard place={place} />
+              <PlaceCommunityNotesCard notes={NO_COMMUNITY_NOTES} />
+              <PlaceLocationCard place={place} />
             </ScrollView>
+
+            <TopBlurFade edge="bottom" height={BOTTOM_FADE_HEIGHT} scrim={0.9} intensity={20} />
           </>
         );
       }}
@@ -103,154 +127,11 @@ export default function PlaceDetail({ placeId, onDismiss, onEdit: _onEdit, snapG
   );
 }
 
-function PlaceHeader({
-  place,
-  onDismiss,
-}: {
-  place: PlaceDetailType;
-  onDismiss: () => void;
-}) {
-  const colorScheme = useColorScheme();
-  const foreground = colorScheme === 'dark' ? '#fafafa' : '#0a0a0a';
-  const [editing, setEditing] = useState(false);
-  const [draftName, setDraftName] = useState(place.name);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!editing) setDraftName(place.name);
-  }, [editing, place.name]);
-
-  const saveName = async () => {
-    const nextName = draftName.trim();
-    if (!nextName || saving || nextName === place.name) {
-      if (nextName === place.name) setEditing(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      await updatePlaceName(place.id, nextName);
-      setEditing(false);
-    } catch (error) {
-      console.warn('[PlaceDetail] could not rename place:', error);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <View className="flex-row items-center px-4 pb-2 pt-1">
-      {/* Center: place name title */}
-      {editing ? (
-        <TextInput
-          accessibilityLabel="Edit place name"
-          autoFocus
-          value={draftName}
-          onChangeText={setDraftName}
-          onSubmitEditing={() => { void saveName(); }}
-          returnKeyType="done"
-          editable={!saving}
-          selectTextOnFocus
-          style={{ flex: 1, height: 44, color: foreground, fontSize: 24, fontWeight: '700', paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#A1A1AA' }}
-        />
-      ) : (
-        <Text className="flex-1 h2 text-foreground" numberOfLines={1}>
-          {place.specialRole ? place.specialRole[0].toUpperCase() + place.specialRole.slice(1) : place.name}
-        </Text>
-      )}
-
-      {editing ? (
-        <View className="flex-row items-center">
-          <Pressable accessibilityRole="button" accessibilityLabel="Cancel editing place name" onPress={() => { setDraftName(place.name); setEditing(false); }} disabled={saving} style={{ width: 42, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-            <Ionicons name="close" size={22} color="#71717A" />
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="Save place name" onPress={() => { void saveName(); }} disabled={saving || !draftName.trim()} style={{ width: 42, height: 44, alignItems: 'center', justifyContent: 'center', opacity: saving || !draftName.trim() ? 0.45 : 1 }}>
-            <Ionicons name="checkmark" size={24} color="#12C170" />
-          </Pressable>
-        </View>
-      ) : (
-        <Pressable accessibilityRole="button" accessibilityLabel="Edit place name" onPress={() => setEditing(true)} style={{ width: 42, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-          <Ionicons name="pencil-outline" size={20} color={foreground} />
-        </Pressable>
-      )}
-
-      {/* Right: close button */}
-      <Button
-        accessibilityLabel="Dismiss place details"
-        onPress={onDismiss}
-        size="icon"
-        variant="ghost"
-        className="h-12 w-12 rounded-full bg-background"
-      >
-        <Ionicons name="close" size={24} color={foreground} />
-      </Button>
-    </View>
-  );
-}
-
-function PlaceCompactView({
-  place,
-  onDismiss,
-  onExpand,
-}: {
-  place: PlaceDetailType;
-  onDismiss: () => void;
-  onExpand: () => void;
-}) {
-  const colorScheme = useColorScheme();
-  const foreground = colorScheme === 'dark' ? '#fafafa' : '#18181B';
-
-  return (
-    <Pressable
-      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 8 }}
-      onPress={onExpand}
-    >
-      <View className="flex-1">
-        <Text numberOfLines={1} className="text-lg font-semibold text-foreground">
-          {place.name}
-        </Text>
-        {/* Whole element, not just its text: `mt-0.5` lives on it, so leaving
-            an empty one behind would still push the row taller. */}
-        {place.address ? (
-          <Text numberOfLines={1} className="mt-0.5 text-xs text-text-tertiary">
-            {place.address}
-          </Text>
-        ) : null}
-      </View>
-
-      <View className="flex-row items-center gap-1">
-        <Button
-          accessibilityLabel="Share place"
-          onPress={(e) => e.stopPropagation()}
-          size="icon"
-          variant="ghost"
-          className="rounded-full bg-background"
-        >
-          <Ionicons name="share-outline" size={19} color={foreground} />
-        </Button>
-
-        <Button
-          accessibilityLabel="Open in maps"
-          onPress={(e) => e.stopPropagation()}
-          size="icon"
-          variant="ghost"
-          className="rounded-full bg-background"
-        >
-          <Ionicons name="map-outline" size={19} color={foreground} />
-        </Button>
-
-        <Button
-          accessibilityLabel="Dismiss place details"
-          onPress={(e) => {
-            e.stopPropagation();
-            onDismiss();
-          }}
-          size="icon"
-          variant="ghost"
-          className="rounded-full bg-background"
-        >
-          <Ionicons name="close" size={20} color={foreground} />
-        </Button>
-      </View>
-    </Pressable>
-  );
-}
+const styles = StyleSheet.create({
+  stack: {
+    paddingHorizontal: 16,
+    // No paddingTop — the gap below the header is the header's own
+    // paddingBottom, so it stays put instead of scrolling away with the stack.
+    gap: 12,
+  },
+});

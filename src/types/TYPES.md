@@ -12,10 +12,10 @@ import type { Place, PlaceDetail, PlaceSaveOutcome, PlaceTag, PlaceLink, DaySche
 |---|---|
 | `Place` | Map markers, list rows — minimal identity + coordinates |
 | `PlaceSaveOutcome` | `'saved' \| 'duplicate'` — what a save turned out to do, since `savePlaces()` dedups and a matched place creates no row. Produced by `usePlaceSearch`, rendered by `SaveAffordance`, consumed by both search surfaces |
-| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. `category` is populated by `toPlaceDetail()` and read by `PlaceCover` to pick a thumbnail colour. The rest of the `places` table columns (`description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) are carried as optional fields but reserved — not yet populated or consumed by any UI |
-| `PlaceTag` | PlaceCard tags, PlaceInfoSection, Badge pills |
-| `PlaceLink` | PlaceInfoSection link rows |
-| `DaySchedule` / `TimeSlot` | `placeHours.ts` utility, PlaceOverviewSection |
+| `PlaceDetail` | Place detail panel, AllPlaces list, AddPlace picker — extends `Place` with `savedAt`, schedule, tags, links, etc. `category` is populated by `toPlaceDetail()` and read by `PlaceCover` to pick a thumbnail colour. `rating` has no column behind it — the detail header's rating chip is gated on it and stays absent until one exists. The rest of the `places` table columns (`description`, `aiSummary`, `city`/`region`/`country`, `visibility`, `recommended`, `externalPlaceId`, `externalSource`, `createdBy`, `updatedAt`) are carried as optional fields but reserved — not yet populated or consumed by any UI |
+| `PlaceTag` | PlaceCard tags, Badge pills |
+| `PlaceLink` | Reserved — nothing populates `PlaceDetail.links` yet |
+| `DaySchedule` / `TimeSlot` | `placeHours.ts` utility. Reserved — nothing populates `PlaceDetail.schedule`, so no UI reads it |
 | `DayOfWeek` | `placeHours.ts` — `'monday'` … `'sunday'` |
 | `AtlasPlace` | Mirrors the `atlas_places` join table (renamed from `collection_places`), field names matching the DB row (`atlas_id`, `place_id`, `added_by`, `sort_order`, `created_at`) — read/written by `services/atlas/atlasPlacesService.ts` and exposed as `useHome().atlasPlaces`/`addPlacesToAtlas`/`removePlaceFromAtlas`, the same offline-first pattern as `SavedPlace`/`Atlas`; `AtlasDetail.tsx` resolves rows to `PlaceDetail` via `savedPlaces` + `toPlaceDetail()` (see `ATLAS-DETAIL.md`, `HOME.md`) |
 

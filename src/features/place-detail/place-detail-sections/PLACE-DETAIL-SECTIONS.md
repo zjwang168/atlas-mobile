@@ -2,38 +2,61 @@
 
 ## Overview
 
-Section components that compose the `PlaceDetail` overlay. Each section receives a `PlaceDetail` object and renders one logical slice of the detail view.
+The header and the stack of cards that compose the `PlaceDetail` overlay — each card is one slice of what we know about a place, and hides itself when it has nothing real to show.
 
-## File Structure
+## Behaviour
 
-```
-src/features/place-detail/place-detail-sections/
-  PlaceOverviewSection.tsx    ← hero row: address, open status, action buttons, thumbnail
-  PlaceInfoSection.tsx        ← tags, collections, summary, visit strategy, links, note
-  PLACE-DETAIL-SECTIONS.md   ← this document
-```
+Every card shares one shell (`DetailCard`) so the stack reads as one object rather than a set of differently-drawn panels.
 
-## PlaceOverviewSection
+A card renders only when its data exists: no summary and no photo hides About, no recorded provenance hides Sources, no address and no phone hides Location. `PlaceNoteCard` is the exception — it is the one section that exists to be written to, so it renders its own empty state and stays reachable. Opening hours have no card at all: nothing populates `schedule`, and deriving a status line from an empty one reports every place as closed.
 
-```ts
-type PlaceOverviewSectionProps = {
-  place: PlaceDetail;
-};
-```
+`PlaceCommunityNotesCard` always renders, currently as an empty state. Nothing produces other people's notes yet — places are still per-user rows, so there is no shared place entity to read them from. It fills in unchanged once one exists.
 
-Shows: place name, address, open/closed status line (derived from `place.schedule` via `getOpenStatus`), four action icon buttons (navigate, share, heart, ellipsis), and a thumbnail image. The thumbnail currently uses a static placeholder image. The address line is omitted entirely when the place has no address, so it contributes no spacing rather than rendering as a blank line.
+### Status
 
-## PlaceInfoSection
+`PlaceSourcesCard` is expanded or collapsed, toggled by its own pill; it starts expanded, because the per-source summaries are the point of the section rather than a detail behind a disclosure.
+
+`PlaceDetailHeader`'s name is either static or editing — long-press enters editing, and submitting or blurring saves via `updatePlaceName`. Long-press rather than tap, because the name sits inside a draggable sheet where a stray tap is easy and an accidental rename is not obviously undoable.
+
+`PlaceNoteCard` is either static or editing — the pencil enters editing and swaps the header actions for cancel/save. Save calls `HomeContext.updateSavedPlaceNote`, which writes through the local cache immediately and syncs in the background; cancel discards the draft. Switching to a different place resets any in-progress edit. The card labels itself private, so the default is stated rather than assumed.
+
+## API
 
 ```ts
-type PlaceInfoSectionProps = {
-  place: PlaceDetail;
-};
-```
+// The shared card shell and its row rule.
+export function DetailCard(props: { children: React.ReactNode; style?: StyleProp<ViewStyle> }): JSX.Element
+export function CardDivider(): JSX.Element
 
-Shows: tags (horizontal scroll of `Badge`s), collections (same), summary paragraphs, visit strategy paragraphs, tappable links (opens via `Linking.openURL`), and a note. Sections with no data are omitted. The Tags, Collection, and Links section headers have an add-button; Note has an edit-button — these are currently no-ops.
+// Thumbnail, name, category/rating chips, dismiss. Fixed above the scrolling stack.
+export function PlaceDetailHeader(props: { place: PlaceDetail; onDismiss: () => void }): JSX.Element
+
+// The AI's words about the place, plus whatever photos we hold for it.
+export function PlaceAboutCard(props: {
+  summary: string;
+  photos: string[];   // one photo spans the card; two or more become a horizontal strip
+}): JSX.Element | null
+
+// Every post the place was parsed out of, each with that post's own summary.
+export function PlaceSourcesCard(props: { sources: PlaceSource[] }): JSX.Element | null
+
+// The user's own note — editable, and labelled private.
+export function PlaceNoteCard(props: { place: PlaceDetail }): JSX.Element | null
+
+// What other people who saved this place said about it.
+export type CommunityNote = { id: string; text: string; author?: string };
+export function PlaceCommunityNotesCard(props: { notes: CommunityNote[] }): JSX.Element
+
+// Address and phone rows; each row appears only when that field has a value.
+export function PlaceLocationCard(props: { place: PlaceDetail }): JSX.Element | null
+
+// The platform badge for one source row — label, logo and brand colour.
+export type SourceMeta = { label: string; Logo: Icon; color: string };
+export function sourceMeta(sourceType: string | null, sourceUrl: string | null): SourceMeta
+```
 
 ## Related docs
 
-- [PLACE.md](../PLACE.md) — parent overlay that renders these sections
-- [TYPES.md](../../../types/TYPES.md) — `PlaceDetail`, `PlaceTag`, `PlaceLink` types
+- [PLACE.md](../PLACE.md) — the overlay that composes these
+- [SERVICES.md](../../../services/SERVICES.md) — `fetchPlaceSources`, `updatePlaceName`
+- [PLACE-TAG-CHIP.md](../../../components/place-tag-chip/PLACE-TAG-CHIP.md) — the header's category and rating chips
+- [TYPES.md](../../../types/TYPES.md) — `PlaceDetail`
