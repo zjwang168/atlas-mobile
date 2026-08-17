@@ -546,7 +546,9 @@ function HomeScreenContent({
         showUserLocation={locationStatus === 'granted' && !isSanFranciscoLocationTestEnabled}
       />
 
-      {!atlasMapState?.hideChrome ? (
+      {/* An Atlas owns the whole top of the map — its own back/edit controls
+          replace TopNav rather than stacking on top of it. */}
+      {!atlasMapState?.hideChrome && !atlasMapState?.overlay ? (
         <>
           <TopBlurFade />
           <TopNav
