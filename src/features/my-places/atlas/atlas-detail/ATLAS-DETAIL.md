@@ -11,7 +11,20 @@ A `ContentPanel` overlay — modeled on `PlaceDetail` (`../../../place-detail/Pl
 ### Status
 
 - **Hidden**: `atlasId` is `null` — panel slides out.
-- **Shown**: looks the atlas up in `useHome().atlases`. Header shows the atlas emoji + title with a dismiss button; compact snap shows a condensed row (emoji + title + dismiss). `AtlasHeader` sits outside/above the list, fixed; `AtlasOverviewSection.tsx` (this directory) is passed as the list's `ListHeaderComponent`, so it scrolls away with the rest of the content instead of staying pinned — showing a place count + description on the left with add/delete/share/edit/more action buttons, and the atlas emoji in a square (in place of a thumbnail) on the right. Add and delete are wired; share/edit/more are still no-ops.
+- **Shown**: looks the atlas up in `useHome().atlases`. The sheet reads as a trip: a fixed header carrying a cover, the title, and a `N days · M places` summary, then the day switcher, then the itinerary. Back and Edit are published to the shared map as `AtlasMapState.overlay` rather than living in the sheet, which frees the sheet's top row for the cover and title; Share sits in the header, and the route toggle stays in the panel because it changes what the list means, not just the camera. Compact snap shows a condensed row (emoji + title + dismiss).
+
+An Atlas has no cover of its own, so the first stop with a photo stands in for one.
+
+### Days
+
+Stops are grouped by `timeline_day` into ordered day tabs, with undated stops last. The grouping decides the whole layout:
+
+- **More than one group** — a tab row appears. Overview lists one summary card per day (badge, city, distance and place count, a strip of that day's photos); tapping a card opens that day's tab, which lists its stops as a numbered sequence.
+- **One group** — there is nothing to switch between, so the tab row is hidden and the stops are listed directly. A single-day trip never shows a "Day 1" tab it could not leave.
+
+A day's city is the one most of its stops name, and its distance is the straight-line path through them in order — not the driving distance, which only exists after the user asks for a route.
+
+Stops render a category chip only when the stop is also a saved place: `atlas_places` stores no category, so it is resolved from `savedPlaces` via `place_id` and a stop added straight from search has none. The same is true of the city a day is labelled with. `AtlasHeader` sits outside/above the list, fixed; `AtlasOverviewSection.tsx` (this directory) is passed as the list's `ListHeaderComponent`, so it scrolls away with the rest of the content instead of staying pinned — showing a place count + description on the left with add/delete/share/edit/more action buttons, and the atlas emoji in a square (in place of a thumbnail) on the right. Add and delete are wired; share/edit/more are still no-ops.
 
 The delete button (`trash-outline`, between edit and more) shows a native `Alert.alert` confirm ("Delete Atlas" / Cancel + destructive-styled Delete). The message states the current place count and clarifies those places stay in My Places and only lose their grouping in this atlas — deleting an atlas never deletes the underlying saved places. Confirming calls `useHome().deleteAtlas(atlasId)` and immediately dismisses the overlay (`setOverlay({ kind: 'none' })`) — there's no panel left to return to once the atlas is gone, so this doesn't go through the `returnTo` mechanism the way opening a sub-panel does.
 
@@ -32,6 +45,28 @@ type AtlasDetailProps = {
 ```
 
 `AtlasOverviewSection.tsx` (this directory) takes `{ atlas: Atlas; placeCount: number; onAddPress?: () => void; onDeletePress?: () => void }` and has no other exports.
+
+The sheet is composed from four co-located components and one derivation module:
+
+```ts
+// atlasItinerary.ts — the shape of a stop, and everything derived from the list
+export type AtlasDisplayPlace   // a stop's renderable fields; category/city are null unless it is also a saved place
+export type ItineraryItem       // one atlas_places row resolved against savedPlaces
+export type DayGroup            // one tab: day, label, city, items, distanceKm
+export function groupItemsByDay(items: ItineraryItem[]): DayGroup[]   // numbered days in order, undated last
+export function pathDistanceKm(items: ItineraryItem[]): number        // straight-line path through the stops
+export function atlasCoverUri(items: ItineraryItem[]): string | null  // first stop with a photo
+export function tripSummary(groups: DayGroup[], count: number): string  // "5 days · 8 places"
+export function formatDistanceKm(km: number): string
+
+export function AtlasDetailHeader(props: { title: string; summary: string; coverUri: string | null; onShare?: () => void })
+export function AtlasDayTabs(props: { tabs: AtlasTab[]; activeKey: string; onSelect: (key: string) => void })
+export function AtlasDayCard(props: { group: DayGroup; onPress: () => void })       // one day, summarised for Overview
+export function AtlasStopRow(props: {                                              // one stop in a day
+  item: ItineraryItem; index: number; hasNext: boolean; selected: boolean;
+  onPress: () => void; onNavigate?: () => void;                                    // onNavigate opens directions to the next stop
+})
+```
 
 ## Related docs
 

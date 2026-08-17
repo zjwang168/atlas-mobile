@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppDialog } from '@/components/feedback/AppDialog';
 import { Button } from '@/components/ui/button';
+import { GlassCircleButton } from '@/components/ui/glass-circle-button';
 import { Text } from '@/components/ui/text';
 import { VoiceRecordingBorder } from '@/components/voice-input/VoiceRecordingBorder';
 import ContentPanel from '@/components/content-panel/ContentPanel';
@@ -13,11 +14,30 @@ import { decodeAtlasPlaceMetadata, type AtlasTransportMode } from '@/services/at
 import { updateAtlas } from '@/services/atlas/atlasService';
 import type { Atlas } from '@/types/atlas';
 import type { SavedPlace } from '@/services/place/placeService';
+import { typography } from '@/theme/typography';
+import { ArrowLeftIcon } from 'phosphor-react-native/src/icons/ArrowLeft';
+import { EyeSlashIcon } from 'phosphor-react-native/src/icons/EyeSlash';
+import { PathIcon } from 'phosphor-react-native/src/icons/Path';
+import { PencilSimpleIcon } from 'phosphor-react-native/src/icons/PencilSimple';
+
+import { AtlasDayCard } from './AtlasDayCard';
+import { AtlasDayTabs, type AtlasTab } from './AtlasDayTabs';
+import { AtlasDetailHeader } from './AtlasDetailHeader';
+import { AtlasStopRow } from './AtlasStopRow';
+import {
+  atlasCoverUri,
+  dayMetaLine,
+  groupItemsByDay,
+  tripSummary,
+  type AtlasDisplayPlace,
+  type ItineraryItem,
+} from './atlasItinerary';
 import { Asset, requestPermissionsAsync } from 'expo-media-library';
 import { captureRef, captureScreen } from 'react-native-view-shot';
 import Share, { Social } from 'react-native-share';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, FlatList, Image, Linking, Modal, Platform, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { updateAtlasPlace } from '@/services/atlas/atlasPlacesService';
 
 type AtlasDetailProps = {
@@ -26,12 +46,15 @@ type AtlasDetailProps = {
   onHeightChange?: (height: number) => void;
 };
 
-type AtlasDisplayPlace = Pick<SavedPlace, 'id' | 'name' | 'subtitle' | 'latitude' | 'longitude' | 'photo_url'>;
-type ItineraryItem = { place: AtlasDisplayPlace; rowId: string; note: string | null; day: number | null; time: string | null; transport: AtlasTransportMode | null };
 type FocusBounds = { ne: [number, number]; sw: [number, number] };
+/** Key for the Overview tab; every other tab keys on its day number. */
+const OVERVIEW_TAB = 'overview';
 
 function itineraryKeyExtractor(item: ItineraryItem): string {
   return item.rowId;
+}
+function dayGroupKeyExtractor(group: { day: number | null }): string {
+  return group.day === null ? 'unplanned' : String(group.day);
 }
 type RouteFeature = GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>;
 type MapPresentation = {
@@ -177,6 +200,7 @@ function routeDistanceLabelsForItems(route: RouteFeature, items: ItineraryItem[]
 
 export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: AtlasDetailProps) {
   const { show: showDialog } = useAppDialog();
+  const insets = useSafeAreaInsets();
   const { atlases, savedPlaces, atlasPlaces, atlasMapState, setAtlasMapState, setSelectedPlaceCoordinate: setHomeSelectedPlaceCoordinate, setSelectedPlaceId: setHomeSelectedPlaceId, addChatHistoryItem, replaceChatHistoryItem, setActiveHistoryItem, setActiveSidekick, userLocation } = useHome();
   const [editing, setEditing] = useState(false);
   // AtlasDetail stays mounted while the active Atlas changes. Pair the
@@ -223,7 +247,11 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
         latitude: row.latitude,
         longitude: row.longitude,
         photo_url: row.photo_url ?? saved?.photo_url ?? null,
-      } : saved ?? null;
+        // atlas_places stores neither, so both only exist for a stop that is
+        // also a saved place. A search-only stop renders without them.
+        category: saved?.category ?? null,
+        city: row.city ?? saved?.city ?? null,
+      } : saved ? { ...saved, category: saved.category, city: saved.city ?? null } : null;
       const metadata = decodeAtlasPlaceMetadata(row.note);
       return place ? [{ place, rowId: row.id, note: metadata.note, day: row.timeline_day ?? null, time: row.timeline_time ?? null, transport: metadata.transport }] : [];
     });
@@ -321,6 +349,13 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     setAtlasMapState(null);
     onDismiss();
   }, [onDismiss, setAtlasMapState, setHomeSelectedPlaceCoordinate, setHomeSelectedPlaceId]);
+
+  // The map overlay is rebuilt inside the map-state effect, which must not
+  // depend on dismissAtlas: its identity changes on every render (HomeScreen
+  // passes an inline onDismiss), and the effect publishes state that re-renders
+  // HomeScreen — depending on it directly is an infinite loop.
+  const dismissAtlasRef = useRef(dismissAtlas);
+  dismissAtlasRef.current = dismissAtlas;
 
   const handleRoutePanelHeight = useCallback((_height: number) => {}, []);
 
@@ -619,14 +654,23 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
       onMarkerPress: (marker) => setSelectedPlaceId(marker.id),
       onMapPress: () => setSelectedPlaceId(null),
       onPanelHeightChange: handleRoutePanelHeight,
-      // The route toggle belongs to the Atlas panel header, never to the map.
-      // Leaving this empty also guarantees there is no control layer over map
-      // gestures while browsing a completed Atlas.
-      overlay: null,
+      // Back and Edit sit on the map, not in the sheet, so the sheet's own top
+      // row is free for the trip's cover and title. The route toggle stays in
+      // the panel — it changes what the list means, not just the camera.
+      overlay: capturingShare ? null : (
+        <View pointerEvents="box-none" style={[styles.mapControls, { top: insets.top }]}>
+          <GlassCircleButton accessibilityLabel="Back" onPress={() => dismissAtlasRef.current()}>
+            <ArrowLeftIcon size={24} weight="regular" color="#1A1A1A" />
+          </GlassCircleButton>
+          <GlassCircleButton accessibilityLabel="Edit atlas" onPress={() => setEditing(true)}>
+            <PencilSimpleIcon size={24} weight="regular" color="#1A1A1A" />
+          </GlassCircleButton>
+        </View>
+      ),
     };
     latestAtlasMapStateRef.current = nextMapState;
     setAtlasMapState(nextMapState);
-  }, [activePresentation, atlas, capturingShare, detailCameraKey, displayedRoute, editing, handleRoutePanelHeight, items.length, listItems, pendingSavedMapHandoff, routeBusy, routeCamera, selectedPlaceId, setAtlasMapState, toggleRoute]);
+  }, [activePresentation, atlas, capturingShare, detailCameraKey, displayedRoute, editing, handleRoutePanelHeight, insets.top, items.length, listItems, pendingSavedMapHandoff, routeBusy, routeCamera, selectedPlaceId, setAtlasMapState, toggleRoute]);
 
   useEffect(() => {
     if (!atlasId) setEditing(false);
@@ -645,25 +689,123 @@ export default function AtlasDetail({ atlasId, onDismiss, onHeightChange }: Atla
     if (pendingMapReleaseRef.current) clearTimeout(pendingMapReleaseRef.current);
   }, []);
 
-  const renderItineraryRow = useCallback(({ item, index }: { item: ItineraryItem; index: number }) => (
-    <ItineraryRow
-      item={item}
-      index={index}
-      nextItem={listItems[index + 1]}
-      distanceLabel={activeRouteDistanceLabels[index]?.text}
-      selected={selectedPlaceId === item.place.id}
-      onPress={() => setSelectedPlaceId(item.place.id)}
-      onShare={!capturingShare && index === 0 ? openSharePreview : undefined}
-      onNavigate={!capturingShare && listItems[index + 1] ? () => openNextStopDirections(item, listItems[index + 1]) : undefined}
+  const dayGroups = useMemo(() => groupItemsByDay(listItems), [listItems]);
+  // A trip with one group has nothing to switch between, so it skips the tab
+  // row entirely and Overview *is* that group's itinerary.
+  const hasDayTabs = dayGroups.length > 1;
+  const tabs = useMemo<AtlasTab[]>(() => (
+    hasDayTabs
+      ? [{ key: OVERVIEW_TAB, label: 'Overview' }, ...dayGroups.map((group) => ({
+        key: group.day === null ? 'unplanned' : String(group.day),
+        label: group.label,
+      }))]
+      : []
+  ), [dayGroups, hasDayTabs]);
+  const [activeTab, setActiveTab] = useState(OVERVIEW_TAB);
+  // Editing or reordering can remove the day whose tab is open.
+  const resolvedTab = tabs.some((tab) => tab.key === activeTab) ? activeTab : OVERVIEW_TAB;
+  const activeGroup = hasDayTabs && resolvedTab !== OVERVIEW_TAB
+    ? dayGroups.find((group) => (group.day === null ? 'unplanned' : String(group.day)) === resolvedTab) ?? null
+    : hasDayTabs ? null : dayGroups[0] ?? null;
+
+  const renderStop = useCallback(({ item, index }: { item: ItineraryItem; index: number }) => {
+    const groupItems = activeGroup?.items ?? [];
+    const next = groupItems[index + 1];
+    return (
+      <AtlasStopRow
+        item={item}
+        index={index}
+        hasNext={Boolean(next)}
+        selected={selectedPlaceId === item.place.id}
+        onPress={() => setSelectedPlaceId(item.place.id)}
+        onNavigate={!capturingShare && next ? () => openNextStopDirections(item, next) : undefined}
+      />
+    );
+  }, [activeGroup, capturingShare, openNextStopDirections, selectedPlaceId, setSelectedPlaceId]);
+
+  const renderDayCard = useCallback(({ item }: { item: typeof dayGroups[number] }) => (
+    <AtlasDayCard
+      group={item}
+      onPress={() => setActiveTab(item.day === null ? 'unplanned' : String(item.day))}
     />
-  ), [listItems, activeRouteDistanceLabels, selectedPlaceId, capturingShare, openSharePreview, openNextStopDirections]);
+  ), []);
 
   if (!atlas) return null;
 
   return <><VoiceRecordingBorder active={noteVoiceRecording} /><ContentPanel visible={Boolean(atlasId)} onHidden={dismissAtlas} zIndex={40} minSnap="default" onHeightChange={onHeightChange}>
     {({ reportScrollY, bottomInset }) => editing ? <AtlasBuilder atlasId={atlas.id} initialItems={editorInitialItems} initialCenter={presentation.centerCoordinate} initialBounds={presentation.bounds} onClose={handleEditorClosed} onSaved={(_, askAI, mapView) => handleEditorSaved(askAI, mapView)} onNoteVoiceRecordingChange={setNoteVoiceRecording} /> : optimizationReview ? <OptimizedRouteReview items={optimizedItems} originalItems={items} bottomInset={bottomInset} onClose={() => { setOptimizationReview(false); setDisplayedRoute(routeFeature); }} onSave={() => { void saveOptimizedRoute(); }} /> : <>
-      <View style={styles.header}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.title}>{atlas.title}</Text><Text style={styles.meta}>{items.length} {items.length === 1 ? 'place' : 'places'} · Map itinerary</Text></View><View style={styles.headerActions}>{!capturingShare ? <><View style={styles.headerTopActions}><TouchableOpacity accessibilityLabel={displayedRoute ? 'Hide route' : 'Show route'} disabled={routeBusy || items.length < 2} onPress={() => { void toggleRoute(); }} style={[styles.headerRouteButton, (routeBusy || items.length < 2) && styles.headerRouteButtonDisabled]}>{routeBusy ? <ActivityIndicator size="small" color="#303033" /> : <Ionicons name={displayedRoute ? 'eye-off-outline' : 'git-branch-outline'} size={17} color="#303033" />}<Text numberOfLines={1} style={styles.headerRouteText}>{displayedRoute ? 'Hide route' : 'Show route'}</Text></TouchableOpacity><Button accessibilityLabel="Edit atlas" onPress={() => setEditing(true)} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="pencil-outline" size={19} color="#1A1A1A" /></Button><Button accessibilityLabel="Dismiss atlas" onPress={dismissAtlas} size="icon" variant="ghost" className="h-11 w-11 rounded-full bg-background"><Ionicons name="close" size={21} color="#1A1A1A" /></Button></View>{optimizationOrder ? <Animated.View pointerEvents={optimizationDismissed ? 'none' : 'auto'} style={[styles.optimizationPrompt, { opacity: optimizationPromptOpacity, transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }] }]}><TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}><Ionicons name="sparkles-outline" size={13} color="#2E6A55" /><Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text></TouchableOpacity><TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}><Ionicons name="close" size={13} color="#4E5E56" /></TouchableOpacity></Animated.View> : null}</> : null}</View></View>
-      <FlatList data={listItems} keyExtractor={itineraryKeyExtractor} onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 20 }} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>This Atlas has no places yet.</Text></View>} renderItem={renderItineraryRow} />
+      <AtlasDetailHeader
+        title={atlas.title}
+        summary={tripSummary(dayGroups, listItems.length)}
+        coverUri={atlasCoverUri(listItems)}
+        onShare={capturingShare ? undefined : openSharePreview}
+      />
+      <View style={styles.header}>
+        {!capturingShare ? (
+          <View style={styles.headerActionRow}>
+            <TouchableOpacity
+              accessibilityLabel={displayedRoute ? 'Hide route' : 'Show route'}
+              disabled={routeBusy || items.length < 2}
+              onPress={() => { void toggleRoute(); }}
+              style={[styles.routeChip, (routeBusy || items.length < 2) && styles.routeChipDisabled]}
+            >
+              {routeBusy
+                ? <ActivityIndicator size="small" color="#1A1A1A" />
+                : displayedRoute
+                  ? <EyeSlashIcon size={16} weight="bold" color="#1A1A1A" />
+                  : <PathIcon size={16} weight="bold" color="#1A1A1A" />}
+              <Text numberOfLines={1} style={[typography.captionMedium, styles.routeChipText]}>
+                {displayedRoute ? 'Hide route' : 'Show route'}
+              </Text>
+            </TouchableOpacity>
+            {optimizationOrder ? (
+              <Animated.View
+                pointerEvents={optimizationDismissed ? 'none' : 'auto'}
+                style={[styles.optimizationPrompt, {
+                  opacity: optimizationPromptOpacity,
+                  transform: [{ translateY: optimizationPromptOpacity.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }],
+                }]}
+              >
+                <TouchableOpacity accessibilityLabel="Review optimized route" onPress={openOptimizationReview} style={styles.optimizationPromptMain}>
+                  <Ionicons name="sparkles-outline" size={13} color="#2E6A55" />
+                  <Text style={styles.optimizationPromptText}>{optimizingRoute ? 'Finding a better route...' : 'Our algorithm found a better route'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity accessibilityLabel="Dismiss route suggestion" onPress={() => setOptimizationDismissed(true)} style={styles.optimizationPromptClose}>
+                  <Ionicons name="close" size={13} color="#4E5E56" />
+                </TouchableOpacity>
+              </Animated.View>
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+      {hasDayTabs ? <AtlasDayTabs tabs={tabs} activeKey={resolvedTab} onSelect={setActiveTab} /> : null}
+
+      {hasDayTabs && resolvedTab === OVERVIEW_TAB ? (
+        <FlatList
+          data={dayGroups}
+          keyExtractor={dayGroupKeyExtractor}
+          onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={16}
+          contentContainerStyle={[styles.listContent, { paddingBottom: bottomInset + 20 }]}
+          ListEmptyComponent={<View style={styles.empty}><Text style={[typography.bodySmall, styles.emptyText]}>This Atlas has no places yet.</Text></View>}
+          renderItem={renderDayCard}
+        />
+      ) : (
+        <FlatList
+          data={activeGroup?.items ?? []}
+          keyExtractor={itineraryKeyExtractor}
+          onScroll={(event) => reportScrollY(event.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={16}
+          contentContainerStyle={[styles.listContent, { paddingBottom: bottomInset + 20 }]}
+          ListHeaderComponent={activeGroup ? (
+            <Text numberOfLines={1} style={[typography.subheader, styles.dayHeader]}>
+              {dayMetaLine(activeGroup)}
+            </Text>
+          ) : null}
+          ListEmptyComponent={<View style={styles.empty}><Text style={[typography.bodySmall, styles.emptyText]}>This Atlas has no places yet.</Text></View>}
+          renderItem={renderStop}
+        />
+      )}
       <Modal visible={Boolean(shareImageUri)} animationType="fade" onRequestClose={() => setShareImageUri(null)}><View style={styles.shareScreen}><Button accessibilityLabel="Close share preview" onPress={() => setShareImageUri(null)} size="icon" variant="ghost" className="absolute right-5 top-[54px] z-10 h-9 w-9 rounded-full bg-background"><Ionicons name="close" size={22} color="#1A1A1A" /></Button><View ref={shareCanvasRef} collapsable={false} style={styles.shareCanvas}><Image source={{ uri: shareImageUri ?? undefined }} style={styles.shareScreenshot} resizeMode="cover" /><Text style={styles.shareCaption}>Open OurAtlas to explore the full atlas.</Text><View style={styles.qrWrap}><View style={styles.qrPlaceholder}>{Array.from({ length: 25 }).map((_, index) => <View key={index} style={[styles.qrCell, ((index * 7 + index * index) % 5 < 2) && styles.qrCellOn]} />)}</View><Text style={styles.qrCaption}>View OurAtlas</Text></View></View><View style={styles.shareActions}><ShareAction icon="download-outline" label="Save Image" onPress={() => { void saveShareImage(); }} /><ShareAction icon="chatbubble-ellipses-outline" label="Messenger" onPress={() => { void shareToApp('messenger'); }} /><ShareAction icon="logo-instagram" label="Instagram" onPress={() => { void shareToApp('instagram'); }} /></View></View></Modal>
     </>}
   </ContentPanel></>;
@@ -682,56 +824,18 @@ function OptimizedRouteReview({ items, originalItems, bottomInset, onClose, onSa
   const renderItem = useCallback(({ item, index }: { item: ItineraryItem; index: number }) => {
     const originalIndex = originalIndexByRowId.get(item.rowId) ?? index;
     const change = originalIndex - index;
-    return <View style={styles.optimizedRow}><View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>{item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.optimizedImage} /> : <View style={[styles.optimizedImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}<View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text></View>{change ? <View style={[styles.orderChange, change > 0 ? styles.orderUp : styles.orderDown]}><Ionicons name={change > 0 ? 'arrow-up-outline' : 'arrow-down-outline'} size={11} color={change > 0 ? '#217558' : '#986033'} /><Text style={[styles.orderChangeText, change > 0 ? styles.orderUpText : styles.orderDownText]}>{Math.abs(change)}</Text></View> : <View style={styles.orderUnchanged}><Text style={styles.orderUnchangedText}>Same</Text></View>}</View>;
+    return <View style={styles.optimizedRow}><View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>{item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.optimizedImage} /> : <View style={[styles.optimizedImage, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}<View style={styles.copy}><Text numberOfLines={1} style={[typography.bodySmallEmphasis, styles.name]}>{item.place.name}</Text><Text numberOfLines={1} style={[typography.caption, styles.address]}>{item.place.subtitle}</Text></View>{change ? <View style={[styles.orderChange, change > 0 ? styles.orderUp : styles.orderDown]}><Ionicons name={change > 0 ? 'arrow-up-outline' : 'arrow-down-outline'} size={11} color={change > 0 ? '#217558' : '#986033'} /><Text style={[styles.orderChangeText, change > 0 ? styles.orderUpText : styles.orderDownText]}>{Math.abs(change)}</Text></View> : <View style={styles.orderUnchanged}><Text style={styles.orderUnchangedText}>Same</Text></View>}</View>;
   }, [originalIndexByRowId]);
   return <View style={styles.optimizedReview}><View style={styles.optimizedReviewHeader}><View><Text style={styles.optimizedReviewTitle}>Better route</Text><Text style={styles.optimizedReviewSubtitle}>Optimized stop order</Text></View><Button accessibilityLabel="Close optimized route" onPress={onClose} size="icon" variant="ghost" className="h-9 w-9 rounded-full bg-muted"><Ionicons name="close" size={20} color="#1A1A1A" /></Button></View><FlatList data={items} keyExtractor={itineraryKeyExtractor} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomInset + 92, gap: 8 }} renderItem={renderItem} /><View style={styles.optimizedReviewFooter}><Button onPress={onClose} variant="ghost" className="h-11 flex-1 rounded-[13px] bg-muted"><Text style={styles.optimizedCancelText}>Cancel</Text></Button><Button onPress={onSave} className="h-11 flex-[1.35] rounded-[13px] bg-primary"><Text style={styles.optimizedSaveText}>Save new route</Text></Button></View></View>;
 }
 
-function ItineraryRow({ item, index, nextItem, distanceLabel, selected, onPress, onShare, onNavigate }: { item: ItineraryItem; index: number; nextItem?: ItineraryItem; distanceLabel?: string; selected: boolean; onPress: () => void; onShare?: () => void; onNavigate?: () => void }) {
-  const nextHasMetadata = Boolean(nextItem && (nextItem.time || nextItem.transport));
-  const navigationButton = nextItem && onNavigate ? <TouchableOpacity accessibilityLabel={`Navigate from ${item.place.name} to ${nextItem.place.name} in Google Maps`} onPress={onNavigate} activeOpacity={0.7} style={[styles.navigationButton, nextHasMetadata && styles.connectorNavigationButton]}>
-    <Ionicons name="logo-google" size={9} color="#4285F4" />
-    <Ionicons name="navigate-outline" size={11} color="#3C4043" />
-  </TouchableOpacity> : null;
-  return <View style={styles.itineraryItem}>
-    {index === 0 ? <ItineraryMetadata item={item} onShare={onShare} /> : null}
-    <TouchableOpacity onPress={onPress} activeOpacity={0.76} style={[styles.row, selected && styles.rowSelected, selected && styles.rowSelectedSurface]}>
-      <View style={styles.number}><Text style={styles.numberText}>{index + 1}</Text></View>
-      {item.place.photo_url ? <Image source={{ uri: item.place.photo_url }} style={styles.image} /> : <View style={[styles.image, styles.imageFallback]}><Text style={styles.imageInitial}>{item.place.name.slice(0, 1).toUpperCase()}</Text></View>}
-      <View style={styles.copy}><Text numberOfLines={1} style={styles.name}>{item.place.name}</Text><Text numberOfLines={1} style={styles.address}>{item.place.subtitle}</Text>{item.note ? <Text numberOfLines={2} style={styles.note}>{item.note}</Text> : null}</View>
-    </TouchableOpacity>
-    {nextItem ? nextHasMetadata ? <View style={styles.metadataConnector}>
-      <View pointerEvents="none" style={styles.connectorLine} />
-      <ItineraryMetadata item={nextItem} connector />
-      {navigationButton ? <View style={styles.connectorNavigation}>{navigationButton}{distanceLabel ? <DistanceHint text={distanceLabel} connector /> : null}</View> : null}
-    </View> : <View style={styles.navigationGap}>{navigationButton}{distanceLabel ? <DistanceHint text={distanceLabel} /> : null}</View> : null}
-  </View>;
-}
-
-function DistanceHint({ text, connector = false }: { text: string; connector?: boolean }) {
-  return <View pointerEvents="none" accessibilityLabel={`Route distance ${text}`} style={[styles.distanceHint, connector && styles.distanceHintConnector]}><Text style={styles.distanceHintText}>{text}</Text></View>;
-}
-
-function ItineraryMetadata({ item, connector = false, onShare }: { item: ItineraryItem; connector?: boolean; onShare?: () => void }) {
-  const transport = item.transport ? TRANSPORT_PRESENTATION[item.transport] : null;
-  if (!item.time && !transport) {
-    return connector ? null : <View style={styles.atlasBeginsRow}><Text style={styles.atlasBeginsText}>Where your Atlas begins</Text>{onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={styles.atlasBeginsShare}><Ionicons name="share-social-outline" size={13} color="#12C170" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas</Text></TouchableOpacity> : null}</View>;
-  }
-  return <View style={[styles.itineraryMetaRow, connector && styles.connectorMetaRow, !connector && onShare && styles.itineraryMetaRowWithShare]}>
-    {item.time ? <View style={[styles.dayMarker, styles.timeMarker]}><Ionicons name="time-outline" size={13} color="#2677B5" /><Text style={styles.dayText}>{item.day ? `Day ${item.day} · ${item.time}` : item.time}</Text></View> : null}
-    {transport ? <View accessibilityLabel={transport.label} style={styles.transportMarker}><Ionicons name={transport.icon} size={13} color="#64748B" /></View> : null}
-    {!connector && onShare ? <TouchableOpacity accessibilityLabel="Share OurAtlas" onPress={onShare} style={[styles.atlasBeginsShare, styles.metadataShare]}><Ionicons name="share-social-outline" size={13} color="#12C170" /><Text style={styles.atlasBeginsShareText}>Share OurAtlas</Text></TouchableOpacity> : null}
-  </View>;
-}
-
 const styles = StyleSheet.create({
-  itineraryMetaRowWithShare: { alignSelf: 'stretch', marginLeft: 0, marginRight: 0, paddingLeft: 9 },
-  metadataShare: { marginLeft: 'auto' },
-  timeMarker: { height: 24, paddingVertical: 0 },
-  distanceHint: { position: 'absolute', left: '50%', top: -8, marginLeft: 20, width: 28, height: 18, borderRadius: 9, backgroundColor: '#FBFCFC', borderWidth: StyleSheet.hairlineWidth, borderColor: '#E7EBEE', alignItems: 'center', justifyContent: 'center', zIndex: 4 },
-  distanceHintConnector: { top: 0 },
-  distanceHintText: { width: '100%', color: '#A7A7A7', fontSize: 8, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
-  rowSelectedSurface: { backgroundColor: '#F1F3F4', borderColor: '#E1E4E7' },
+  
+  
+  
+  
+  
+  
   optimizationPrompt: { width: 188, minHeight: 34, marginTop: 5, marginRight: 5, paddingLeft: 8, paddingRight: 3, borderRadius: 10, backgroundColor: '#EDF8F1', flexDirection: 'row', alignItems: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: '#B9DFC9' },
   optimizationPromptMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 5 },
   optimizationPromptText: { flex: 1, color: '#2B654F', fontSize: 9, lineHeight: 12, fontWeight: '700' },
@@ -753,9 +857,6 @@ const styles = StyleSheet.create({
   optimizedReviewFooter: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 11, paddingBottom: 18, backgroundColor: 'rgba(255,255,255,0.96)', borderTopWidth: StyleSheet.hairlineWidth, borderColor: '#E7E8EA', flexDirection: 'row', gap: 10 },
   optimizedCancelText: { color: '#1A1A1A', fontSize: 14, fontWeight: '800' },
   optimizedSaveText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
-  shareAtlasButton: { alignSelf: 'center', marginTop: 18, marginBottom: 8, minHeight: 38, paddingHorizontal: 16, borderRadius: 19, backgroundColor: '#12C170', flexDirection: 'row', alignItems: 'center', gap: 7, shadowColor: '#0C8149', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.16, shadowRadius: 7, elevation: 3 },
-  shareAtlasText: { color: '#FFF', fontSize: 13, fontWeight: '800' },
-  registeredMark: { fontSize: 7, lineHeight: 10, verticalAlign: 'top' },
   shareScreen: { flex: 1, backgroundColor: '#E9FBF1', paddingHorizontal: 20, paddingTop: 68, alignItems: 'center' },
   shareCanvas: { width: '100%', maxWidth: 390, overflow: 'hidden', borderRadius: 18, backgroundColor: '#FFF', shadowColor: '#4A3528', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.14, shadowRadius: 22, elevation: 5 },
   shareScreenshot: { width: '100%', aspectRatio: 0.58, backgroundColor: '#E7ECEC' },
@@ -769,17 +870,42 @@ const styles = StyleSheet.create({
   shareAction: { width: 82, alignItems: 'center', gap: 8 },
   shareActionCircle: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#E9FBF1', alignItems: 'center', justifyContent: 'center' },
   shareActionText: { color: '#433C37', fontSize: 11, fontWeight: '700', textAlign: 'center' },
-  headerActions: { alignItems: 'flex-end', marginTop: -4 },
-  headerTopActions: { flexDirection: 'row', alignItems: 'center' },
-  headerRouteButton: { minHeight: 38, marginRight: 5, paddingHorizontal: 11, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.76)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(15,23,42,0.12)', flexDirection: 'row', alignItems: 'center', gap: 6, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
-  headerRouteButtonDisabled: { opacity: 0.5 },
-  headerRouteText: { color: '#303033', fontSize: 12, fontWeight: '700' },
-  showRouteButton: { minHeight: 28, marginTop: -4, marginRight: 5, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#FFF3EA', flexDirection: 'row', alignItems: 'center', gap: 4 },
-  showRouteButtonDisabled: { opacity: 0.46 },
-  showRouteText: { color: '#B85217', fontSize: 11, fontWeight: '700' },
-  atlasBeginsRow: { minHeight: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 4 },
-  atlasBeginsText: { color: '#1A1A1A', fontSize: 12, fontWeight: '600' },
-  atlasBeginsShare: { minHeight: 26, paddingHorizontal: 8, borderRadius: 12, backgroundColor: '#E9FBF1', borderWidth: StyleSheet.hairlineWidth, borderColor: '#C6F4DB', flexDirection: 'row', alignItems: 'center', gap: 4 },
-  atlasBeginsShareText: { color: '#12C170', fontSize: 10, fontWeight: '800' },
-  header: { paddingHorizontal: 16, paddingTop: 7, paddingBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 2 }, title: { fontSize: 22, fontWeight: '700', color: '#1A1A1A' }, meta: { color: '#717171', fontSize: 12, marginTop: 3 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#E9FBF1', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#1A1A1A', fontSize: 17, fontWeight: '700' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#717171', fontSize: 15 }, itineraryItem: { position: 'relative' }, itineraryMetaRow: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 9, marginTop: 8, marginBottom: 4 }, connectorMetaRow: { width: '42%', minHeight: 48, flexWrap: 'wrap', alignContent: 'center', marginTop: 0, marginBottom: 0, paddingVertical: 7 }, metadataConnector: { position: 'relative', minHeight: 48 }, connectorLine: { position: 'absolute', top: 0, bottom: 0, left: '50%', width: StyleSheet.hairlineWidth, marginLeft: -StyleSheet.hairlineWidth / 2, backgroundColor: '#DDE2E7' }, navigationGap: { position: 'relative', height: 7 }, dayMarker: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EAF4FF', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 }, dayText: { color: '#2677B5', fontSize: 11, fontWeight: '700' }, transportMarker: { alignSelf: 'flex-start', width: 24, height: 24, backgroundColor: '#F1F4F5', borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, connectorNavigation: { position: 'absolute', top: '50%', left: 0, right: 0, height: 18, marginTop: -9 }, navigationButton: { position: 'absolute', left: '50%', top: -8, marginLeft: -14, width: 28, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D4D9E0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: 5 }, connectorNavigationButton: { top: 0 }, row: { minHeight: 76, borderRadius: 14, padding: 9, backgroundColor: '#FAFAFB', flexDirection: 'row', alignItems: 'center', gap: 9 }, rowSelected: { backgroundColor: '#FCFCFD', borderWidth: 1, borderColor: '#E6E8EB' }, number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#12C170', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, image: { width: 54, height: 54, borderRadius: 11, backgroundColor: '#E7ECF0' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0 }, name: { color: '#1A1A1A', fontSize: 14, fontWeight: '700' }, address: { color: '#717171', fontSize: 12, marginTop: 2 }, note: { color: '#48708C', fontSize: 11, lineHeight: 15, fontStyle: 'italic', marginTop: 4 },
+  // Floats over the shared map — see the overlay note in the map-state effect.
+  // `top` is applied inline from the safe-area inset.
+  mapControls: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between' },
+  listContent: { paddingHorizontal: 16, gap: 12 },
+  // Same treatment as My Places' own location header.
+  dayHeader: { color: '#717171', paddingBottom: 4 },
+  headerActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  routeChip: {
+    minHeight: 36,
+    paddingHorizontal: 14,
+    borderRadius: 100,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  routeChipDisabled: { opacity: 0.4 },
+  routeChipText: { color: '#1A1A1A' },
+  
+  
+  
+  
+  header: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 16 }, compact: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8 }, compactMark: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#E9FBF1', alignItems: 'center', justifyContent: 'center' }, compactTitle: { flex: 1, color: '#1A1A1A', fontSize: 17, fontWeight: '700' }, empty: { paddingTop: 48, alignItems: 'center' }, emptyText: { color: '#717171', fontSize: 15 }, // An Atlas stop is one place, not a collection, so the row matches the Places
+  // tab's list item rather than the card shell used for Atlas/event rows. The
+  // negative margin lets the selected highlight bleed past the copy without
+  // shifting the 16pt gutter the unselected rows align to.
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  // Two lines of bodySmall, clamped so every row keeps the same height.
+  
+  number: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#12C170', alignItems: 'center', justifyContent: 'center' }, numberText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, imageFallback: { alignItems: 'center', justifyContent: 'center' }, imageInitial: { color: '#426177', fontSize: 19, fontWeight: '700' }, copy: { flex: 1, minWidth: 0, gap: 2 }, name: { color: '#1A1A1A' }, address: { color: '#717171' },
 });
